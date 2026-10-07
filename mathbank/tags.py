@@ -212,11 +212,25 @@ def load_tag_schema() -> dict:
     return deepcopy(_load_tag_schema_cached())
 
 
+def _dimension_storage_key(dimension: dict) -> str:
+    """Parse the ``question_tags(dim='...')`` short name from a dimension's
+    ``storage`` field, returning '' when the dimension is not tag-backed."""
+
+    storage = str(dimension.get("storage") or "")
+    match = re.search(r"dim=['\"]?([a-z_]+)['\"]?", storage)
+    return match.group(1) if match else ""
+
+
 def allowed_codes(dim: str) -> set[str]:
-    """Return the controlled vocabulary of one dimension ('' = free text)."""
+    """Return the controlled vocabulary of one dimension.
+
+    ``dim`` may be either the schema ``key`` (``thought_method``) or the
+    storage short name (``thought``) so callers can validate by the narrow
+    ``question_tags.dim`` value without duplicating the mapping.
+    """
 
     for dimension in _load_tag_schema_cached().get("dimensions", []):
-        if dimension.get("key") == dim:
+        if dimension.get("key") == dim or _dimension_storage_key(dimension) == dim:
             return {item["code"] for item in dimension.get("values", []) if item.get("code")}
     return set()
 
