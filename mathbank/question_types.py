@@ -93,3 +93,18 @@ def normalize_ai_question_form(value: object) -> str:
         "未知": QUESTION_FORM_UNKNOWN,
     }
     return mapping.get(normalized, QUESTION_FORM_UNKNOWN)
+
+
+_OPTION_LETTER_PATTERN = re.compile(
+    r"[A-D]\s*[.、)．:：）]\s*\S",
+)
+
+
+def detect_choice_options(content: str) -> bool:
+    """Return True when content shows explicit A/B/C/D choice options.
+
+    Used to correct a common AI misclassification where a written-answer
+    question (解答题, no options) is wrongly tagged as ``choice``.
+    """
+
+    return bool(_OPTION_LETTER_PATTERN.search(str(content or "")))

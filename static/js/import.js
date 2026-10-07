@@ -1234,7 +1234,7 @@
                     document.getElementById('recQuestionForm').textContent = formLabels[questionForm];
                     document.getElementById('recQuestionFormSource').textContent = data.question_form_source === 'structure'
                         ? '结构规则识别'
-                        : 'AI 建议';
+                        : (data.question_form_source === 'corrected' ? '已修正' : 'AI 建议');
                     const diffLabels = { 'easy': '基础题', 'medium': '中档题', 'hard': '难题' };
                     document.getElementById('recDifficulty').textContent = diffLabels[data.difficulty] || '中档题';
                     document.getElementById('recDifficultySource').textContent = data.difficulty_source === 'fallback'

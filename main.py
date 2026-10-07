@@ -150,6 +150,7 @@ from mathbank.prompts import (
     build_tikz_draw_prompt,
 )
 from mathbank.question_types import (
+    detect_choice_options,
     detect_structured_question_form,
     normalize_ai_question_form,
     normalize_section_order,
@@ -4144,6 +4145,15 @@ def ai_classify(content: str = Form(...)):
             result.get("question_form")
         )
         question_form_source = "structure" if structured_question_form else "ai"
+
+        # 修正：AI 判为选择题但题干无 A/B/C/D 选项 → 解答题（修复"解答题被误判为单选题"）
+        if (
+            question_form == "choice"
+            and question_form_source != "structure"
+            and not detect_choice_options(content)
+        ):
+            question_form = "detailed_answer"
+            question_form_source = "corrected"
 
         # 必选项②：难度（easy/medium/hard，非法或缺失时回退 medium）
         difficulty = str(result.get("difficulty", "") or "").strip()
