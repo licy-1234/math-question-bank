@@ -914,6 +914,10 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                     }
                 }
             }
+
+            if (window.MathBankTags && typeof window.MathBankTags.setSelection === 'function') {
+                window.MathBankTags.setSelection(draft.tag_codes || null);
+            }
             
             // Load images
             const allDraftImages = Array.isArray(draft.image_paths)

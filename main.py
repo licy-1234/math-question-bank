@@ -24,7 +24,8 @@ if hasattr(sys.stdout, "reconfigure"):
 import secrets
 from typing import List, Optional
 from PIL import Image
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Response, Header
+from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, Form, BackgroundTasks, Request, Response, Header
+from sqlalchemy import or_
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,6 +37,7 @@ from mathbank.database import (
     FIGURE_SIZE_VALUES,
     Question,
     QuestionCurriculum,
+    QuestionTag,
     QuestionFingerprint as StoredQuestionFingerprint,
     Paper,
     PaperQuestion,
@@ -118,6 +120,16 @@ from mathbank.ai_providers import (
     resolve_ocr_fallbacks,
     resolve_ocr_provider,
     resolve_text_provider,
+)
+from mathbank.tags import (
+    chapter_prefixes,
+    curriculum_index,
+    load_curriculum_tree,
+    load_tag_schema,
+    normalize_codes,
+    normalize_tag_codes,
+    resolve_legacy_code,
+    split_custom_tags,
 )
 from mathbank.curriculums import (
     build_default_metadata,
@@ -2235,6 +2247,10 @@ def list_questions(
     question_type: str = None,
     difficulty: str = None,
     source: str = None,
+    chapter_code: Optional[List[str]] = Query(None),
+    thought: Optional[List[str]] = Query(None),
+    function_code: Optional[str] = None,
+    tag: Optional[str] = None,
     page: Optional[int] = None,
     page_size: int = 20,
     sort: str = "desc",
@@ -2297,6 +2313,48 @@ def list_questions(
         query = query.filter(Question.difficulty == difficulty)
     if source:
         query = query.filter(Question.source.like(f"%{source}%"))
+
+    # Multi-value tag filters.  Chapter codes match the node and every
+    # descendant because a parent code covers its whole subtree.
+    for code in chapter_code or []:
+        patterns = chapter_prefixes(code)
+        if not patterns:
+            continue
+        query = query.filter(
+            Question.id.in_(
+                db.query(QuestionTag.question_id).filter(
+                    QuestionTag.dim == "chapter",
+                    or_(*[QuestionTag.code.like(pattern) for pattern in patterns]),
+                )
+            )
+        )
+    for code in thought or []:
+        query = query.filter(
+            Question.id.in_(
+                db.query(QuestionTag.question_id).filter(
+                    QuestionTag.dim == "thought",
+                    QuestionTag.code == str(code).strip(),
+                )
+            )
+        )
+    if function_code:
+        query = query.filter(
+            Question.id.in_(
+                db.query(QuestionTag.question_id).filter(
+                    QuestionTag.dim == "function",
+                    QuestionTag.code == function_code,
+                )
+            )
+        )
+    if tag:
+        query = query.filter(
+            Question.id.in_(
+                db.query(QuestionTag.question_id).filter(
+                    QuestionTag.dim == "custom",
+                    QuestionTag.code.like(f"%{tag}%"),
+                )
+            )
+        )
         
     order_columns = (
         (Question.created_at.asc(), Question.id.asc())
@@ -2808,6 +2866,90 @@ def duplicate_review_required_response(
     )
 
 
+def _parse_code_list(raw: Optional[str]) -> Optional[list[str]]:
+    """Parse a JSON/comma code list; None means the field was not submitted."""
+
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return [part.strip() for part in re.split(r"[,，]", text) if part.strip()]
+    if isinstance(parsed, list):
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    if isinstance(parsed, str):
+        return [parsed.strip()] if parsed.strip() else []
+    return []
+
+
+def sync_question_tags(
+    db: Session,
+    question: Question,
+    *,
+    chapter_raw: Optional[str] = None,
+    thought_raw: Optional[str] = None,
+    function_raw: Optional[str] = None,
+    custom_raw: Optional[str] = None,
+    legacy: Optional[tuple] = None,
+) -> dict:
+    """Replace the multi-value tags of one question dimension by dimension.
+
+    A dimension is only rewritten when its field was submitted, so partial
+    updates (for example OCR saving content only) never drop existing tags.
+    """
+
+    pending: dict[str, list[str]] = {}
+
+    chapter_codes = _parse_code_list(chapter_raw)
+    if chapter_codes is None and legacy is not None:
+        derived = resolve_legacy_code(*legacy)
+        chapter_codes = [derived] if derived else []
+    if chapter_codes is not None:
+        pending["chapter"] = normalize_codes(chapter_codes)
+
+    thought_codes = _parse_code_list(thought_raw)
+    if thought_codes is not None:
+        pending["thought"] = normalize_tag_codes("thought", thought_codes)
+
+    if function_raw is not None:
+        function_code = str(function_raw or "").strip()
+        pending["function"] = normalize_tag_codes(
+            "function", [function_code] if function_code else []
+        )
+
+    if custom_raw is not None:
+        pending["custom"] = split_custom_tags(custom_raw)
+
+    for dim, codes in pending.items():
+        db.query(QuestionTag).filter(
+            QuestionTag.question_id == question.id,
+            QuestionTag.dim == dim,
+        ).delete(synchronize_session=False)
+        for code in codes:
+            db.add(QuestionTag(question_id=question.id, dim=dim, code=code))
+    return {dim: list(codes) for dim, codes in pending.items()}
+
+
+@app.get("/api/config/tag-schema")
+def get_tag_schema():
+    """Return the dimension definitions of the classification system."""
+
+    return load_tag_schema()
+
+
+@app.get("/api/config/curriculum-tree/{version}")
+def get_curriculum_tree(version: str):
+    """Return the 册/章/节/小节 tree of one textbook version."""
+
+    try:
+        return load_curriculum_tree(version)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/api/questions")
 @serialize_asset_lifecycle
 def create_question(
@@ -2834,6 +2976,10 @@ def create_question(
     image_paths: str = Form("[]"),  # JSON array string
     duplicate_snapshot_hash: str = Form(""),
     duplicate_override: str = Form(""),
+    tag_chapter_codes: Optional[str] = Form(None),
+    tag_thought_codes: Optional[str] = Form(None),
+    tag_function_code: Optional[str] = Form(None),
+    tag_custom_tags: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     asset_promotions: list[tuple[Path, Path]] = []
@@ -2976,6 +3122,15 @@ def create_question(
             knowledge=category_knowledge
         )
         db.add(curriculum_map)
+        sync_question_tags(
+            db,
+            db_question,
+            chapter_raw=tag_chapter_codes,
+            thought_raw=tag_thought_codes,
+            function_raw=tag_function_code,
+            custom_raw=tag_custom_tags,
+            legacy=(category_compulsory, category_chapter, category_knowledge),
+        )
         committed_question_id = db_question.id
         db.commit()
     except Exception as e:
@@ -3031,6 +3186,10 @@ def update_question(
     image_paths: str = Form("[]"),
     duplicate_snapshot_hash: str = Form(""),
     duplicate_override: str = Form(""),
+    tag_chapter_codes: Optional[str] = Form(None),
+    tag_thought_codes: Optional[str] = Form(None),
+    tag_function_code: Optional[str] = Form(None),
+    tag_custom_tags: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     db_question = db.query(Question).filter(Question.id == question_id).first()
@@ -3202,7 +3361,16 @@ def update_question(
                 return response
         if question_fingerprint is not None:
             upsert_question_fingerprint(db, db_question, question_fingerprint)
-        
+
+        sync_question_tags(
+            db,
+            db_question,
+            chapter_raw=tag_chapter_codes,
+            thought_raw=tag_thought_codes,
+            function_raw=tag_function_code,
+            custom_raw=tag_custom_tags,
+            legacy=(category_compulsory, category_chapter, category_knowledge),
+        )
         db.commit()
     except Exception as e:
         db.rollback()

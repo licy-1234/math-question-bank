@@ -758,6 +758,11 @@
                     chapSelect.value = fullItem.category_chapter || '';
                     chapSelect.onchange();
                     knowSelect.value = fullItem.category_knowledge || '';
+
+                    // 新分类标签体系回显（章节 / 思想方法 / 功能）
+                    if (window.MathBankTags && typeof window.MathBankTags.setSelection === 'function') {
+                        window.MathBankTags.setSelection(fullItem.tag_codes || null);
+                    }
                     
                     // Dispatch input previews or update synchronously
                     if (typeof window.updateContentPreview === 'function') {
@@ -987,6 +992,13 @@
                     figureLayout.figure_align_custom ? 'true' : 'false'
                 );
                 formData.append('tags', tags);
+                if (window.MathBankTags && typeof window.MathBankTags.getSelection === 'function') {
+                    const tagSelection = window.MathBankTags.getSelection();
+                    formData.append('tag_chapter_codes', JSON.stringify(tagSelection.chapter_codes || []));
+                    formData.append('tag_thought_codes', JSON.stringify(tagSelection.thought_codes || []));
+                    formData.append('tag_function_code', tagSelection.function_code || '');
+                    formData.append('tag_custom_tags', tagSelection.custom_tags || '');
+                }
                 const combinedImages = typeof window.editorAssetReferences === 'function'
                     ? window.editorAssetReferences() : Array.from(new Set([
                     ...uploadedImages,
@@ -2195,6 +2207,9 @@
         }
 
         document.addEventListener('DOMContentLoaded', () => {
+            if (window.MathBankTags && typeof window.MathBankTags.init === 'function') {
+                window.MathBankTags.init();
+            }
             const workspace = document.getElementById('importWorkspaceSection');
             if (workspace && typeof MutationObserver !== 'undefined') {
                 new MutationObserver(refreshDocumentResultRetention)

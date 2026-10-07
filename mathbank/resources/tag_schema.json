@@ -1,0 +1,113 @@
+{
+  "$schema_note": "高中数学题库分类（标签）体系定义。mode: single=单选, multi=多选; required: 录题时是否必须填写; default: 默认值(null/空 表示不预填)。",
+  "schema_version": "rja2019-tags-v1",
+  "textbook": "人教A版2019",
+  "dimensions": [
+    {
+      "key": "question_type",
+      "name": "题型",
+      "mode": "single",
+      "required": true,
+      "default": null,
+      "storage": "questions.question_type",
+      "description": "单选。对应现有字段 questions.question_type 的机器码。",
+      "values": [
+        { "code": "single_choice", "label": "单选题" },
+        { "code": "multi_choice", "label": "多选题" },
+        { "code": "fill_in_blank", "label": "填空题" },
+        { "code": "detailed_answer", "label": "解答题" }
+      ]
+    },
+    {
+      "key": "source",
+      "name": "来源",
+      "mode": "single",
+      "required": false,
+      "default": "",
+      "storage": "questions.source",
+      "description": "自由文本，保留现有取值与用法，不做改动。如：2025全国甲卷、本校月考。",
+      "values": []
+    },
+    {
+      "key": "difficulty",
+      "name": "难度",
+      "mode": "single",
+      "required": true,
+      "default": "medium",
+      "storage": "questions.difficulty",
+      "description": "三级难度，单选。机器码沿用现有 easy/medium/hard，展示名更换为教学用语。",
+      "values": [
+        { "code": "easy", "label": "基础题" },
+        { "code": "medium", "label": "中档题" },
+        { "code": "hard", "label": "难题" }
+      ]
+    },
+    {
+      "key": "function_tag",
+      "name": "功能",
+      "mode": "single",
+      "required": false,
+      "default": null,
+      "storage": "question_tags(dim='function')",
+      "description": "单选、可空。标记题目在教学中的特殊用途；不填表示普通题。",
+      "values": [
+        { "code": "error_prone", "label": "易错题" },
+        { "code": "innovative", "label": "创新题" }
+      ]
+    },
+    {
+      "key": "thought_method",
+      "name": "数学思想方法",
+      "mode": "multi",
+      "required": false,
+      "default": [],
+      "storage": "question_tags(dim='thought')",
+      "description": "多选、可空。一道题可同时体现多种思想方法；建议最多勾选 3 个以保持检索有效性。",
+      "values": [
+        { "code": "T01", "label": "函数与方程思想" },
+        { "code": "T02", "label": "数形结合思想" },
+        { "code": "T03", "label": "分类讨论思想" },
+        { "code": "T04", "label": "转化与化归思想" },
+        { "code": "T05", "label": "特殊与一般思想" },
+        { "code": "T06", "label": "有限与无限思想" },
+        { "code": "T07", "label": "或然与必然思想" },
+        { "code": "T08", "label": "整体思想" },
+        { "code": "T09", "label": "类比思想" },
+        { "code": "T10", "label": "归纳思想" },
+        { "code": "T11", "label": "模型思想" },
+        { "code": "T12", "label": "算法思想" },
+        { "code": "T13", "label": "统计思想" },
+        { "code": "T14", "label": "集合与对应思想" },
+        { "code": "T15", "label": "符号化思想" }
+      ]
+    },
+    {
+      "key": "curriculum_node",
+      "name": "教材章节",
+      "mode": "multi",
+      "required": true,
+      "default": [],
+      "storage": "question_tags(dim='chapter')",
+      "description": "多选、至少 1 个节点。取值来自《02-章节目录-人教A版2019.json》的节点编码（B1-C1-S4-P2 等），可挂 册/章/节/小节 任意层级、可跨册多挂。挂上级节点视为覆盖其全部子节点（见设计说明的子树检索）。",
+      "values_ref": "02-章节目录-人教A版2019.json",
+      "values": []
+    },
+    {
+      "key": "custom_tags",
+      "name": "自定义标签",
+      "mode": "multi",
+      "required": false,
+      "default": [],
+      "storage": "question_tags(dim='custom')",
+      "description": "自由文本多值，保留现有用法（如：高一、期中、真题）。逗号分隔输入，存储时拆分为多行。",
+      "values": []
+    }
+  ],
+  "compatibility": {
+    "question_type": "原值不变（single_choice / multi_choice / fill_in_blank / detailed_answer）",
+    "difficulty": "机器码不变（easy / medium / hard），仅展示名 基础题/中档题/难题",
+    "source": "原值不变",
+    "custom_tags": "原 questions.tags 逗号分隔用法不变，入库时拆分为 question_tags(dim='custom') 行",
+    "deprecated_fields": "questions.category_compulsory（学段）与 category_chapter/category_knowledge 由 curriculum_node 多值标签取代，旧数据按映射迁移"
+  }
+}

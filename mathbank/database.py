@@ -19,7 +19,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import declarative_base, object_session, sessionmaker
 from mathbank.paths import DATABASE_FILE, sqlite_url
 from mathbank.question_types import normalize_section_order
 
@@ -220,6 +220,22 @@ class Question(Base):
         hidden_references.discard("")
         return [path for path in self.image_paths if path not in hidden_references]
 
+    def tag_codes(self) -> dict:
+        """Group this question's multi-value tags by dimension."""
+
+        grouped = {"chapter": [], "thought": [], "function": [], "custom": []}
+        session = object_session(self)
+        if session is None or self.id is None:
+            return grouped
+        rows = (
+            session.query(QuestionTag.dim, QuestionTag.code)
+            .filter(QuestionTag.question_id == self.id)
+            .all()
+        )
+        for dim, code in rows:
+            grouped.setdefault(dim, []).append(code)
+        return grouped
+
     def to_dict(self):
         return {
             "id": self.id,
@@ -228,6 +244,7 @@ class Question(Base):
             "category_compulsory": self.category_compulsory,
             "category_chapter": self.category_chapter,
             "category_knowledge": self.category_knowledge,
+            "tag_codes": self.tag_codes(),
             "difficulty": self.difficulty,
             "source": self.source,
             "answer_markdown": self.answer_markdown,
@@ -256,6 +273,7 @@ class Question(Base):
             "category_compulsory": self.category_compulsory,
             "category_chapter": self.category_chapter,
             "category_knowledge": self.category_knowledge,
+            "tag_codes": self.tag_codes(),
             "difficulty": self.difficulty,
             "source": self.source,
             "has_answer": bool((self.answer_markdown or "").strip()),
@@ -491,6 +509,33 @@ class QuestionFingerprint(Base):
         nullable=False,
     )
 
+class QuestionTag(Base):
+    """One row per multi-valued tag: 数学思想方法 / 教材章节 / 功能 / 自定义标签."""
+
+    __tablename__ = "question_tags"
+    __table_args__ = (
+        UniqueConstraint("question_id", "dim", "code", name="uq_question_tag"),
+        Index("idx_question_tags_dim_code", "dim", "code"),
+        Index("idx_question_tags_question", "question_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    question_id = Column(
+        Integer,
+        ForeignKey("questions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    dim = Column(String(20), nullable=False, index=True)  # thought|chapter|function|custom
+    code = Column(String(120), nullable=False, index=True)
+    created_at = Column(
+        DateTime,
+        default=_utcnow_naive,
+        server_default=text("CURRENT_TIMESTAMP"),
+        nullable=False,
+    )
+
+
 class Paper(Base):
     __tablename__ = "papers"
 
@@ -671,6 +716,7 @@ def init_db():
             tables=[
                 Question.__table__,
                 QuestionCurriculum.__table__,
+                QuestionTag.__table__,
                 Paper.__table__,
                 PaperQuestion.__table__,
             ],

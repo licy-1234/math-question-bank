@@ -18,14 +18,14 @@ from sqlalchemy.engine import Engine
 from mathbank.paths import SCHEMA_SNAPSHOT_DIR
 
 
-LATEST_SCHEMA_VERSION = 10
+LATEST_SCHEMA_VERSION = 11
 LEGACY_REQUIRED_TABLES = {
     "questions",
     "question_curriculums",
     "papers",
     "paper_questions",
 }
-REQUIRED_TABLES = LEGACY_REQUIRED_TABLES | {"question_fingerprints"}
+REQUIRED_TABLES = LEGACY_REQUIRED_TABLES | {"question_fingerprints", "question_tags"}
 
 V6_QUESTION_FINGERPRINT_COLUMNS = {
     "question_id",
@@ -488,6 +488,89 @@ def _ensure_question_fingerprint_table(connection) -> int:
     return int(not table_exists)
 
 
+QUESTION_TAG_INDEXES = {
+    "idx_question_tags_dim_code": ("dim", "code"),
+    "idx_question_tags_question": ("question_id",),
+}
+
+
+def _ensure_question_tags_table(connection) -> dict[str, int]:
+    """Create the multi-value tag table and seed it from legacy categories.
+
+    Existing 册/章/节 columns stay untouched: the tag table is additive so a
+    rollback only loses the derived index, never the original classification.
+    """
+
+    table_exists = bool(
+        connection.exec_driver_sql(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='question_tags'"
+        ).first()
+    )
+    if not table_exists:
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE question_tags (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                question_id INTEGER NOT NULL,
+                dim VARCHAR(20) NOT NULL,
+                code VARCHAR(120) NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_question_tag UNIQUE (question_id, dim, code),
+                CONSTRAINT fk_question_tags_question
+                    FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE
+            )
+            """
+        )
+        for index_name, columns in QUESTION_TAG_INDEXES.items():
+            connection.exec_driver_sql(
+                f"CREATE INDEX {index_name} ON question_tags "
+                f"({', '.join(columns)})"
+            )
+    else:
+        for index_name, columns in QUESTION_TAG_INDEXES.items():
+            connection.exec_driver_sql(
+                f"CREATE INDEX IF NOT EXISTS {index_name} ON question_tags "
+                f"({', '.join(columns)})"
+            )
+
+    seeded = _backfill_question_tags(connection)
+    return {
+        "added_question_tags": int(not table_exists),
+        "seeded_question_tags": seeded,
+    }
+
+
+def _backfill_question_tags(connection) -> int:
+    """Seed chapter tags from legacy 册/章/节 columns (idempotent)."""
+
+    from mathbank.tags import resolve_legacy_code
+
+    rows = connection.exec_driver_sql(
+        "SELECT qc.question_id, qc.compulsory, qc.chapter, qc.knowledge "
+        "FROM question_curriculums AS qc "
+        "JOIN questions AS q ON q.id = qc.question_id"
+    ).fetchall()
+    inserted = 0
+    for question_id, compulsory, chapter, knowledge in rows:
+        code = resolve_legacy_code(compulsory, chapter, knowledge)
+        if not code:
+            continue
+        exists = connection.exec_driver_sql(
+            "SELECT 1 FROM question_tags "
+            "WHERE question_id = ? AND dim = 'chapter' AND code = ?",
+            (question_id, code),
+        ).first()
+        if exists:
+            continue
+        connection.exec_driver_sql(
+            "INSERT INTO question_tags (question_id, dim, code) VALUES (?, 'chapter', ?)",
+            (question_id, code),
+        )
+        inserted += 1
+    return inserted
+
+
 def _rebuild_relationship_tables(engine: Engine) -> dict[str, int]:
     """Rebuild relation tables with real FKs while repairing legacy drift."""
 
@@ -620,6 +703,7 @@ def _rebuild_relationship_tables(engine: Engine) -> dict[str, int]:
             tikz_column_stats = _ensure_tikz_asset_columns(connection)
             figure_layout_stats = _ensure_figure_layout_columns(connection)
             added_question_fingerprints = _ensure_question_fingerprint_table(connection)
+            tag_stats = _ensure_question_tags_table(connection)
             _validate_figure_layout_schema(connection)
 
             violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
@@ -635,6 +719,7 @@ def _rebuild_relationship_tables(engine: Engine) -> dict[str, int]:
                 "added_question_fingerprints": added_question_fingerprints,
                 **tikz_column_stats,
                 **figure_layout_stats,
+                **tag_stats,
             }
         except Exception:
             if transaction_started:
@@ -661,6 +746,7 @@ def _upgrade_derived_schema(engine: Engine) -> dict[str, int]:
             stats["added_question_fingerprints"] = (
                 _ensure_question_fingerprint_table(connection)
             )
+            stats.update(_ensure_question_tags_table(connection))
             _validate_figure_layout_schema(connection)
             connection.exec_driver_sql(f"PRAGMA user_version={LATEST_SCHEMA_VERSION}")
             connection.exec_driver_sql("COMMIT")
@@ -730,6 +816,7 @@ def _upgrade_v6_or_v7_fingerprint_schema(
                 added_text_indexes += 1
             _validate_question_fingerprint_schema(connection)
             figure_layout_stats = _ensure_figure_layout_columns(connection)
+            tag_stats = _ensure_question_tags_table(connection)
             _validate_figure_layout_schema(connection)
             connection.exec_driver_sql(f"PRAGMA user_version={LATEST_SCHEMA_VERSION}")
             connection.exec_driver_sql("COMMIT")
@@ -739,6 +826,7 @@ def _upgrade_v6_or_v7_fingerprint_schema(
                 "added_question_fingerprint_text_columns": 8,
                 "added_question_fingerprint_text_indexes": added_text_indexes,
                 **figure_layout_stats,
+                **tag_stats,
             }
         except Exception:
             if transaction_started:
