@@ -871,6 +871,17 @@
                     showToast('保存失败：题干内容不能为空！', 'error');
                     return false;
                 }
+                // 必选项校验：题型、难度（带 * 的必填字段）
+                if (!qtype) {
+                    if (typeof switchQuestionEditorPanel === 'function') switchQuestionEditorPanel('classification');
+                    showToast('保存失败：请选择题型！', 'error');
+                    return false;
+                }
+                if (!difficulty) {
+                    if (typeof switchQuestionEditorPanel === 'function') switchQuestionEditorPanel('classification');
+                    showToast('保存失败：请选择难度！', 'error');
+                    return false;
+                }
                 
                 // 教材章节在新体系中为多值标签，至少需挂 1 个节点。
                 const tagState = window.MathBankTags && window.MathBankTags.state;
@@ -1211,8 +1222,8 @@
                 
                 if (data.status === 'success') {
                     temporaryClassifyData = data;
-                    document.getElementById('recCompulsory').textContent = data.compulsory;
-                    document.getElementById('recChapter').textContent = data.chapter;
+                    document.getElementById('recChapterCode').textContent = data.chapter_code || '—';
+                    document.getElementById('recChapterPath').textContent = data.chapter_path || '未匹配到章节，请手动选择';
                     const formLabels = {
                         'choice': '选择题',
                         'fill_in_blank': '填空题',
@@ -1223,6 +1234,11 @@
                     document.getElementById('recQuestionForm').textContent = formLabels[questionForm];
                     document.getElementById('recQuestionFormSource').textContent = data.question_form_source === 'structure'
                         ? '结构规则识别'
+                        : 'AI 建议';
+                    const diffLabels = { 'easy': '基础题', 'medium': '中档题', 'hard': '难题' };
+                    document.getElementById('recDifficulty').textContent = diffLabels[data.difficulty] || '中档题';
+                    document.getElementById('recDifficultySource').textContent = data.difficulty_source === 'fallback'
+                        ? '默认值'
                         : 'AI 建议';
 
                     const choiceConfirm = document.getElementById('choiceTypeConfirm');
@@ -1266,13 +1282,33 @@
             
             const qtypeSelect = document.getElementById('editQType');
 
+            // 必选项① 题型
             if (temporaryClassifyQuestionType && qtypeSelect) {
                 qtypeSelect.value = temporaryClassifyQuestionType;
                 qtypeSelect.dispatchEvent(new Event('change', { bubbles: true }));
             }
+
+            // 必选项② 难度
+            const difficultySelect = document.getElementById('editDifficulty');
+            if (temporaryClassifyData.difficulty && difficultySelect) {
+                difficultySelect.value = temporaryClassifyData.difficulty;
+                difficultySelect.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+
+            // 必选项③ 教材章节（写入多值标签）
+            if (temporaryClassifyData.chapter_code && window.MathBankTags && typeof window.MathBankTags.setSelection === 'function') {
+                const current = window.MathBankTags.getSelection();
+                window.MathBankTags.setSelection({
+                    chapter: [temporaryClassifyData.chapter_code],
+                    thought: current.thought_codes || [],
+                    function: current.function_code ? [current.function_code] : []
+                });
+            }
             
             closeClassifyModal();
-            showToast('题型已确认，教材章节请在分类信息面板中手动选择！');
+            if (typeof refreshEditorFeedback === 'function') refreshEditorFeedback();
+            const fallbackTip = temporaryClassifyData.is_fallback ? '（部分字段为默认值，请核对）' : '';
+            showToast(`已应用 AI 分类：题型、难度、章节${fallbackTip}。请核对后保存。`);
             
             // Save question now with skipCheck = true
             setTimeout(() => {

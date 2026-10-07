@@ -5460,7 +5460,7 @@ button[aria-disabled="true"]:hover,
 .editor-validation-hint { margin: 0 0 12px; padding: 8px 12px; color: #92400e; background: #fffbeb; border-radius: 8px; font-size: 13px; }
 .editor-validation-hint.is-complete { color: #166534; background: #f0fdf4; }
 #editorSection [aria-invalid="true"] { border-color: #dc2626; }
-#editorSection label[for="editContent"]::after, #editorSection label[for="editQType"]::after { content: ' *'; color: #b91c1c; }
+#editorSection label[for="editContent"]::after, #editorSection label[for="editQType"]::after, #editorSection label[for="editDifficulty"]::after, #editorSection label[for="tagBookSelect"]::after { content: ' *'; color: #b91c1c; }
 #editorSection[data-panel="classification"] .question-editor-modal-surface { height: auto; max-height: calc(100dvh - 3rem); }
 #editorSection[data-panel="classification"] .question-editor-modal-body { flex: 0 1 auto; }
 #editorSection[data-panel="classification"] .bank-meta-panel { flex: none; }

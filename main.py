@@ -4086,8 +4086,18 @@ def ai_classify(content: str = Form(...)):
             status_code=400
         )
         
+    # 必选项「教材章节」的候选节点（章级别：code + 完整中文路径）
+    chapter_options = []
     try:
-        system_instructions = build_classification_system_prompt(get_current_curriculum())
+        tree = load_curriculum_tree("A")
+        for book in tree.get("books", []):
+            for chapter in book.get("chapters", []):
+                chapter_options.append((chapter.get("code", ""), chapter.get("path", "")))
+    except Exception:
+        chapter_options = []
+
+    try:
+        system_instructions = build_classification_system_prompt(chapter_options)
         data = {
             "model": model_name,
             "messages": [
@@ -4127,37 +4137,47 @@ def ai_classify(content: str = Form(...)):
             ai_message = "\n".join(lines).strip()
             
         result = json.loads(ai_message)
-        compulsory = result.get("compulsory", "")
-        chapter = result.get("chapter", "")
+
+        # 必选项①：题型（粗粒度 question_form，结构规则优先，AI 兜底）
         structured_question_form = detect_structured_question_form(content)
         question_form = structured_question_form or normalize_ai_question_form(
             result.get("question_form")
         )
         question_form_source = "structure" if structured_question_form else "ai"
-        
-        # Verification: make sure returned values exist in get_current_curriculum()
-        curr = get_current_curriculum()
-        if compulsory in curr and chapter in curr[compulsory]:
-            return {
-                "status": "success",
-                "compulsory": compulsory,
-                "chapter": chapter,
-                "question_form": question_form,
-                "question_form_source": question_form_source,
-            }
+
+        # 必选项②：难度（easy/medium/hard，非法或缺失时回退 medium）
+        difficulty = str(result.get("difficulty", "") or "").strip()
+        if difficulty not in ("easy", "medium", "hard"):
+            difficulty = "medium"
+            difficulty_source = "fallback"
         else:
-            # Fallback dynamically to the first available category book/chapter
-            first_comp = list(curr.keys())[0] if curr else "必修一"
-            first_chap = list(curr[first_comp].keys())[0] if curr and first_comp in curr and curr[first_comp] else "1. 集合与常用逻辑用语"
-            return {
-                "status": "success",
-                "compulsory": first_comp,
-                "chapter": first_chap,
-                "question_form": question_form,
-                "question_form_source": question_form_source,
-                "is_fallback": True,
-                "raw_recommendation": f"{compulsory} -> {chapter}"
-            }
+            difficulty_source = "ai"
+
+        # 必选项③：教材章节（四级树 code，非法时回退首个章并标记需人工核对）
+        chapter_code = str(result.get("chapter_code", "") or "").strip()
+        chapter_path = ""
+        chapter_fallback = False
+        if chapter_code:
+            node = curriculum_index("A").get(chapter_code)
+            if node:
+                chapter_path = node.get("path", "")
+        if not chapter_path:
+            chapter_fallback = True
+            if chapter_options:
+                chapter_code, chapter_path = chapter_options[0]
+            else:
+                chapter_code, chapter_path = "", ""
+
+        return {
+            "status": "success",
+            "chapter_code": chapter_code,
+            "chapter_path": chapter_path,
+            "question_form": question_form,
+            "question_form_source": question_form_source,
+            "difficulty": difficulty,
+            "difficulty_source": difficulty_source,
+            "is_fallback": chapter_fallback or difficulty_source == "fallback",
+        }
             
     except Exception as e:
         return JSONResponse(

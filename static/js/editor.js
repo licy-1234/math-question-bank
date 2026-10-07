@@ -525,7 +525,7 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             if (!status || !hint) return;
             const missing = [];
             const modal = document.getElementById('editorSection');
-            [['editContent', '题干'], ['editQType', '题型']].forEach(([id, label]) => {
+            [['editContent', '题干'], ['editQType', '题型'], ['editDifficulty', '难度']].forEach(([id, label]) => {
                 const input = document.getElementById(id);
                 if (!input) return;
                 const empty = !input.value.trim();

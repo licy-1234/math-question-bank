@@ -592,7 +592,7 @@
 
                         <!-- 教材章节：册-章-节-小节 四级级联多选 -->
                         <div>
-                            <label class="block text-[11px] font-medium text-slate-500 mb-1">教材章节（小节缺省时以“节”为最小粒度）</label>
+                            <label for="tagBookSelect" class="block text-[11px] font-medium text-slate-500 mb-1">教材章节（小节缺省时以"节"为最小粒度）</label>
                             <div class="grid grid-cols-4 gap-2">
                                 <select id="tagBookSelect" aria-label="册次" class="glass-select w-full px-2 text-xs rounded-xl">
                                     <option value="">-- 选择册次 --</option>
@@ -1295,7 +1295,7 @@
 
             <div class="space-y-4">
                 <p class="text-xs text-slate-500 leading-relaxed">
-                    您当前未选择 <strong>学段</strong> 或 <strong>所属章节</strong>。系统将结合题干结构规则与 AI 完成教材定位和粗粒度题型识别；选择题仍需您手动确认单选或多选。
+                    系统将通过题干结构规则与 AI 识别三项必选分类信息：<strong>题型</strong>、<strong>难度</strong>、<strong>教材章节</strong>；选择题仍需您手动确认单选或多选。
                 </p>
 
                 <!-- Loading State -->
@@ -1308,11 +1308,11 @@
                 <div id="classifyResult" aria-live="polite" class="hidden space-y-3">
                     <div class="p-4 rounded-xl bg-brand-50 border border-brand-100 space-y-3">
                         <div>
-                            <span class="text-[10px] uppercase font-bold text-brand-600 tracking-wider flex items-center mb-1.5"><i class="fa-solid fa-robot mr-1.5 animate-bounce"></i>AI 推荐教材定位：</span>
+                            <span class="text-[10px] uppercase font-bold text-brand-600 tracking-wider flex items-center mb-1.5"><i class="fa-solid fa-robot mr-1.5 animate-bounce"></i>AI 推荐教材章节：</span>
                             <div class="flex items-center space-x-2 font-semibold text-slate-800 text-xs flex-wrap gap-y-1.5">
-                                <span id="recCompulsory" class="bg-brand-100 text-brand-700 px-2.5 py-0.5 rounded-lg text-[10px] font-bold">选择性必修二</span>
+                                <span id="recChapterCode" class="bg-brand-100 text-brand-700 px-2.5 py-0.5 rounded-lg text-[10px] font-bold">B1-C3</span>
                                 <i class="fa-solid fa-chevron-right text-[10px] text-slate-500"></i>
-                                <span id="recChapter" class="text-slate-800 font-bold">5. 一元函数的导数及其应用</span>
+                                <span id="recChapterPath" class="text-slate-800 font-bold">必修第一册·第三章 函数的概念与性质</span>
                             </div>
                         </div>
                         <div class="border-t border-brand-100/60 pt-3 space-y-2">
@@ -1321,6 +1321,11 @@
                                 <span id="recQuestionFormSource" class="text-[10px] text-slate-500 font-medium">AI 建议</span>
                             </div>
                             <span id="recQuestionForm" class="inline-flex bg-indigo-100 text-indigo-800 px-2.5 py-1 rounded-lg text-[11px] font-bold">待识别</span>
+                            <div class="flex items-center justify-between gap-2 mt-1">
+                                <span class="text-[10px] uppercase font-bold text-brand-600 tracking-wider flex items-center"><i class="fa-solid fa-gauge-high mr-1.5 text-amber-500"></i>难度识别：</span>
+                                <span id="recDifficultySource" class="text-[10px] text-slate-500 font-medium">AI 建议</span>
+                            </div>
+                            <span id="recDifficulty" class="inline-flex bg-amber-100 text-amber-800 px-2.5 py-1 rounded-lg text-[11px] font-bold">中档题</span>
                             <div id="choiceTypeConfirm" class="hidden space-y-2" role="radiogroup" aria-label="确认选择题类型">
                                 <p class="text-[11px] text-amber-700 font-medium"><i class="fa-solid fa-circle-info mr-1"></i>已识别为选择题，请手动确认是单选题还是多选题。</p>
                                 <div class="grid grid-cols-2 gap-2">

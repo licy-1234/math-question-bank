@@ -254,22 +254,33 @@ def build_curriculum_text(curriculum: dict) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def build_classification_system_prompt(curriculum: dict) -> str:
-    curriculum_text = build_curriculum_text(curriculum)
+def build_classification_system_prompt(chapters: list) -> str:
+    """Build the classify prompt over the four-level curriculum tree.
+
+    ``chapters`` is a list of ``(code, path)`` pairs for every selectable
+    chapter node (e.g. ``("B1-C3", "必修第一册·第三章 函数的概念与性质")``).
+    The model must output the required-field trio: chapter code, coarse
+    question form and difficulty.
+    """
+    chapter_lines = "\n".join(f"- {code}  {path}" for code, path in chapters)
     return (
-        "你是一个专门为教材分类的 AI 专家。请分析以下输入的题目，将其归入特定的教材体系中。\n"
-        "【可选教材范围及各章名称】:\n"
-        f"{curriculum_text}\n"
-        "【分类规则】:\n"
-        "1. 仔细阅读并推导题目考点。\n"
-        "2. 必须在上面的可选教材范围中为本题挑选最合适的一个【学段】（例如：必修一）和一个【所属章节】（例如：5. 三角函数，必须是可选章节中的精确字符串）。\n"
-        f"3. {CLASSIFICATION_PRIORITY_RULE}\n"
-        "4. 只判定粗粒度题型 `question_form`：填空题为 `fill_in_blank`，解答题为 `detailed_answer`，任何选择题一律为 `choice`，无法可靠判断时为 `unknown`。严禁输出或猜测 `single_choice`、`multi_choice`、单选题、多选题。题干出现 `\\fillin` 时应判为填空题，出现 `\\begin{choices}` 时应判为选择题。\n"
-        "5. 你的输出必须是一个合法的 JSON 字符串，包含且仅包含以下三个 key，不要有任何多余的 Markdown 标记、代码块或解释文字：\n"
+        "你是高中数学题目分类专家。请分析题目，识别并输出以下【必选分类信息】三项。\n"
+        "【教材章节编码】从下列列表挑选最合适的一个 code，必须原样输出 code：\n"
+        f"{chapter_lines}\n"
+        "【分类规则】\n"
+        "1. 仔细阅读并推导题目考点，定位其所属教材章节。\n"
+        "2. 章节编码按「册(B1/B2/X1/X2/X3)-章(Cn)」组织，优先定位到章级别；"
+        "仅当能明确判断到更细的节/小节时才选更细的 code。\n"
+        "3. 多模块融合题：按上面列表的先后顺序，选位置最靠后的模块；仅作背景、解题未用到的内容不计入候选。\n"
+        "4. 判定粗粒度题型 question_form：填空题为 fill_in_blank，解答题为 detailed_answer，任何选择题一律为 choice，"
+        "无法可靠判断时为 unknown。严禁输出 single_choice、multi_choice、单选题、多选题。"
+        "题干出现 \\fillin 判填空，出现 \\begin{choices} 判选择。\n"
+        "5. 判定难度 difficulty：easy（基础题）、medium（中档题）、hard（难题）。\n"
+        "6. 输出必须是合法 JSON 字符串，包含且仅包含以下三个 key，不要任何 Markdown 标记、代码块或解释文字：\n"
         "{\n"
-        '  "compulsory": "学段名称",\n'
-        '  "chapter": "具体章节名称",\n'
-        '  "question_form": "choice / fill_in_blank / detailed_answer / unknown"\n'
+        '  "chapter_code": "章节编码",\n'
+        '  "question_form": "choice / fill_in_blank / detailed_answer / unknown",\n'
+        '  "difficulty": "easy / medium / hard"\n'
         "}\n"
         "不要包含 ```json ``` 标记，只输出最干净的 JSON。"
     )
