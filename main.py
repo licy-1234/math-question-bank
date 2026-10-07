@@ -3652,9 +3652,12 @@ def load_or_init_metadata():
                 if isinstance(loaded, dict) and "question_types" in loaded and "difficulties" in loaded and "curriculum" in loaded:
                     # Self-heal metadata file (e.g. add 常规题, update simplified book names)
                     modified = False
-                    has_normal = any(d.get("value") == "normal" for d in loaded.get("difficulties", []))
-                    if not has_normal:
-                        loaded["difficulties"].insert(1, {"value": "normal", "label": "常规题", "color": "text-blue-600 bg-blue-50 border-blue-200"})
+                    # 人教A版固定三级难度：强制统一为 easy / medium / hard。
+                    default_difficulties = build_default_metadata("A")["difficulties"]
+                    current_values = [d.get("value") for d in loaded.get("difficulties", [])]
+                    default_values = [d["value"] for d in default_difficulties]
+                    if current_values != default_values:
+                        loaded["difficulties"] = default_difficulties
                         modified = True
                         
                     curriculum = loaded.get("curriculum", {})
@@ -3680,7 +3683,7 @@ def load_or_init_metadata():
                                 METADATA_FILE,
                                 json.dumps(loaded, ensure_ascii=False, indent=2),
                             )
-                            print(f"[Metadata Self-Heal] Upgraded {METADATA_FILE} with simplified book names and normal difficulty.")
+                            print(f"[Metadata Self-Heal] Upgraded {METADATA_FILE} with simplified book names and three-level difficulties.")
                         except Exception as e:
                             print(f"[Metadata Self-Heal Error] Failed to write updated metadata: {e}")
                     
@@ -3966,10 +3969,9 @@ def save_metadata_config(
 def get_db_stats(db: Session = Depends(get_db)):
     try:
         total = db.query(Question).count()
-        normal = db.query(Question).filter(Question.difficulty == "normal").count()
-        easy_error = db.query(Question).filter(Question.difficulty == "easy_error").count()
-        challenge = db.query(Question).filter(Question.difficulty == "challenge").count()
-        qiangji = db.query(Question).filter(Question.difficulty == "qiangji").count()
+        easy = db.query(Question).filter(Question.difficulty == "easy").count()
+        medium = db.query(Question).filter(Question.difficulty == "medium").count()
+        hard = db.query(Question).filter(Question.difficulty == "hard").count()
         
         # Cascaded Stage & Chapter Counts
         rows = db.query(
@@ -4016,10 +4018,9 @@ def get_db_stats(db: Session = Depends(get_db)):
         return {
             "status": "success",
             "total_count": total,
-            "normal_count": normal,
-            "easy_error_count": easy_error,
-            "challenge_count": challenge,
-            "qiangji_count": qiangji,
+            "easy_count": easy,
+            "medium_count": medium,
+            "hard_count": hard,
             "compulsory_chapter_counts": sorted_comp_chap_stats,
             "daily_adds": daily_adds
         }

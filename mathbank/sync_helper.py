@@ -174,7 +174,7 @@ def generate_markdown_library(questions, filepath: str):
         type_display = {item["value"]: item["label"] for item in custom_meta["question_types"]}
         difficulty_display = {item["value"]: item["label"] for item in custom_meta["difficulties"]}
         # 保底映射默认系统内置字段以防老旧数据不匹配
-        for val, lbl in [("easy", "🟢 容易"), ("medium", "🟡 中等"), ("hard", "🔴 较难")]:
+        for val, lbl in [("easy", "基础题"), ("medium", "中档题"), ("hard", "难题")]:
             if val not in difficulty_display:
                 difficulty_display[val] = lbl
     else:
@@ -185,12 +185,9 @@ def generate_markdown_library(questions, filepath: str):
             "detailed_answer": "解答题"
         }
         difficulty_display = {
-            "easy": "🟢 容易",
-            "medium": "🟡 中等",
-            "hard": "🔴 较难",
-            "easy_error": "🟠 易错题",
-            "challenge": "🔥 压轴挑战题",
-            "qiangji": "🎓 强基/竞赛题"
+            "easy": "基础题",
+            "medium": "中档题",
+            "hard": "难题",
         }
 
     with open(filepath, "w", encoding="utf-8") as f:

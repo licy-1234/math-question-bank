@@ -28,24 +28,19 @@ DEFAULT_QUESTION_TYPES = [
 
 DEFAULT_DIFFICULTIES = [
     {
-        "value": "easy_error",
-        "label": "易错题",
+        "value": "easy",
+        "label": "基础题",
         "color": "text-green-600 bg-green-50 border-green-200",
     },
     {
-        "value": "normal",
-        "label": "常规题",
+        "value": "medium",
+        "label": "中档题",
         "color": "text-blue-600 bg-blue-50 border-blue-200",
     },
     {
-        "value": "challenge",
-        "label": "挑战题",
+        "value": "hard",
+        "label": "难题",
         "color": "text-red-600 bg-red-50 border-red-200",
-    },
-    {
-        "value": "qiangji",
-        "label": "强基题",
-        "color": "text-purple-600 bg-purple-50 border-purple-200",
     },
 ]
 

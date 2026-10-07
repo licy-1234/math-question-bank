@@ -1349,16 +1349,6 @@
                     console.error('获取系统配置失败:', err);
                 });
 
-            // 同时拉取最新的自定义维度配置 JSON 并填入，防止直接保存时由于未切换 Tab 导致值为空引发校验错误
-            fetch('/api/config/metadata')
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('settingsMetadataJson').value = JSON.stringify(data, null, 2);
-                })
-                .catch(err => {
-                    console.error('获取元数据配置失败:', err);
-                });
-                
             modal.classList.remove('hidden');
             window.MathBankModal.open(modal, { onEscape: closeSettingsModal });
             setTimeout(() => {
@@ -1545,39 +1535,15 @@
             formData.append('prefer_classify_model', preferClassifyModel);
             formData.append('prefer_draw_model', preferDrawModel);
             
-            // Chain both saves: metadata JSON and ENV settings parameters
-            let metaPayload = null;
-            const metadataStr = document.getElementById('settingsMetadataJson').value.trim();
-            try {
-                metaPayload = JSON.parse(metadataStr);
-            } catch (err) {
-                showToast('元数据配置 JSON 格式错误，请检查括号与逗号！', 'error');
-                return;
-            }
-
-            fetch('/api/config/metadata', {
+            // Save ENV settings parameters
+            fetch('/api/settings/save', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(metaPayload)
-            })
-            .then(r => {
-                if (!r.ok) {
-                    return r.json().then(d => { throw new Error(d.detail || '保存元数据配置失败') });
-                }
-                return r.json();
-            })
-            .then(() => {
-                return fetch('/api/settings/save', {
-                    method: 'POST',
-                    body: formData
-                });
+                body: formData
             })
             .then(r => r.json())
             .then(data => {
                 if (data.status === 'success') {
-                    showToast('所有配置（含自定义维度）保存成功！');
+                    showToast('配置保存成功！');
                     closeSettingsModal();
                     fetchConfigStatus();
                     loadCategories({ reloadCurrentQuestion: true });
@@ -1590,7 +1556,8 @@
             });
         }
 
-        // Load Categories from Database to Autocomplete Selects
+        // Load system metadata, the legacy category tree (still used by the
+        // paper-import review cards) and the tag-based classification schema/tree.
         function loadCategories(options = {}) {
             const reloadCurrentQuestion = options.reloadCurrentQuestion === true;
             const retryCount = Number.isInteger(options.retryCount) ? options.retryCount : 0;
@@ -1618,8 +1585,15 @@
                     categoryTree = data;
                     window.categoryTree = data;
                     window.systemMetadata = systemMetadata;
-                    populateCategoryDropdowns();
-                    populateFilterDropdowns();
+                    if (window.MathBankTags && typeof window.MathBankTags.init === 'function') {
+                        return window.MathBankTags.init();
+                    }
+                    return null;
+                })
+                .then(() => {
+                    if (typeof populateFilterDropdowns === 'function') {
+                        populateFilterDropdowns();
+                    }
                     
                     // Most callers only need fresh dropdown data. Reloading the
                     // editor is an explicit settings/curriculum operation because
@@ -1629,7 +1603,7 @@
                     }
                 })
                 .catch(err => {
-                    console.error('加载分类目录树或元数据配置发生异常:', err);
+                    console.error('加载元数据或标签体系发生异常:', err);
                     if (retryCount < 3) {
                         console.warn(`[Auto-Retry] 正在尝试第 ${retryCount + 1} 次自适应重新加载数据...`);
                         setTimeout(() => loadCategories({ ...options, retryCount: retryCount + 1 }), 1500);
@@ -1725,22 +1699,20 @@
         window.switchSettingsTab = function(tabName) {
             activeSettingsTab = tabName;
             const btnApi = document.getElementById('btn-settings-api');
-            const btnMeta = document.getElementById('btn-settings-metadata');
             const btnAbout = document.getElementById('btn-settings-about');
             const tabApi = document.getElementById('settings-tab-api');
-            const tabMeta = document.getElementById('settings-tab-metadata');
             const tabAbout = document.getElementById('settings-tab-about');
             const btnSave = document.getElementById('btnSettingsSave');
             
             // Reset all buttons
-            [btnApi, btnMeta, btnAbout].forEach(b => {
+            [btnApi, btnAbout].forEach(b => {
                 if (b) {
                     b.classList.remove('border-brand-500', 'text-brand-600');
                     b.classList.add('border-transparent', 'text-slate-500');
                 }
             });
             // Hide all tabs
-            [tabApi, tabMeta, tabAbout].forEach(t => {
+            [tabApi, tabAbout].forEach(t => {
                 if (t) t.classList.add('hidden');
             });
             
@@ -1751,24 +1723,6 @@
                 }
                 if (tabApi) tabApi.classList.remove('hidden');
                 if (btnSave) btnSave.classList.remove('hidden');
-            } else if (tabName === 'metadata') {
-                if (btnMeta) {
-                    btnMeta.classList.add('border-brand-500', 'text-brand-600');
-                    btnMeta.classList.remove('border-transparent', 'text-slate-500');
-                }
-                if (tabMeta) tabMeta.classList.remove('hidden');
-                if (btnSave) btnSave.classList.remove('hidden');
-                
-                // Load latest JSON from API
-                fetch('/api/config/metadata')
-                    .then(r => r.json())
-                    .then(data => {
-                        const el = document.getElementById('settingsMetadataJson');
-                        if (el) el.value = JSON.stringify(data, null, 2);
-                    })
-                    .catch(err => {
-                        showToast('加载元数据配置失败: ' + err, 'error');
-                    });
             } else if (tabName === 'about') {
                 if (btnAbout) {
                     btnAbout.classList.add('border-brand-500', 'text-brand-600');
@@ -1780,32 +1734,6 @@
                 // Refresh update status in About tab
                 refreshAboutTabUpdateInfo();
             }
-        };
-
-        // Reset Metadata to High school math template
-        window.resetMetadataToDefault = function(version = 'A') {
-            const versionName = version === 'B' ? '人教B版' : (version === 'S' ? '苏教版' : (version === 'H' ? '沪教版' : '人教A版'));
-            if (!confirm(`确认要将所有题型、难度和学段重置为默认的【${versionName}】配置模板吗？这不会修改您的数据库题目，但会替换下方编辑框的内容（需点击保存后生效）。`)) {
-                return;
-            }
-
-            fetch('/api/config/curriculum-presets/' + encodeURIComponent(version))
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('HTTP ' + response.status);
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    if (!data || !data.metadata || !data.metadata.curriculum) {
-                        throw new Error('教材大纲预设响应格式错误');
-                    }
-                    document.getElementById('settingsMetadataJson').value = JSON.stringify(data.metadata, null, 2);
-                    showToast(`已加载默认【${data.name || versionName}】配置模板，请点击最下方的 [保存配置] 按钮进行保存并应用。`);
-                })
-                .catch(error => {
-                    showToast('加载教材大纲预设失败: ' + error.message, 'error');
-                });
         };
 
         // ----------------- App Version & Update Management -----------------
@@ -2139,20 +2067,18 @@
                     return MathBankSafe.safeClassList(found.color, 'text-slate-600 bg-slate-100 border border-slate-200/60');
                 }
             }
-            if (val === 'easy_error') return 'text-green-600 bg-green-50 border border-green-200/60';
-            if (val === 'normal') return 'text-blue-600 bg-blue-50 border border-blue-200/60';
-            if (val === 'challenge') return 'text-red-600 bg-red-50 border border-red-200/60';
-            if (val === 'qiangji') return 'text-purple-600 bg-purple-50 border border-purple-200/60';
+            if (val === 'easy') return 'text-green-600 bg-green-50 border border-green-200/60';
+            if (val === 'medium') return 'text-blue-600 bg-blue-50 border border-blue-200/60';
+            if (val === 'hard') return 'text-red-600 bg-red-50 border border-red-200/60';
             return 'text-slate-600 bg-slate-100 border border-slate-200/60';
         }
         window.getDifficultyColor = getDifficultyColor;
 
         function getDifficultyBadge(diff) {
             if (!systemMetadata || !systemMetadata.difficulties || systemMetadata.difficulties.length === 0) {
-                if (diff === 'easy_error') return '<span class="text-[9px] font-bold text-green-600 bg-green-50 px-1.5 py-0.5 rounded">易错</span>';
-                if (diff === 'normal') return '<span class="text-[9px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">常规</span>';
-                if (diff === 'challenge') return '<span class="text-[9px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">挑战</span>';
-                if (diff === 'qiangji') return '<span class="text-[9px] font-bold text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded">强基</span>';
+                if (diff === 'easy') return '<span class="text-[9px] font-bold text-green-600 bg-green-50 px-1.5 py-0.5 rounded">基础</span>';
+                if (diff === 'medium') return '<span class="text-[9px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">中档</span>';
+                if (diff === 'hard') return '<span class="text-[9px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">难题</span>';
                 return '<span class="text-[9px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">未定</span>';
             }
             const found = systemMetadata.difficulties.find(d => d.value === diff);
@@ -2179,10 +2105,9 @@
 
         function getDifficultyText(val) {
             if (!systemMetadata || !systemMetadata.difficulties || systemMetadata.difficulties.length === 0) {
-                if (val === 'easy_error') return '易错题';
-                if (val === 'normal') return '常规题';
-                if (val === 'challenge') return '挑战题';
-                if (val === 'qiangji') return '强基题';
+                if (val === 'easy') return '基础题';
+                if (val === 'medium') return '中档题';
+                if (val === 'hard') return '难题';
                 return '未定';
             }
             const found = systemMetadata.difficulties.find(d => d.value === val);

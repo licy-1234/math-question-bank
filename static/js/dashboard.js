@@ -169,9 +169,9 @@
             const papers = Array.isArray(paperPayload.data) ? paperPayload.data : [];
             const monthlyAdds = monthAdditionCount(stats.daily_adds);
             setText('dashboardQuestionTotal', formatCount(stats.total_count));
-            setText('dashboardQuestionTotalMeta', `当前本地题库 · ${formatCount(stats.normal_count)} 道常规题`);
-            setText('dashboardReviewCount', formatCount(stats.easy_error_count));
-            setText('dashboardReviewMeta', '按题目属性统计');
+            setText('dashboardQuestionTotalMeta', `当前本地题库 · ${formatCount(stats.medium_count)} 道中档题`);
+            setText('dashboardReviewCount', formatCount(stats.hard_count));
+            setText('dashboardReviewMeta', '按难度等级统计');
             setText('dashboardPaperCount', formatCount(papers.length));
             setText('dashboardPaperMeta', papers.length ? '可从试卷记录继续编辑' : '还没有保存的试卷');
             setText('dashboardMonthAdditions', formatCount(monthlyAdds));

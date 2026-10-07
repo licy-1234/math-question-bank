@@ -159,9 +159,10 @@
             renderIllustrationBadges();
             
             document.getElementById('editQType').value = 'single_choice';
-            document.getElementById('editDifficulty').value = 'easy_error';
-            document.getElementById('editCompulsory').value = '';
-            document.getElementById('editCompulsory').onchange();
+            document.getElementById('editDifficulty').value = 'medium';
+            if (window.MathBankTags && typeof window.MathBankTags.clear === 'function') {
+                window.MathBankTags.clear();
+            }
             
             document.getElementById('editQType').dispatchEvent(new Event('change'));
             document.getElementById('editDifficulty').dispatchEvent(new Event('change'));
@@ -247,9 +248,10 @@
                 
                 // Reset select lists
                 document.getElementById('editQType').value = 'single_choice';
-                document.getElementById('editDifficulty').value = 'easy_error';
-                document.getElementById('editCompulsory').value = '';
-                document.getElementById('editCompulsory').onchange();
+                document.getElementById('editDifficulty').value = 'medium';
+                if (window.MathBankTags && typeof window.MathBankTags.clear === 'function') {
+                    window.MathBankTags.clear();
+                }
                 
                 document.getElementById('editQType').dispatchEvent(new Event('change'));
                 document.getElementById('editDifficulty').dispatchEvent(new Event('change'));
@@ -309,9 +311,10 @@
             
             // Reset selects
             document.getElementById('editQType').value = 'single_choice';
-            document.getElementById('editDifficulty').value = 'easy_error';
-            document.getElementById('editCompulsory').value = '';
-            document.getElementById('editCompulsory').onchange();
+            document.getElementById('editDifficulty').value = 'medium';
+            if (window.MathBankTags && typeof window.MathBankTags.clear === 'function') {
+                window.MathBankTags.clear();
+            }
             
             document.getElementById('editQType').dispatchEvent(new Event('change'));
             document.getElementById('editDifficulty').dispatchEvent(new Event('change'));
@@ -745,20 +748,6 @@
                         document.getElementById('editTags').value = fullItem.tags || '';
                     }
                     
-                    const compSelect = document.getElementById('editCompulsory');
-                    const chapSelect = document.getElementById('editChapter');
-                    const knowSelect = document.getElementById('editKnowledge');
-                    
-                    // In case the categories in item are not in tree yet, add them temporarily
-                    // Repopulate with clean categoryTree
-                    populateCategoryDropdowns();
-                    
-                    compSelect.value = fullItem.category_compulsory || '';
-                    compSelect.onchange();
-                    chapSelect.value = fullItem.category_chapter || '';
-                    chapSelect.onchange();
-                    knowSelect.value = fullItem.category_knowledge || '';
-
                     // 新分类标签体系回显（章节 / 思想方法 / 功能）
                     if (window.MathBankTags && typeof window.MathBankTags.setSelection === 'function') {
                         window.MathBankTags.setSelection(fullItem.tag_codes || null);
@@ -856,9 +845,6 @@
                 const editorSession = EditorState.snapshot();
                 const content = document.getElementById('editContent').value;
                 const qtype = document.getElementById('editQType').value;
-                const compulsory = document.getElementById('editCompulsory').value;
-                const chapter = document.getElementById('editChapter').value;
-                const knowledge = document.getElementById('editKnowledge').value;
                 const difficulty = document.getElementById('editDifficulty').value;
                 const source = document.getElementById('editSource').value;
                 const answerMarkdown = document.getElementById('editAnswerMarkdown').value;
@@ -886,37 +872,17 @@
                     return false;
                 }
                 
-                // Check if Compulsory or Chapter classifications are missing
-                if (!skipCheck && (!compulsory || !chapter)) {
+                // 教材章节在新体系中为多值标签，至少需挂 1 个节点。
+                const tagState = window.MathBankTags && window.MathBankTags.state;
+                const hasChapterNode = !!(tagState && Array.isArray(tagState.chapters) && tagState.chapters.length);
+                if (!skipCheck && !hasChapterNode) {
                     const choice = await showMissingCompulsoryModal();
                     if (choice === 'manual') {
                         if (typeof switchQuestionEditorPanel === 'function') switchQuestionEditorPanel('classification');
-                        if (!compulsory) {
-                            const compSelect = document.getElementById('editCompulsory');
-                            if (compSelect) {
-                                compSelect.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                // Add premium temporary focus highlight (using brand color ring)
-                                compSelect.classList.remove('border-slate-200');
-                                compSelect.classList.add('ring-2', 'ring-brand-500', 'border-brand-500');
-                                setTimeout(() => {
-                                    compSelect.classList.remove('ring-2', 'ring-brand-500', 'border-brand-500');
-                                    compSelect.classList.add('border-slate-200');
-                                }, 2500);
-                                compSelect.focus();
-                            }
-                        } else if (!chapter) {
-                            const chapSelect = document.getElementById('editChapter');
-                            if (chapSelect) {
-                                chapSelect.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                // Add premium temporary focus highlight (using brand color ring)
-                                chapSelect.classList.remove('border-slate-200');
-                                chapSelect.classList.add('ring-2', 'ring-brand-500', 'border-brand-500');
-                                setTimeout(() => {
-                                    chapSelect.classList.remove('ring-2', 'ring-brand-500', 'border-brand-500');
-                                    chapSelect.classList.add('border-slate-200');
-                                }, 2500);
-                                chapSelect.focus();
-                            }
+                        const bookSelect = document.getElementById('tagBookSelect');
+                        if (bookSelect) {
+                            bookSelect.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            bookSelect.focus();
                         }
                     } else if (choice === 'ai') {
                         // Automatically open AI classify modal and trigger AI analysis
@@ -948,9 +914,6 @@
                     question_type: qtype,
                     difficulty: difficulty,
                     source: source,
-                    category_compulsory: compulsory,
-                    category_chapter: chapter,
-                    category_knowledge: knowledge,
                     related_question_id: relatedQuestionId,
                     image_paths: JSON.stringify(Array.from(uploadedImages)),
                     tikz_code: tikzCode,
@@ -972,9 +935,6 @@
                 const formData = new FormData();
                 formData.append('content', content);
                 formData.append('question_type', qtype);
-                formData.append('category_compulsory', compulsory);
-                formData.append('category_chapter', chapter);
-                formData.append('category_knowledge', knowledge);
                 formData.append('difficulty', difficulty);
                 formData.append('source', source);
                 formData.append('answer_markdown', answerMarkdown);
@@ -1304,29 +1264,7 @@
                 return;
             }
             
-            const compSelect = document.getElementById('editCompulsory');
-            const chapSelect = document.getElementById('editChapter');
-            const knowSelect = document.getElementById('editKnowledge');
             const qtypeSelect = document.getElementById('editQType');
-            
-            const comp = temporaryClassifyData.compulsory;
-            const chap = temporaryClassifyData.chapter;
-            
-            // Ensure nodes exist in local dictionary structure
-            if (!categoryTree[comp]) {
-                categoryTree[comp] = {};
-            }
-            if (!categoryTree[comp][chap]) {
-                categoryTree[comp][chap] = [];
-            }
-            
-            populateCategoryDropdowns();
-            
-            compSelect.value = comp;
-            compSelect.onchange();
-            chapSelect.value = chap;
-            chapSelect.onchange();
-            knowSelect.value = chap; // Default empty third level (小节) to chapter name
 
             if (temporaryClassifyQuestionType && qtypeSelect) {
                 qtypeSelect.value = temporaryClassifyQuestionType;
@@ -1334,7 +1272,7 @@
             }
             
             closeClassifyModal();
-            showToast('教材章节及题型已确认！');
+            showToast('题型已确认，教材章节请在分类信息面板中手动选择！');
             
             // Save question now with skipCheck = true
             setTimeout(() => {
@@ -4603,10 +4541,9 @@
                     });
                 } else {
                     difficultyOptionsHtml = `
-                        <option value="easy_error" ${q.difficulty === 'easy_error' ? 'selected' : ''}>易错题</option>
-                        <option value="normal" ${q.difficulty === 'normal' ? 'selected' : ''}>常规题</option>
-                        <option value="challenge" ${q.difficulty === 'challenge' ? 'selected' : ''}>挑战题</option>
-                        <option value="qiangji" ${q.difficulty === 'qiangji' ? 'selected' : ''}>强基题</option>
+                        <option value="easy" ${q.difficulty === 'easy' ? 'selected' : ''}>基础题</option>
+                        <option value="medium" ${q.difficulty === 'medium' ? 'selected' : ''}>中档题</option>
+                        <option value="hard" ${q.difficulty === 'hard' ? 'selected' : ''}>难题</option>
                     `;
                 }
 
@@ -5805,6 +5742,22 @@
                     loadQuestions();
                 } else {
                     loadDrafts();
+                }
+            });
+
+            // Bind new tag-based filter selects (章节 / 数学思想 / 功能)
+            ['filterChapterCode', 'filterThought', 'filterFunctionCode'].forEach(id => {
+                const filterEl = document.getElementById(id);
+                if (filterEl) {
+                    filterEl.addEventListener('change', () => {
+                        currentBankPage = 1;
+                        currentDraftPage = 1;
+                        if (activeSidebarTab === 'bank') {
+                            loadQuestions();
+                        } else {
+                            loadDrafts();
+                        }
+                    });
                 }
             });
 

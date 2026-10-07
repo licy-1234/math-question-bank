@@ -918,10 +918,9 @@
         // 5. Build Difficulty options
         let diffOptions = `<option value="">全部难度</option>`;
         const difficulties = metadata.difficulties || [
-            { value: 'easy', label: '普通题' },
-            { value: 'easy_error', label: '易错题' },
-            { value: 'medium', label: '挑战题' },
-            { value: 'hard', label: '强基题' }
+            { value: 'easy', label: '基础题' },
+            { value: 'medium', label: '中档题' },
+            { value: 'hard', label: '难题' }
         ];
         difficulties.forEach(d => {
             diffOptions += `<option value="${escapeHtml(d.value)}" ${f.difficulty === d.value ? 'selected' : ''}>${escapeHtml(d.label)}</option>`;
@@ -1725,8 +1724,8 @@
         validCartStats.forEach(item => {
             const q = window.PaperStore.questionsMap[item.id];
             if (q) {
-                if (q.difficulty === 'easy' || q.difficulty === 'normal') easyCount++;
-                else if (q.difficulty === 'hard' || q.difficulty === 'qiangji') hardCount++;
+                if (q.difficulty === 'easy') easyCount++;
+                else if (q.difficulty === 'hard') hardCount++;
                 else medCount++;
             }
         });
@@ -3867,12 +3866,9 @@
             }
         } else {
             const fallbackMap = {
-                easy: '普通题',
-                easy_error: '易错题',
-                medium: '挑战题',
-                challenge: '挑战题',
-                hard: '强基题',
-                qiangji: '强基题'
+                easy: '基础题',
+                medium: '中档题',
+                hard: '难题'
             };
             label = fallbackMap[diff] || diff;
         }
@@ -3880,13 +3876,11 @@
         if (!colorClass) {
             if (typeof window.getDifficultyColor === 'function') {
                 colorClass = window.getDifficultyColor(diff);
-            } else if (diff === 'easy' || diff === 'normal') {
-                colorClass = 'text-blue-600 bg-blue-50 border border-blue-200/60 dark:bg-blue-900/30 dark:text-blue-300';
-            } else if (diff === 'easy_error') {
+            } else if (diff === 'easy') {
                 colorClass = 'text-green-600 bg-green-50 border border-green-200/60 dark:bg-green-900/30 dark:text-green-300';
-            } else if (diff === 'hard' || diff === 'qiangji') {
-                colorClass = 'text-purple-600 bg-purple-50 border border-purple-200/60 dark:bg-purple-900/30 dark:text-purple-300';
-            } else if (diff === 'challenge') {
+            } else if (diff === 'medium') {
+                colorClass = 'text-blue-600 bg-blue-50 border border-blue-200/60 dark:bg-blue-900/30 dark:text-blue-300';
+            } else if (diff === 'hard') {
                 colorClass = 'text-red-600 bg-red-50 border border-red-200/60 dark:bg-red-900/30 dark:text-red-300';
             } else {
                 colorClass = 'text-slate-600 bg-slate-100 border border-slate-200/60';

@@ -186,9 +186,6 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                 question_type: document.getElementById('editQType').value,
                 difficulty: document.getElementById('editDifficulty').value,
                 source: document.getElementById('editSource').value,
-                category_compulsory: document.getElementById('editCompulsory').value,
-                category_chapter: document.getElementById('editChapter').value,
-                category_knowledge: document.getElementById('editKnowledge').value,
                 related_question_id: document.getElementById('editRelatedQuestion').value,
                 image_paths: JSON.stringify(uploadedImages),
                 tikz_code: TikzState.contentAssets[0] ? TikzState.contentAssets[0].tikz_code : '',
@@ -212,9 +209,6 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                 question_type: snapshot.question_type,
                 difficulty: snapshot.difficulty,
                 source: snapshot.source,
-                category_compulsory: snapshot.category_compulsory,
-                category_chapter: snapshot.category_chapter,
-                category_knowledge: snapshot.category_knowledge,
                 related_question_id: snapshot.related_question_id || '',
                 image_paths: snapshot.image_paths,
                 tikz_code: snapshot.tikz_code || '',
@@ -321,9 +315,6 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             const currentType = document.getElementById('editQType').value;
             const currentDifficulty = document.getElementById('editDifficulty').value;
             const currentSource = document.getElementById('editSource').value;
-            const currentComp = document.getElementById('editCompulsory').value;
-            const currentChap = document.getElementById('editChapter').value;
-            const currentKnow = document.getElementById('editKnowledge').value;
             const currentRelatedQuestionId = document.getElementById('editRelatedQuestion').value;
             const currentImages = JSON.stringify(uploadedImages);
             const currentTikzCode = TikzState.contentAssets[0]
@@ -345,9 +336,6 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                    currentType === snapshot.question_type &&
                    currentDifficulty === snapshot.difficulty &&
                    currentSource === snapshot.source &&
-                   currentComp === snapshot.category_compulsory &&
-                   currentChap === snapshot.category_chapter &&
-                   currentKnow === snapshot.category_knowledge &&
                    currentRelatedQuestionId === (snapshot.related_question_id || '') &&
                    currentImages === snapshot.image_paths &&
                    currentTikzCode === (snapshot.tikz_code || '') &&
@@ -454,7 +442,7 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                             </div>
                         </div>
                         <p class="text-xs text-slate-500 leading-relaxed">
-                            为了确保题目能够被精准定位和检索，每道题都需要分配<strong>学段（如：必修一）</strong>与<strong>章节</strong>。您可以选择：
+                            为了确保题目能够被精准定位和检索，每道题都需要分配<strong>教材章节（人教A版2019 的册/章/节/小节）</strong>。您可以选择：
                         </p>
                         <div class="flex flex-col space-y-2 pt-1">
                             <button id="manualCompulsoryBtn" type="button" class="w-full px-4 py-2.5 bg-slate-50 hover:bg-slate-100 active:scale-[0.99] text-slate-700 rounded-xl font-semibold transition-all text-xs flex items-center justify-center space-x-2 border border-slate-200/50">
@@ -537,13 +525,18 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             if (!status || !hint) return;
             const missing = [];
             const modal = document.getElementById('editorSection');
-            [['editContent', '题干'], ['editCompulsory', '学段'], ['editChapter', '章节']].forEach(([id, label]) => {
+            [['editContent', '题干'], ['editQType', '题型']].forEach(([id, label]) => {
                 const input = document.getElementById(id);
                 if (!input) return;
                 const empty = !input.value.trim();
                 if (empty) missing.push(label);
                 input.setAttribute('aria-invalid', empty && modal.dataset.validationAttempted === 'true' ? 'true' : 'false');
             });
+            // 教材章节在新体系中是多值标签，至少需挂 1 个节点。
+            const tagState = window.MathBankTags && window.MathBankTags.state;
+            if (!tagState || !Array.isArray(tagState.chapters) || tagState.chapters.length === 0) {
+                missing.push('章节');
+            }
             status.textContent = typeof isQuestionSaveInFlight === 'function' && isQuestionSaveInFlight()
                 ? '正在保存…' : isEditorModified() ? '有未保存的修改' : EditorState.questionId ? '已保存' : '新题目 · 尚未入库';
             hint.textContent = missing.length ? `保存前请补充：${missing.join('、')}。带 * 的项目为必填项。` : '必填信息已齐全，可以保存。';
@@ -554,24 +547,20 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             const button = document.querySelector('.bank-filter-toggle');
             const clear = document.getElementById('clearBankFiltersBtn');
             if (!button || !clear) return;
-            const selected = ['filterCompulsory', 'filterChapter', 'filterKnowledge', 'filterType', 'filterDifficulty', 'filterSource']
+            const selected = ['filterType', 'filterDifficulty', 'filterChapterCode', 'filterThought', 'filterFunctionCode', 'filterSource']
                 .map(id => document.getElementById(id)).filter(element => element && element.value);
             button.textContent = selected.length ? `筛选 (${selected.length})` : '筛选';
-            button.setAttribute('data-tooltip', selected.map(element => element.tagName === 'SELECT' ? element.selectedOptions[0]?.textContent : element.value).join(' / ') || '按学段、章节、小节等条件筛选');
+            button.setAttribute('data-tooltip', selected.map(element => element.tagName === 'SELECT' ? element.selectedOptions[0]?.textContent : element.value).join(' / ') || '按题型、难度、章节、思想方法等条件筛选');
             clear.hidden = selected.length === 0;
         }
         function clearBankFilters() {
-            ['filterCompulsory', 'filterChapter', 'filterKnowledge', 'filterType', 'filterDifficulty', 'filterSource'].forEach(id => {
+            ['filterType', 'filterDifficulty', 'filterChapterCode', 'filterThought', 'filterFunctionCode', 'filterSource'].forEach(id => {
                 const element = document.getElementById(id);
                 if (element) element.value = '';
             });
             document.getElementById('clearFilterSourceBtn')?.classList.add('hidden');
-            const reload = document.getElementById('filterCompulsory')?.onchange;
-            if (typeof reload === 'function') reload();
-            else {
-                currentBankPage = currentDraftPage = 1;
-                if (activeSidebarTab === 'bank') loadQuestions(); else loadDrafts();
-            }
+            currentBankPage = currentDraftPage = 1;
+            if (activeSidebarTab === 'bank') loadQuestions(); else loadDrafts();
         }
         window.clearBankFilters = clearBankFilters;
         function toggleBankFilters(button) {
@@ -808,27 +797,29 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             if (typeof window.syncEditorImageReferences === 'function') window.syncEditorImageReferences();
             const content = document.getElementById('editContent').value;
             const qtype = document.getElementById('editQType').value;
-            const compulsory = document.getElementById('editCompulsory').value;
-            const chapter = document.getElementById('editChapter').value;
-            const knowledge = document.getElementById('editKnowledge').value;
             const difficulty = document.getElementById('editDifficulty').value;
             const source = document.getElementById('editSource').value;
             const answerMarkdown = document.getElementById('editAnswerMarkdown').value;
             const review = document.getElementById('editReview').value;
             const tags = document.getElementById('editTags') ? document.getElementById('editTags').value.trim() : '';
+            const tagSelection = (window.MathBankTags && typeof window.MathBankTags.getSelection === 'function')
+                ? window.MathBankTags.getSelection()
+                : null;
             
             const draft = {
                 id: EditorState.draftId || ('draft-' + Date.now()),
                 content: content,
                 question_type: qtype,
-                category_compulsory: compulsory,
-                category_chapter: chapter,
-                category_knowledge: knowledge,
                 difficulty: difficulty,
                 source: source,
                 answer_markdown: answerMarkdown,
                 review: review,
                 tags: tags,
+                tag_codes: tagSelection ? {
+                    chapter: Array.isArray(tagSelection.chapter_codes) ? tagSelection.chapter_codes : [],
+                    thought: Array.isArray(tagSelection.thought_codes) ? tagSelection.thought_codes : [],
+                    function: tagSelection.function_code ? [tagSelection.function_code] : []
+                } : null,
                 image_paths: typeof window.editorAssetReferences === 'function'
                     ? window.editorAssetReferences() : Array.from(new Set([
                     ...uploadedImages,
@@ -886,7 +877,7 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             // Populate form fields
             document.getElementById('editContent').value = draft.content || '';
             setEditorMetadataValue(document.getElementById('editQType'), draft.question_type || 'single_choice');
-            setEditorMetadataValue(document.getElementById('editDifficulty'), draft.difficulty || 'easy_error');
+            setEditorMetadataValue(document.getElementById('editDifficulty'), draft.difficulty || 'medium');
             document.getElementById('editSource').value = draft.source || '';
             document.getElementById('editAnswerMarkdown').value = draft.answer_markdown || '';
             document.getElementById('editReview').value = draft.review || '';
@@ -894,27 +885,6 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                 document.getElementById('editTags').value = draft.tags || '';
             }
             
-            // Load cascading categories
-            const compSelect = document.getElementById('editCompulsory');
-            const chapSelect = document.getElementById('editChapter');
-            const knowSelect = document.getElementById('editKnowledge');
-            
-            // Reset dropdowns
-            compSelect.value = '';
-            compSelect.onchange();
-            
-            if (draft.category_compulsory) {
-                compSelect.value = draft.category_compulsory;
-                compSelect.onchange();
-                if (draft.category_chapter) {
-                    chapSelect.value = draft.category_chapter;
-                    chapSelect.onchange();
-                    if (draft.category_knowledge) {
-                        knowSelect.value = draft.category_knowledge;
-                    }
-                }
-            }
-
             if (window.MathBankTags && typeof window.MathBankTags.setSelection === 'function') {
                 window.MathBankTags.setSelection(draft.tag_codes || null);
             }
@@ -989,9 +959,9 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             const q = document.getElementById('searchInput').value.trim().toLowerCase();
             const qtype = document.getElementById('filterType').value;
             const difficulty = document.getElementById('filterDifficulty').value;
-            const compulsory = document.getElementById('filterCompulsory').value;
-            const chapter = document.getElementById('filterChapter').value;
-            const knowledge = document.getElementById('filterKnowledge')?.value || '';
+            const chapterCode = document.getElementById('filterChapterCode') ? document.getElementById('filterChapterCode').value : '';
+            const thought = document.getElementById('filterThought') ? document.getElementById('filterThought').value : '';
+            const functionCode = document.getElementById('filterFunctionCode') ? document.getElementById('filterFunctionCode').value : '';
             const source = document.getElementById('filterSource') ? document.getElementById('filterSource').value.trim().toLowerCase() : '';
             
             let drafts = getLocalStorageDrafts();
@@ -1006,17 +976,23 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                 drafts = drafts.filter(item => item.difficulty === difficulty);
             }
             
-            // Filter by compulsory
-            if (compulsory) {
-                drafts = drafts.filter(item => item.category_compulsory === compulsory);
+            // Filter by chapter code (多值标签，上级节点覆盖其子树)
+            if (chapterCode) {
+                drafts = drafts.filter(item => {
+                    const codes = item.tag_codes && Array.isArray(item.tag_codes.chapter) ? item.tag_codes.chapter : [];
+                    return codes.some(code => code === chapterCode || String(code).startsWith(chapterCode + '-'));
+                });
             }
             
-            // Filter by chapter
-            if (chapter) {
-                drafts = drafts.filter(item => item.category_chapter === chapter);
+            // Filter by thought method
+            if (thought) {
+                drafts = drafts.filter(item => item.tag_codes && Array.isArray(item.tag_codes.thought) && item.tag_codes.thought.includes(thought));
             }
             
-            if (knowledge) drafts = drafts.filter(item => item.category_knowledge === knowledge);
+            // Filter by function code
+            if (functionCode) {
+                drafts = drafts.filter(item => item.tag_codes && Array.isArray(item.tag_codes.function) && item.tag_codes.function.includes(functionCode));
+            }
 
             // Filter by source
             if (source) {
@@ -1217,9 +1193,9 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                         
                         // Render total counters
                         document.getElementById('statsTotalCount').textContent = data.total_count;
-                        document.getElementById('statsEasyErrorCount').textContent = data.easy_error_count;
-                        document.getElementById('statsChallengeCount').textContent = data.challenge_count;
-                        document.getElementById('statsQiangjiCount').textContent = data.qiangji_count;
+                        document.getElementById('statsEasyCount').textContent = data.easy_count;
+                        document.getElementById('statsMediumCount').textContent = data.medium_count;
+                        document.getElementById('statsHardCount').textContent = data.hard_count;
                         
                         // Populate compulsory stages for stats query
                         populateStatsQueryCompulsory();
@@ -1440,111 +1416,49 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             }
         }
 
-        function populateCategoryDropdowns() {
-            const compSelect = document.getElementById('editCompulsory');
-            const chapSelect = document.getElementById('editChapter');
-            const knowSelect = document.getElementById('editKnowledge');
-            
-            if (!compSelect || !chapSelect || !knowSelect) return;
-            if (!categoryTree || typeof categoryTree !== 'object') {
-                console.warn('[Security Shield] 分类数据未准备完毕，跳过编辑区分类级联填充');
-                return;
-            }
-            
-            // Backup selection values to prevent losing them during async reloads
-            const selectedComp = compSelect.value;
-            const selectedChap = chapSelect.value;
-            const selectedKnow = knowSelect.value;
-            
-            // 1. Compulsory
-            compSelect.innerHTML = '<option value="">-- 选择学段 --</option>';
-            Object.keys(categoryTree).forEach(c => {
-                compSelect.innerHTML += `<option value="${window.MathBankSafe.escapeAttribute(c)}">${window.MathBankSafe.escapeText(c)}</option>`;
-            });
-            
-            compSelect.onchange = () => {
-                const comp = compSelect.value;
-                chapSelect.innerHTML = '<option value="">-- 选择章节 --</option>';
-                knowSelect.innerHTML = '<option value="">-- 先选择章节 --</option>';
-                knowSelect.disabled = true;
-                
-                if (comp && categoryTree[comp]) {
-                    chapSelect.disabled = false;
-                    Object.keys(categoryTree[comp]).forEach(ch => {
-                        chapSelect.innerHTML += `<option value="${window.MathBankSafe.escapeAttribute(ch)}">${window.MathBankSafe.escapeText(ch)}</option>`;
-                    });
-                } else {
-                    chapSelect.disabled = true;
-                }
-            };
-            
-            chapSelect.onchange = () => {
-                const comp = compSelect.value;
-                const chap = chapSelect.value;
-                knowSelect.innerHTML = '<option value="">-- 选择小节 (可不选，默认整章) --</option>';
-                
-                if (comp && chap && categoryTree[comp][chap]) {
-                    knowSelect.disabled = false;
-                    categoryTree[comp][chap].forEach(k => {
-                        knowSelect.innerHTML += `<option value="${window.MathBankSafe.escapeAttribute(k)}">${window.MathBankSafe.escapeText(k)}</option>`;
-                    });
-                } else {
-                    knowSelect.disabled = true;
-                }
-            };
-
-            // Restore backed up values if they exist in the new categoryTree
-            if (selectedComp && categoryTree[selectedComp]) {
-                compSelect.value = selectedComp;
-                compSelect.onchange();
-                if (selectedChap && categoryTree[selectedComp][selectedChap]) {
-                    chapSelect.value = selectedChap;
-                    chapSelect.onchange();
-                    if (selectedKnow && categoryTree[selectedComp][selectedChap].includes(selectedKnow)) {
-                        knowSelect.value = selectedKnow;
-                    }
-                }
-            }
-        }
-
-        // Populate Categories in Filters
+        // Populate the new tag-based filter dropdowns (章节 / 数学思想 / 功能).
         function populateFilterDropdowns() {
-            const compSelect = document.getElementById('filterCompulsory');
-            const chapSelect = document.getElementById('filterChapter');
-            const knowSelect = document.getElementById('filterKnowledge');
-            if (!compSelect || !chapSelect || !knowSelect || !categoryTree || typeof categoryTree !== 'object') return;
-            const previous = [compSelect.value, chapSelect.value, knowSelect.value];
-            function fill(select, values, placeholder, selected = '') {
-                select.innerHTML = '<option value="">' + placeholder + '</option>' + values.map(value =>
-                    `<option value="${window.MathBankSafe.escapeAttribute(value)}">${window.MathBankSafe.escapeText(value)}</option>`).join('');
-                select.value = values.includes(selected) ? selected : '';
+            const chapterSelect = document.getElementById('filterChapterCode');
+            const thoughtSelect = document.getElementById('filterThought');
+            const tagState = (window.MathBankTags && window.MathBankTags.state) || {};
+            const safe = window.MathBankSafe;
+
+            if (chapterSelect) {
+                const previous = chapterSelect.value;
+                let options = '<option value="">所有章节</option>';
+                const books = Array.isArray(tagState.tree && tagState.tree.books) ? tagState.tree.books : [];
+                books.forEach(book => {
+                    let bookOptions = '';
+                    (book.chapters || []).forEach(chapter => {
+                        bookOptions += `<option value="${safe.escapeAttribute(chapter.code)}">第${chapter.no}章 ${safe.escapeText(chapter.name)}</option>`;
+                        (chapter.sections || []).forEach(section => {
+                            bookOptions += `<option value="${safe.escapeAttribute(section.code)}">　${safe.escapeText(section.label)} ${safe.escapeText(section.name)}</option>`;
+                            (section.subsections || []).forEach(sub => {
+                                bookOptions += `<option value="${safe.escapeAttribute(sub.code)}">　　${safe.escapeText(sub.label)} ${safe.escapeText(sub.name)}</option>`;
+                            });
+                        });
+                    });
+                    if (bookOptions) {
+                        options += `<optgroup label="${safe.escapeText(book.name)}">${bookOptions}</optgroup>`;
+                    }
+                });
+                chapterSelect.innerHTML = options;
+                if (previous) chapterSelect.value = previous;
             }
-            function fillKnowledge(selected = '') {
-                const values = categoryTree[compSelect.value]?.[chapSelect.value];
-                fill(knowSelect, Array.isArray(values) ? values : [], chapSelect.value ? '所有小节' : '先选择章节', selected);
-                knowSelect.disabled = !Array.isArray(values);
-                knowSelect.classList.remove('hidden');
+
+            if (thoughtSelect) {
+                const previous = thoughtSelect.value;
+                let options = '<option value="">所有思想</option>';
+                const schema = tagState.schema;
+                const dimension = schema && Array.isArray(schema.dimensions)
+                    ? schema.dimensions.find(item => item.key === 'thought_method')
+                    : null;
+                (dimension && dimension.values || []).forEach(value => {
+                    options += `<option value="${safe.escapeAttribute(value.code)}">${safe.escapeText(value.label)}</option>`;
+                });
+                thoughtSelect.innerHTML = options;
+                if (previous) thoughtSelect.value = previous;
             }
-            function fillChapters(chapter = '', knowledge = '') {
-                const chapters = categoryTree[compSelect.value];
-                fill(chapSelect, chapters ? Object.keys(chapters) : [], chapters ? '所有章节' : '先选择学段', chapter);
-                chapSelect.disabled = !chapters;
-                chapSelect.classList.remove('hidden');
-                fillKnowledge(knowledge);
-            }
-            function reload() {
-                currentBankPage = 1;
-                currentDraftPage = 1;
-                updateBankFilterSummary();
-                if (activeSidebarTab === 'bank') loadQuestions();
-                else loadDrafts();
-            }
-            fill(compSelect, Object.keys(categoryTree), '所有学段', previous[0]);
-            fillChapters(previous[1], previous[2]);
-            compSelect.onchange = () => { fillChapters(); reload(); };
-            chapSelect.onchange = () => { fillKnowledge(); reload(); };
-            knowSelect.onchange = reload;
-            updateBankFilterSummary();
         }
 
         // Load and List Saved Questions
@@ -1566,9 +1480,9 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             const q = document.getElementById('searchInput').value;
             const qtype = document.getElementById('filterType').value;
             const difficulty = document.getElementById('filterDifficulty').value;
-            const compulsory = document.getElementById('filterCompulsory').value;
-            const chapter = document.getElementById('filterChapter').value;
-            const knowledge = document.getElementById('filterKnowledge')?.value || '';
+            const chapterCode = document.getElementById('filterChapterCode') ? document.getElementById('filterChapterCode').value : '';
+            const thought = document.getElementById('filterThought') ? document.getElementById('filterThought').value : '';
+            const functionCode = document.getElementById('filterFunctionCode') ? document.getElementById('filterFunctionCode').value : '';
             const source = document.getElementById('filterSource') ? document.getElementById('filterSource').value : '';
             const sortOrder = document.getElementById('filterSort') ? document.getElementById('filterSort').value : 'desc';
             const requestedPage = Math.max(1, currentBankPage);
@@ -1577,9 +1491,9 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             if (q) params.append('q', q);
             if (qtype) params.append('qtype', qtype);
             if (difficulty) params.append('difficulty', difficulty);
-            if (compulsory) params.append('compulsory', compulsory);
-            if (chapter) params.append('chapter', chapter);
-            if (knowledge) params.append('knowledge', knowledge);
+            if (chapterCode) params.append('chapter_code', chapterCode);
+            if (thought) params.append('thought', thought);
+            if (functionCode) params.append('function_code', functionCode);
             if (source) params.append('source', source);
             params.append('page', String(requestedPage));
             params.append('page_size', String(PAGE_LIMIT));
