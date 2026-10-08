@@ -25,7 +25,9 @@ def _temporary_output_path(final_path: str) -> str:
 
 
 def _fsync_file(path: str) -> None:
-    with open(path, "rb") as handle:
+    # 必须以「可读写」模式打开：Windows 上 os.fsync() 对只读句柄会抛
+    # OSError [Errno 9] Bad file descriptor，用 "rb" 会让每次导出都失败。
+    with open(path, "r+b") as handle:
         os.fsync(handle.fileno())
 
 

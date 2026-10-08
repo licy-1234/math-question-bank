@@ -374,7 +374,9 @@ def _write_zip_atomic(
             for path in sorted(payload_dir.rglob("*")):
                 if path.is_file():
                     archive.write(path, path.relative_to(payload_dir).as_posix())
-        with temp_path.open("rb") as handle:
+        # 以「可读写」模式打开：Windows 上 os.fsync() 对只读句柄会抛
+        # OSError [Errno 9] Bad file descriptor，用 "rb" 会让每日完整备份失败。
+        with temp_path.open("r+b") as handle:
             os.fsync(handle.fileno())
         os.replace(temp_path, output_path)
         output_path.chmod(0o600)
