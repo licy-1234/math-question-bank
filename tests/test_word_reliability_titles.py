@@ -54,7 +54,7 @@ def test_explicit_short_choice_heading_constrains_returned_type(label, expected,
     assert plan["eligible"]
     assert plan["questions"][0]["explicit_question_type"] == expected
     row = {"id": plan["questions"][0]["id"], "question_type": expected,
-           "category_compulsory": "必修一", "category_chapter": "集合", "difficulty": "normal"}
+           "category_compulsory": "必修一", "category_chapter": "集合", "difficulty": "medium"}
     assert apply_source_metadata_response({"items": [row]}, plan, {"必修一": {"集合": []}})[0]["question_type"] == expected
     row["question_type"] = opposite
     with pytest.raises(SourceMetadataContractError):

@@ -23,7 +23,7 @@ W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 M = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 CURRICULUM = {"必修一": {"1. 集合与常用逻辑用语": [], "3. 函数的概念与性质": []}}
 FIELDS = {"question_type": "detailed_answer", "category_compulsory": "必修一",
-          "category_chapter": "3. 函数的概念与性质", "difficulty": "normal"}
+          "category_chapter": "3. 函数的概念与性质", "difficulty": "medium"}
 PROVIDER = resolve_text_provider("SILICONFLOW/Qwen/test-model", {"SILICONFLOW_API_KEY": "isolated-fake-key"})
 
 

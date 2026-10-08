@@ -44,7 +44,7 @@ def _question(content, answer="", **extra):
         "question_type": "detailed_answer",
         "category_compulsory": "必修一",
         "category_chapter": "1. 集合与常用逻辑用语",
-        "difficulty": "easy_error",
+        "difficulty": "medium",
         "source": None,
         "referenced_images": [],
         **extra,

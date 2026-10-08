@@ -33,7 +33,7 @@ def _question_payload(content: str, **overrides):
         "category_compulsory": "必修一",
         "category_chapter": "第一章",
         "category_knowledge": "集合",
-        "difficulty": "normal",
+        "difficulty": "medium",
         "source": "查重测试",
         "answer_markdown": "答案",
         "review": "",
@@ -611,7 +611,7 @@ def test_text_fragment_fallback_recalls_real_prefix_trimmed_variant(
         id=52,
         content=_ID52_CONTENT,
         question_type="fill_in_blank",
-        difficulty="normal",
+        difficulty="medium",
     )
     db_session.add(stored_question)
     db_session.flush()

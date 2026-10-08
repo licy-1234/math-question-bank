@@ -270,9 +270,9 @@ def test_markdown_upload_and_pasted_format_in_browser(browser, tmp_path):
           return Promise.resolve(new Response(JSON.stringify({status:'success',source_format:'markdown',
             questions:[
               {content:'已知 $x=1$，百分比为 50%，求 $x+1$。\n\n![图示]('+path+')',answer_markdown:'$2$。',
-                question_type:'detailed_answer',difficulty:'normal',image_paths:[path],source:'Markdown 测试卷'},
+                question_type:'detailed_answer',difficulty:'medium',image_paths:[path],source:'Markdown 测试卷'},
               {content:'已知 $a=2$，计算 $a^2$。',answer_markdown:'$4$。',
-                question_type:'detailed_answer',difficulty:'normal',image_paths:[],source:'Markdown 测试卷'}
+                question_type:'detailed_answer',difficulty:'medium',image_paths:[],source:'Markdown 测试卷'}
             ],tex_diagnostics:{question_count_estimate:2,question_count_actual:2,
               warnings:['MD 格式尚不完善，请谨慎使用']}}),{status:200}));
         }

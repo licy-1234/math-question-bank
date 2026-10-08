@@ -433,7 +433,7 @@ def test_record_search_and_narrow_workspace_navigation(browser, tmp_path):
         const form = new FormData();
         form.set('content', '界面回归题：求 $2+3$。');
         form.set('question_type', 'detailed_answer');
-        form.set('difficulty', 'normal');
+        form.set('difficulty', 'medium');
         form.set('answer_markdown', '$5$');
         const question = await fetch('/api/questions', {method:'POST', body:form}).then(r=>r.json());
         if (!question.question) throw new Error('Cannot seed question');
@@ -680,7 +680,7 @@ def test_image_options_stay_in_labeled_import_editor_and_paper_cells(browser):
             const form = new FormData();
             form.set('content', question.content);
             form.set('question_type', 'single_choice');
-            form.set('difficulty', 'easy_error');
+            form.set('difficulty', 'medium');
             form.set('image_paths', JSON.stringify(question.image_paths));
             const response = await fetch('/api/questions', {method:'POST', body:form});
             const data = await response.json();
@@ -744,7 +744,7 @@ def test_content_area_and_three_level_bank_filter(browser):
         const ids = [];
         for (let i=0; i<rows.length; i++) {
             const form = new FormData();
-            Object.entries({content:'小节过滤回归 '+i, question_type:'detailed_answer', difficulty:'normal',
+            Object.entries({content:'小节过滤回归 '+i, question_type:'detailed_answer', difficulty:'medium',
                 category_compulsory:phase, category_chapter:rows[i][0], category_knowledge:rows[i][1]}).forEach(([k,v])=>form.set(k,v));
             const data = await fetch('/api/questions',{method:'POST',body:form}).then(r=>r.json());
             if (!data.question) throw new Error(JSON.stringify(data));
@@ -767,7 +767,7 @@ def test_content_area_and_three_level_bank_filter(browser):
     browser.command('wait', '--fn', f"!document.getElementById('questionsList').hasAttribute('aria-busy') && document.querySelector('#questionsList .question-card')?.dataset.id === '{sample['ids'][1]}'")
     saved_drafts = browser.evaluate("localStorage.getItem('mathbank_local_drafts')")
     drafts = [{"id": "section-draft-" + str(i), "isDraft": True, "content": "小节过滤回归草稿 " + str(i),
-               "question_type": "detailed_answer", "difficulty": "normal", "category_compulsory": sample['phase'],
+               "question_type": "detailed_answer", "difficulty": "medium", "category_compulsory": sample['phase'],
                "category_chapter": sample['chapters'][0], "category_knowledge": sample['knowledge'][i],
                "updated_at": "2026-09-18T00:00:00Z"} for i in (0, 1)]
     browser.evaluate("localStorage.setItem('mathbank_local_drafts', %s); true" % json.dumps(json.dumps(drafts)))
@@ -799,7 +799,7 @@ def test_reload_returns_home_without_losing_cart_metadata_or_drafts(browser):
         let question = questions[0];
         if (!question) {
             const form = new FormData();
-            Object.entries({content:'刷新保留回归题',question_type:'detailed_answer',difficulty:'normal'}).forEach(([k,v])=>form.set(k,v));
+            Object.entries({content:'刷新保留回归题',question_type:'detailed_answer',difficulty:'medium'}).forEach(([k,v])=>form.set(k,v));
             question = (await fetch('/api/questions',{method:'POST',body:form}).then(r=>r.json())).question;
         }
         PaperStore.cart = [];
@@ -847,7 +847,7 @@ def test_paper_reload_recovers_missing_selection_from_preview_button(browser):
             const form = new FormData();
             form.set('content', `重新加载回归题 ${i}：计算 $${i}+1$。`);
             form.set('question_type', 'detailed_answer');
-            form.set('difficulty', 'normal');
+            form.set('difficulty', 'medium');
             const response = await fetch('/api/questions', {method:'POST',body:form});
             if (!response.ok) throw new Error('fixture question creation failed');
             questions.push((await response.json()).question);
@@ -1101,7 +1101,7 @@ def test_question_without_answer_has_visible_independent_cart_action(browser):
         const form = new FormData();
         form.set('content', '未提供答案也可以组卷：计算 $2+3$。');
         form.set('question_type', 'single_choice');
-        form.set('difficulty', 'easy_error');
+        form.set('difficulty', 'medium');
         form.set('answer_markdown', '');
         const response = await fetch('/api/questions', {method:'POST', body:form});
         const result = await response.json();
@@ -1178,7 +1178,7 @@ def test_import_refresh_keeps_existing_question_clean_without_hiding_real_edits(
         const chapter = Object.keys(categoryTree[book])[0];
         replaceParsedQuestions([{
             content:'导入题：正方体的棱长为 $2$，求该正方体的表面积。',
-            answer_markdown:'表面积为 $24$。', question_type:'detailed_answer', difficulty:'easy_error',
+            answer_markdown:'表面积为 $24$。', question_type:'detailed_answer', difficulty:'medium',
             category_compulsory:book, category_chapter:chapter, category_knowledge:'', image_paths:[], source:'导入刷新回归'
         }]);
         renderParsedQuestionsList(parsedQuestionsData);

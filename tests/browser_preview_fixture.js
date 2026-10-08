@@ -21,7 +21,7 @@ window.MathBankBrowserChecks = {
         for (let id = 1; id <= count; id++) {
             state.cart.push({id, score: 5, solution_space: 0});
             state.questionsMap[id] = {
-                id, question_type: 'single_choice', difficulty: 'normal', image_paths: [],
+                id, question_type: 'single_choice', difficulty: 'medium', image_paths: [],
                 content: short ? `这是第${id}题：已知 $x=1$，求 $x+1$。` :
                     '设 $A,B$ 为非空集合，定义集合的运算，判断下面结论是否正确。'.repeat(repeats) +
                     String.raw`\begin{choices}\item 若 $A=\{x|-2\le x\le 3\}$，则 $B=\{x|1\le x\le 2\}$。\item 若 $A=\{1,2,3\}$，非空集合 $B$ 满足 $A+B=A$。\item 若非空集合 $A,B$ 满足 $A*B=A$，则 $1\in B$。\item 对所有实数 $x$，都有 $f(x)>0$。\end{choices}`,

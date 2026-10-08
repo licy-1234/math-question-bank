@@ -24,7 +24,7 @@ from mathbank.task_manager import TaskCancelled
 
 CURRICULUM={'必修一':{'3. 函数的概念与性质':[]}}
 FIELDS={'question_type':'detailed_answer','category_compulsory':'必修一',
-        'category_chapter':'3. 函数的概念与性质','difficulty':'normal'}
+        'category_chapter':'3. 函数的概念与性质','difficulty':'medium'}
 PROVIDER=resolve_text_provider('SILICONFLOW/Qwen/test-model',{'SILICONFLOW_API_KEY':'fake-key-no-network'})
 
 

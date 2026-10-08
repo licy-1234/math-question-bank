@@ -88,7 +88,7 @@ def test_currency_math_and_spaced_hard_breaks_render_without_rewriting_inputs(br
                 errors: host.querySelectorAll('.katex-error').length};
         });
         replaceParsedQuestions([{content: literalSource, answer_markdown: literalSource,
-            question_type: 'detailed_answer', difficulty: 'normal', image_paths: []}]);
+            question_type: 'detailed_answer', difficulty: 'medium', image_paths: []}]);
         renderParsedQuestionsList(parsedQuestionsData);
         result.importPreviews = ['.card-content-preview', '.card-answer-preview'].map(selector => {
             const host = document.querySelector('#parsed-card-0 ' + selector);

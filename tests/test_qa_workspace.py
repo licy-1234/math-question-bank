@@ -53,7 +53,7 @@ def test_qa_search_navigation_and_responsive_layout(browser, tmp_path, viewport)
     browser.command('set', 'viewport', *map(str, viewport))
     browser.evaluate("""(async () => {
         const form = new FormData();
-        Object.entries({content:'QA 切换保留回归题',question_type:'detailed_answer',difficulty:'normal'}).forEach(([key,value])=>form.set(key,value));
+        Object.entries({content:'QA 切换保留回归题',question_type:'detailed_answer',difficulty:'medium'}).forEach(([key,value])=>form.set(key,value));
         const response = await fetch('/api/questions', {method:'POST',body:form}).then(r=>r.json());
         if (!response.question) throw new Error('Cannot seed disposable QA test question');
         const question = response.question;

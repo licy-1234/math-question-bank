@@ -158,7 +158,7 @@ def test_api_questions_crud(client):
     update_payload.pop("figure_align_custom")
     update_payload.pop("figure_size")
     update_payload["content"] = "更新后的API题目干"
-    update_payload["difficulty"] = "challenge"
+    update_payload["difficulty"] = "hard"
     
     response = client.put(f"/api/questions/{question_id}", data=update_payload, headers=headers)
     assert response.status_code == 200
@@ -167,7 +167,7 @@ def test_api_questions_crud(client):
     updated_q = res_data_update["question"]
     assert updated_q["id"] == question_id
     assert updated_q["content"] == "更新后的API题目干"
-    assert updated_q["difficulty"] == "challenge"
+    assert updated_q["difficulty"] == "hard"
     assert updated_q["figure_align"] == "bottom_left"
     assert updated_q["figure_align_custom"] is True
     assert updated_q["figure_size"] == "large"

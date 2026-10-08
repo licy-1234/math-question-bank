@@ -20,7 +20,7 @@ def setup(monkeypatch):
     plan = prepare_word_source_metadata("1. 已知二次函数$f(x)=x^2$，求$f(3)$。", _new_diagnostics())
     assert plan["eligible"]
     row = {"id": plan["questions"][0]["id"], "question_type": "detailed_answer", "category_compulsory": "必修一",
-           "category_chapter": "函数", "difficulty": "normal"}
+           "category_chapter": "函数", "difficulty": "medium"}
     provider = SimpleNamespace(api_key="isolated-dummy", chat_completions_url="https://invalid.local",
                                model_name="isolated-model")
     return plan, row, provider
@@ -56,7 +56,7 @@ def test_complete_json_or_complete_fence_keeps_body_local_and_uses_one_post(monk
 @pytest.mark.parametrize("transform", [
     lambda row: '{"items":[],"items":' + json.dumps([row]) + '}',
     lambda row: '{"items":[{"id":"UNKNOWN",' + json.dumps(row)[1:] + ']}',
-    lambda row: '{"items":[' + json.dumps(row)[:-1] + ',"difficulty":"normal"}]}',
+    lambda row: '{"items":[' + json.dumps(row)[:-1] + ',"difficulty":"medium"}]}',
     lambda row: json.dumps({"items": [row]})[:-1],
     lambda row: "```json\n" + json.dumps({"items": [row]}),
     lambda row: "前缀文字\n" + json.dumps({"items": [row]}),
