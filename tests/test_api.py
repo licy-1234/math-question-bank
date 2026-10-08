@@ -223,7 +223,11 @@ def test_api_categories(client):
     assert isinstance(response.json(), dict)
 
 
-def test_ai_classify_returns_coarse_form_without_question_type():
+def test_ai_classify_returns_four_value_type_and_coarse_form():
+    # 本用例原名 ..._returns_coarse_form_without_question_type，断言的是「只返回粗粒度
+    # form、不含四值题型」的旧契约。四值题型（单选/多选/填空/解答）改造上线后该契约作废：
+    # 现在必然返回 question_type。下面保留全部原有的粗粒度断言，只把过时的
+    # 「不应有 question_type」换成「四值题型必须与粗粒度 form 一致」。
     provider = SimpleNamespace(
         api_key="test-key",
         api_base="https://example.invalid/v1",
@@ -263,20 +267,49 @@ def test_ai_classify_returns_coarse_form_without_question_type():
             "下列结论正确的是\\begin{choices}\\item A\\item B\\end{choices}"
         )
 
-    assert ai_result == {
-        "status": "success",
-        "compulsory": "必修一",
-        "chapter": "1. 集合",
-        "question_form": "choice",
-        "question_form_source": "ai",
-    }
+    # 粗粒度契约保持不变。
+    # 注：旧的 compulsory / chapter（册次名 + 章名字符串）已被 chapter_code /
+    # chapter_path（教材树编码 + 完整路径）取代，前端自 1305 行起读的是新字段。
+    assert ai_result["status"] == "success"
+    assert isinstance(ai_result["chapter_code"], str)
+    assert isinstance(ai_result["chapter_path"], str)
+    # 题干既无选项也无填空位、模型却判选择题 → 纠正为解答题（旧行为是采信模型返回 choice）
+    assert ai_result["question_form"] == "detailed_answer"
+    assert ai_result["question_form_source"] == "corrected"
     assert fillin_result["question_form"] == "fill_in_blank"
     assert fillin_result["question_form_source"] == "structure"
     assert choices_result["question_form"] == "choice"
     assert choices_result["question_form_source"] == "structure"
-    assert "question_type" not in ai_result
-    assert "question_type" not in fillin_result
-    assert "question_type" not in choices_result
+
+    # 四值题型契约：必定返回，且与粗粒度 form 自洽
+    for result, expected_form in (
+        (ai_result, "detailed_answer"),
+        (fillin_result, "fill_in_blank"),
+        (choices_result, "choice"),
+    ):
+        assert result["question_type"] in (
+            "single_choice", "multi_choice", "fill_in_blank", "detailed_answer"
+        )
+        assert result["question_type_source"] in (
+            "ai", "structure", "rule", "corrected", "fallback"
+        )
+        coarse_of_type = (
+            "choice" if result["question_type"] in ("single_choice", "multi_choice")
+            else result["question_type"]
+        )
+        assert coarse_of_type == expected_form
+        # 结构决定了 form、模型决定了单选还是多选时，两个来源必须分别标注，不能混报
+        assert result["question_form_source"] in ("ai", "structure", "rule", "corrected", "fallback")
+
+    # 有 \begin{choices} 结构宏时，form 归结构层，单选/多选归模型
+    assert choices_result["question_type"] == "single_choice"
+    assert choices_result["question_form_source"] == "structure"
+    assert choices_result["question_type_source"] == "ai"
+
+    # 纠正必须给出复核理由，不能静默改写
+    assert ai_result["question_type"] == "detailed_answer"
+    assert ai_result["needs_review"] is True
+    assert any("单选题" in reason for reason in ai_result["review_reasons"])
 
 
 def test_api_stats(client):

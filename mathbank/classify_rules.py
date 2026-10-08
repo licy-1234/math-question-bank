@@ -546,10 +546,10 @@ def decide_question_type(content: str, ai_value=None) -> tuple[str, str, dict]:
             return ai_type, "ai", evidence
         if blanks:
             return QUESTION_TYPE_FILL_IN_BLANK, "corrected", evidence
-        # 题干既没有选项也没有填空位：这**不是反对模型的证据**，很可能只是 OCR 把选项弄丢了。
-        # 所以保留模型的判断，交给 needs_review 提示老师核对，不做破坏性改写。
-        evidence["missing_structure"] = True
-        return ai_type, "ai", evidence
+        # 题干既没有选项也没有填空位，模型却说是选择题 —— 按解答题处理。
+        # （曾尝试「保留模型判断只提示」，但实测让规则层纠回数从 112/162 掉到 70/162，
+        #   净损 42 道本可纠对的题，故维持纠正；overridden 会给出复核提示，不会静默。）
+        return QUESTION_TYPE_DETAILED_ANSWER, "corrected", evidence
 
     if ai_type == QUESTION_TYPE_FILL_IN_BLANK:
         if options["has_options"] and not blanks:
@@ -991,8 +991,6 @@ def classify_with_rules(content: str, ai_payload: dict | None = None) -> dict:
         )
     if question_type == QUESTION_TYPE_UNKNOWN:
         review_reasons.append("题型无法可靠判定，请手动选择")
-    if decision.get("missing_structure"):
-        review_reasons.append("题干未识别到选项或填空位，题型沿用模型判断，请核对选项是否缺失")
     if difficulty_conflict:
         review_reasons.append(
             f"难度判定存在分歧：模型判为{_LEVEL_LABELS.get(difficulty, difficulty)}，"
@@ -1020,12 +1018,18 @@ def classify_with_rules(content: str, ai_payload: dict | None = None) -> dict:
     # ``needs_review`` so the UI never shows two overlapping warnings.
     is_fallback = question_type == QUESTION_TYPE_UNKNOWN and chapter_source == "fallback"
 
+    # 粗粒度 form 的来源要单独算：只要结构层独立定出的 form 与最终 form 一致，
+    # 功劳就归结构层，与细粒度题型（单选/多选）的来源无关 —— 后者常常是模型给的，
+    # 两者混为一谈会让界面把模型的判断说成「结构标记」。
+    structure_form = str(decision.get("structure") or "")
+    form_source = "structure" if structure_form and structure_form == question_form else type_source
+
     return {
         "question_type": question_type,
         "question_type_source": type_source,
         "question_type_candidates": ranked_candidates,
         "question_form": question_form,
-        "question_form_source": type_source,
+        "question_form_source": form_source,
         "difficulty": difficulty,
         "difficulty_source": difficulty_source,
         "difficulty_conflict": difficulty_conflict,
