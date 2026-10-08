@@ -842,12 +842,9 @@
                     systemPreferSolveModel = settings.prefer_solve_model || 'deepseek-v4-pro';
                     systemPreferParseModel = settings.prefer_parse_model || 'deepseek-flash';
                     
-                    // Update main page model selector to match preference
-                    const mainModelSelect = document.getElementById('aiModelSelect');
-                    if (mainModelSelect) {
-                        mainModelSelect.value = systemPreferSolveModel;
-                    }
-                    
+                    // 首页无独立模型选择器（旧 aiModelSelect 元素已不存在），
+                    // 解题模型偏好仅在设置面板生效，由下方 solveModelProvider / renderModelSelector('solve') 同步，故此处不同步。
+
                     // Update dropdown descriptions to reflect current default engine
                     updateOcrPlaceholder('content');
                     updateOcrPlaceholder('answer');
@@ -1666,7 +1663,7 @@
             }
 
             // 3. Sidebar Filter Question Type select
-            const filterQType = document.getElementById('filterQType');
+            const filterQType = document.getElementById('filterType');
             if (filterQType) {
                 const currentVal = filterQType.value || '';
                 filterQType.innerHTML = '<option value="">全部题型</option>';

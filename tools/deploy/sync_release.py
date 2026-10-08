@@ -12,10 +12,17 @@
     - **绝不触碰**用户数据：*.db / *.db-wal / *.db-shm / data_backup/；
     - **绝不覆盖**本地配置：.env（含 API Key）、RELEASE-MANIFEST.json、*.zip、python/（内置解释器）；
     - 被覆盖的旧文件先备份到 <dest>/_predeploy_backup_<时间戳>/ 再写入；
-    - 默认只做"新增 + 覆盖"，**不删除**目标端多余文件（除非显式 --prune）。
+    - 默认只做"新增 + 覆盖"，**从不删除**目标端任何文件。
+
+已修复的历史缺口：
+    - `--prune` 曾经只是占位参数、传了等于没传（静默 no-op）。现在传入会**直接报错退出**并
+      提示手工处理，避免使用者误以为已经清理过目标端。
+    - `--since` 增量模式曾经只按 `_is_excluded()` 过滤、不走同步白名单，会把 `AGENTS.md` /
+      `docs/**` / `.gitignore` 这类开发期文件带进用户副本。现在增量与全量**共用同一条白名单**
+      （`_in_sync_scope()`）。
 
 用法：
-    python tools/deploy/sync_release.py --repo <仓库目录> --dest <部署副本目录> [--dry-run] [--prune]
+    python tools/deploy/sync_release.py --repo <仓库目录> --dest <部署副本目录> [--dry-run] [--since <提交>]
 """
 
 from __future__ import annotations
@@ -111,11 +118,22 @@ def _norm(b: bytes) -> bytes:
     return b.replace(b"\r\n", b"\n")
 
 
+def _in_sync_scope(rel: Path) -> bool:
+    """是否属于应进入用户运行时副本的范围。
+
+    全量模式与 --since 增量模式必须共用这一条白名单，
+    否则增量部署会把 AGENTS.md / docs/** 这类开发期文件带进用户副本。
+    """
+    top = rel.parts[0] if len(rel.parts) > 1 else rel.name
+    return (top in SYNC_TOP_LEVEL) or (str(rel) in SYNC_SINGLE_FILES)
+
+
 def select_files(repo: Path, since: str | None = None) -> list[Path]:
     """选出待同步文件。
 
     since 非空时，只同步 <since>..HEAD 之间发生变化的文件（最小增量部署），
     避免因为换行符差异或部署副本自带的本地文件而产生大面积无谓覆盖。
+    无论哪种模式，都先按同步白名单收口，再走硬性排除。
     """
     if since:
         out = subprocess.run(
@@ -123,12 +141,12 @@ def select_files(repo: Path, since: str | None = None) -> list[Path]:
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         rels = [Path(line.strip()) for line in out.stdout.splitlines() if line.strip()]
+        rels = [rel for rel in rels if _in_sync_scope(rel)]
     else:
         rels = []
         for f in list_repo_files(repo):
             rel = Path(f)
-            top = rel.parts[0] if len(rel.parts) > 1 else rel.name
-            if top in SYNC_TOP_LEVEL or f in SYNC_SINGLE_FILES:
+            if _in_sync_scope(rel):
                 rels.append(rel)
     return [rel for rel in rels if not _is_excluded(rel)]
 
@@ -138,7 +156,7 @@ def main() -> int:
     ap.add_argument("--repo", required=True)
     ap.add_argument("--dest", required=True)
     ap.add_argument("--dry-run", action="store_true")
-    ap.add_argument("--prune", action="store_true", help="删除目标端存在但仓库已不含的同名文件（默认关闭）")
+    ap.add_argument("--prune", action="store_true", help="（未实现：传入会直接报错退出，本脚本从不删除目标端文件）")
     ap.add_argument("--since", default=None,
                     help="只同步该提交之后发生变化的文件（最小增量部署，推荐）")
     args = ap.parse_args()
@@ -150,6 +168,14 @@ def main() -> int:
         return 2
     if not dest.exists():
         print(f"[FATAL] 部署目录不存在：{dest}")
+        return 2
+
+    if args.prune:
+        # 删除目标端文件风险极高（可能删掉用户本地资产），本脚本宁可显式拒绝，
+        # 也不能静默 no-op 让使用者误以为已经清理过。
+        print("[FATAL] --prune 未实现：本脚本从不删除目标端任何文件，也不会假装清理过。")
+        print("        如需移除副本里的多余文件，请人工确认后手工删除，")
+        print("        或先到 <dest>/_predeploy_backup_* 目录确认有备份再操作。")
         return 2
 
     files = select_files(repo, args.since)

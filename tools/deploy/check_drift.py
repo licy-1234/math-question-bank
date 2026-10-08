@@ -9,8 +9,11 @@
     1. 部署副本的 DEPLOY-INFO.json 记录的来源提交，是否已经是仓库 HEAD；
        落后几个提交，落后者是哪几个（带时间，人对得上"我那天改的没生效"）。
     2. 部署副本磁盘上的运行时文件，是否与仓库工作区逐字节一致（忽略 CRLF/LF）。
-    3. 部署副本的数据库 schema 版本，是否达到程序要求的 LATEST_SCHEMA_VERSION；
-       顺带报告题目数量，方便一眼看出"数据是不是还在"。
+    3. 部署副本的数据库 schema 版本，是否达到程序要求的 LATEST_SCHEMA_VERSION
+       （取自 mathbank/db_migrations.py）；低于目标版本即为 FAIL，需要先跑
+       tools/deploy/migrate_db.py。顺带报告题目数量，方便一眼看出"数据是不是还在"。
+
+数据库全程以 sqlite 只读模式（mode=ro）打开，本脚本不做任何写操作。
 
 退出码：0 = 无漂移；1 = 存在漂移（适合挂到启动器或定时任务里）。
 
@@ -32,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 # 复用 sync_release 的排除规则：tests/、tools/ 等开发资产不进用户副本，
 # 因此只改这些目录的提交不应被算作"版本漂移"。
 from tools.deploy.sync_release import _is_excluded  # noqa: E402
+from mathbank.db_migrations import LATEST_SCHEMA_VERSION  # noqa: E402
 
 
 def git(repo: Path, *args: str) -> str:
@@ -146,11 +150,14 @@ def main() -> int:
     if report["files_dirty"]:
         problems.append(f"{len(report['files_dirty'])} 个文件与仓库不一致：{', '.join(report['files_dirty'][:8])}")
 
-    # ---- 3. 数据层 ----
+    # ---- 3. 数据层（只读打开，本脚本绝不写库） ----
+    # 目标版本以仓库迁移脚本为准，避免这里写死后与程序脱节。
+    report["target_schema_version"] = LATEST_SCHEMA_VERSION
     dbs = sorted(dest.glob("*.db"))
     db_info = []
     for db in dbs:
-        conn = sqlite3.connect(str(db))
+        uri = "file:" + db.resolve().as_posix().replace("?", "%3f").replace("#", "%23") + "?mode=ro&uri=true"
+        conn = sqlite3.connect(uri, uri=True)
         try:
             uv = int(conn.execute("PRAGMA user_version").fetchone()[0])
             n = conn.execute("SELECT COUNT(*) FROM questions").fetchone()[0]
@@ -168,6 +175,17 @@ def main() -> int:
             problems.append(
                 f"{info['db']} 仍无 question_tags 表（schema v{info['schema_version']}），"
                 f"多值标签无处存储 —— 请跑 migrate_db.py"
+            )
+        if info["schema_version"] < LATEST_SCHEMA_VERSION:
+            problems.append(
+                f"{info['db']} schema 版本 v{info['schema_version']} 低于程序要求的 "
+                f"v{LATEST_SCHEMA_VERSION}（共 {info['questions']} 道题），"
+                f"字段/索引可能缺失 —— 请先跑 tools/deploy/migrate_db.py 完成迁移再使用"
+            )
+        elif info["schema_version"] > LATEST_SCHEMA_VERSION:
+            problems.append(
+                f"{info['db']} schema 版本 v{info['schema_version']} 高于程序支持的 "
+                f"v{LATEST_SCHEMA_VERSION}，请升级程序代码后再使用"
             )
 
     report["ok"] = not problems
@@ -197,9 +215,10 @@ def main() -> int:
         print(f"      ~ {f}")
     for f in report["files_missing_in_dest"][:10]:
         print(f"      ! {f}")
-    print("\n  数据库：")
+    print(f"\n  数据库（目标 schema v{LATEST_SCHEMA_VERSION}，只读打开）：")
     for info in db_info:
-        print(f"      {info['db']}: schema v{info['schema_version']}，题目 {info['questions']} 道，"
+        verdict = "版本达标" if info["schema_version"] == LATEST_SCHEMA_VERSION else "版本不达标"
+        print(f"      {info['db']}: schema v{info['schema_version']}（{verdict}），题目 {info['questions']} 道，"
               f"question_tags {'有' if info['has_question_tags'] else '无'}")
     print()
     if problems:

@@ -39,6 +39,7 @@ __pycache__/
 .pytest_cache/
 .pytest/
 scratch/
+tools/tmp_*
 
 # 6. 忽略操作系统临时文件与 IDE 配置文件
 .DS_Store

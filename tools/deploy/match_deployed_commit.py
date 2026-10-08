@@ -6,6 +6,10 @@
 文件字节逐一比对，找出内容完全一致的最新提交；若没有整体一致，则逐文件
 报告最近一次内容匹配的提交。
 
+比对前会把两侧字节都做 CRLF→LF 归一化（与 sync_release._norm 一致）：
+Windows 部署副本是 CRLF、git blob 是 LF，不归一化会让本脚本对每个文件都
+得出"仓库历史中无匹配"的假阴性结论。
+
 用法：
     python tools/deploy/match_deployed_commit.py <deploy_dir> [--repo <repo_dir>]
 """
@@ -32,8 +36,17 @@ KEY_FILES = [
 ]
 
 
+def _norm(b: bytes) -> bytes:
+    """忽略 CRLF/LF 差异，避免把"仅换行符不同"误报为内容变更。
+
+    与 tools/deploy/sync_release.py 的 _norm 保持一致。
+    """
+    return b.replace(b"\r\n", b"\n")
+
+
 def sha256_bytes(b: bytes) -> str:
-    return hashlib.sha256(b).hexdigest()
+    """归一化行尾后再算 sha256；调用方须保证两侧都过本函数。"""
+    return hashlib.sha256(_norm(b)).hexdigest()
 
 
 def git(repo: Path, *args: str) -> str:
@@ -61,7 +74,7 @@ def main() -> int:
         p = deploy_dir / rel
         deploy_fp[rel] = sha256_bytes(p.read_bytes()) if p.exists() else "MISSING"
 
-    print("=== 部署副本关键文件指纹 ===")
+    print("=== 部署副本关键文件指纹（CRLF 归一化后） ===")
     for rel in KEY_FILES:
         print(f"  {deploy_fp[rel][:16]}  {rel}")
 
@@ -78,6 +91,7 @@ def main() -> int:
             if blob is None:
                 continue
             total += 1
+            # blob 同样经 sha256_bytes → 已做 CRLF 归一化
             if sha256_bytes(blob) == deploy_fp[rel]:
                 matched += 1
         if total and matched == total:
