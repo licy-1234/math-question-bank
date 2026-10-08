@@ -27,6 +27,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+# 复用 sync_release 的排除规则：tests/、tools/ 等开发资产不进用户副本，
+# 因此只改这些目录的提交不应被算作"版本漂移"。
+from tools.deploy.sync_release import _is_excluded  # noqa: E402
+
 
 def git(repo: Path, *args: str) -> str:
     r = subprocess.run(
@@ -73,15 +79,29 @@ def main() -> int:
         stamp = {}
         problems.append("部署副本缺少 DEPLOY-INFO.json（从未用 sync_release.py 部署过）")
 
+    # 只把"含待部署文件"的提交算作漂移。纯开发资产（tests/、tools/、文档）
+    # 本来就不进用户副本，把它们算进去会让守卫天天误报，最后被人忽略。
     behind: list[str] = []
+    dev_only: list[str] = []
     if deployed_commit:
-        behind = git(
-            repo, "log", "--format=%h %ad %s", "--date=format:%m-%d %H:%M",
-            f"{deployed_commit}..HEAD",
-        ).splitlines()
+        revs = git(repo, "rev-list", f"{deployed_commit}..HEAD").split()
+        for rev in revs:
+            changed = [
+                f for f in git(repo, "diff", "--name-only", f"{rev}~1", rev).splitlines() if f.strip()
+            ]
+            deployable = [f for f in changed if not _is_excluded(Path(f))]
+            line = git(
+                repo, "log", "-1", "--format=%h %ad %s", "--date=format:%m-%d %H:%M", rev
+            ).strip()
+            if deployable:
+                behind.append(line)
+            elif line:
+                dev_only.append(line)
+
     report["deployed_commit"] = deployed_commit
     report["head_commit"] = head
     report["missing_commits"] = behind
+    report["dev_only_commits"] = dev_only
     if behind:
         problems.append(f"部署副本落后仓库 {len(behind)} 个提交（这些改动在页面上根本不存在）")
 
@@ -167,7 +187,11 @@ def main() -> int:
         for line in behind:
             print(f"      - {line}")
     else:
-        print("\n  [OK] 副本来源提交 == 仓库 HEAD")
+        print("\n  [OK] 副本来源提交 == 仓库 HEAD（无待部署改动）")
+    if dev_only:
+        print(f"\n  以下 {len(dev_only)} 个提交只动开发资产（tests/、tools/ 等），无需部署，已忽略：")
+        for line in dev_only:
+            print(f"      · {line}")
     print(f"\n  文件比对：检查 {checked} 个，不一致 {len(report['files_dirty'])} 个，缺失 {len(report['files_missing_in_dest'])} 个")
     for f in report["files_dirty"][:10]:
         print(f"      ~ {f}")
