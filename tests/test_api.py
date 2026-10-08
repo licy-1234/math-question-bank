@@ -319,9 +319,13 @@ def test_api_stats(client):
     stats = response.json()
     assert stats["status"] == "success"
     assert "total_count" in stats
-    assert "easy_error_count" in stats
-    assert "challenge_count" in stats
-    assert "qiangji_count" in stats
+    # 难度已归一为三级：easy / medium / hard（基础题 / 中档题 / 难题）
+    assert "easy_count" in stats
+    assert "medium_count" in stats
+    assert "hard_count" in stats
+    # 旧的四级口径必须彻底消失，否则老师按新下拉筛选会一条都筛不到
+    for legacy_key in ("easy_error_count", "challenge_count", "qiangji_count", "normal_count"):
+        assert legacy_key not in stats
     assert stats["total_count"] == 0
 
 

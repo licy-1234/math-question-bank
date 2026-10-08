@@ -221,7 +221,13 @@ class Question(Base):
         return [path for path in self.image_paths if path not in hidden_references]
 
     def tag_codes(self) -> dict:
-        """Group this question's multi-value tags by dimension."""
+        """Group this question's multi-value tags by dimension.
+
+        Ordered by primary key so the returned order matches the order the
+        teacher entered them.  Without an explicit ORDER BY SQLite walks the
+        (question_id, dim, code) unique index and returns codes in lexicographic
+        order, which silently reshuffles what the user typed.
+        """
 
         grouped = {"chapter": [], "thought": [], "function": [], "custom": []}
         session = object_session(self)
@@ -230,6 +236,7 @@ class Question(Base):
         rows = (
             session.query(QuestionTag.dim, QuestionTag.code)
             .filter(QuestionTag.question_id == self.id)
+            .order_by(QuestionTag.dim, QuestionTag.id)
             .all()
         )
         for dim, code in rows:

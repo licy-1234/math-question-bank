@@ -2897,19 +2897,36 @@ def sync_question_tags(
     function_raw: Optional[str] = None,
     custom_raw: Optional[str] = None,
     legacy: Optional[tuple] = None,
+    legacy_prev: Optional[tuple] = None,
 ) -> dict:
     """Replace the multi-value tags of one question dimension by dimension.
 
     A dimension is only rewritten when its field was submitted, so partial
     updates (for example OCR saving content only) never drop existing tags.
+
+    ``legacy`` is the legacy (册/章/节) triple used by clients that predate the
+    multi-value tag fields.  Because those form fields default to ``""`` rather
+    than ``None``, the triple is *always* present, so it may only drive the
+    chapter dimension when it actually carries information **and** differs from
+    ``legacy_prev`` (the triple stored before this request).  Otherwise the
+    chapter dimension is treated as "not submitted" and left untouched.
     """
 
     pending: dict[str, list[str]] = {}
 
     chapter_codes = _parse_code_list(chapter_raw)
     if chapter_codes is None and legacy is not None:
-        derived = resolve_legacy_code(*legacy)
-        chapter_codes = [derived] if derived else []
+        submitted = tuple(str(value or "").strip() for value in legacy)
+        previous = (
+            tuple(str(value or "").strip() for value in legacy_prev)
+            if legacy_prev is not None
+            else None
+        )
+        # 旧字段只在"确实带了册/章/节信息"且"这次真的改动了"时才派生章节标签；
+        # 否则视为该维度未提交，保留已有标签。
+        if any(submitted) and (previous is None or submitted != previous):
+            derived = resolve_legacy_code(*legacy)
+            chapter_codes = [derived] if derived else []
     if chapter_codes is not None:
         pending["chapter"] = normalize_codes(chapter_codes)
 
@@ -3133,6 +3150,7 @@ def create_question(
             function_raw=tag_function_code,
             custom_raw=tag_custom_tags,
             legacy=(category_compulsory, category_chapter, category_knowledge),
+            legacy_prev=None,
         )
         committed_question_id = db_question.id
         db.commit()
@@ -3244,7 +3262,15 @@ def update_question(
         # 1. Fallback if third level is empty, default to chapter
         if not category_knowledge and category_chapter:
             category_knowledge = category_chapter
-            
+
+        # 记下改动前的"册/章/节"三元组。sync_question_tags 用它判断这次是否真的
+        # 动了旧分类字段 —— 必须在这批赋值之前抓，否则读到的是新值，判断恒为"未变化"。
+        legacy_category_prev = (
+            db_question.category_compulsory,
+            db_question.category_chapter,
+            db_question.category_knowledge,
+        )
+
         db_question.content = content
         db_question.question_type = question_type
         db_question.category_compulsory = category_compulsory
@@ -3373,6 +3399,7 @@ def update_question(
             function_raw=tag_function_code,
             custom_raw=tag_custom_tags,
             legacy=(category_compulsory, category_chapter, category_knowledge),
+            legacy_prev=legacy_category_prev,
         )
         db.commit()
     except Exception as e:
