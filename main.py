@@ -150,10 +150,12 @@ from mathbank.prompts import (
     build_tikz_draw_prompt,
 )
 from mathbank.question_types import (
-    detect_choice_options,
-    detect_structured_question_form,
-    normalize_ai_question_form,
     normalize_section_order,
+)
+from mathbank.classify_rules import (
+    classify_with_rules,
+    estimate_difficulty_prior,
+    suggest_chapter_candidates,
 )
 import shutil
 from mathbank.pdf_inspector_helper import (
@@ -4087,7 +4089,7 @@ def ai_classify(content: str = Form(...)):
             status_code=400
         )
         
-    # 必选项「教材章节」的候选节点（章级别：code + 完整中文路径）
+    # 必选项「教材章节」的候选节点：章级全量 + 规则层检索出的节/小节级 top-N
     chapter_options = []
     try:
         tree = load_curriculum_tree("A")
@@ -4098,7 +4100,28 @@ def ai_classify(content: str = Form(...)):
         chapter_options = []
 
     try:
-        system_instructions = build_classification_system_prompt(chapter_options)
+        section_candidates = suggest_chapter_candidates(content, top_n=8)
+    except Exception:
+        section_candidates = []
+    # 章级全量在前，节级候选在后，按 code 去重并保持顺序
+    merged_options = list(chapter_options)
+    seen_codes = {code for code, _ in merged_options}
+    for code, path in section_candidates:
+        if code not in seen_codes:
+            merged_options.append((code, path))
+            seen_codes.add(code)
+
+    try:
+        difficulty_prior, _prior_evidence = estimate_difficulty_prior(content)
+    except Exception:
+        difficulty_prior = ""
+
+    try:
+        system_instructions = build_classification_system_prompt(
+            merged_options,
+            difficulty_prior=difficulty_prior,
+            section_candidates=section_candidates,
+        )
         data = {
             "model": model_name,
             "messages": [
@@ -4109,7 +4132,7 @@ def ai_classify(content: str = Form(...)):
                 "type": "json_object"
             },
             "temperature": 0.2,
-            "max_tokens": 512
+            "max_tokens": 1024
         }
         
         data = apply_model_thinking_policy(
@@ -4125,74 +4148,83 @@ def ai_classify(content: str = Form(...)):
             provider_name=provider_name,
         )
             
-        res_json = response.json()
-        ai_message = res_json.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-        
-        # Strip potential markdown formatting if returned
-        if ai_message.startswith("```"):
-            lines = ai_message.split("\n")
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines[-1].strip() == "```":
-                lines = lines[:-1]
-            ai_message = "\n".join(lines).strip()
-            
-        result = json.loads(ai_message)
+        def parse_model_json(message: str) -> dict:
+            text = (message or "").strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                text = "\n".join(lines).strip()
+            parsed = json.loads(text)
+            if not isinstance(parsed, dict):
+                raise ValueError("AI 返回的不是 JSON 对象")
+            return parsed
 
-        # 必选项①：题型（粗粒度 question_form，结构规则优先，AI 兜底）
-        structured_question_form = detect_structured_question_form(content)
-        question_form = structured_question_form or normalize_ai_question_form(
-            result.get("question_form")
-        )
-        question_form_source = "structure" if structured_question_form else "ai"
+        def call_model(repair_hint: str = "") -> dict:
+            messages = [
+                {"role": "system", "content": system_instructions},
+                {"role": "user", "content": f"题目内容:\n{content}"},
+            ]
+            if repair_hint:
+                messages.append({"role": "user", "content": repair_hint})
+            payload = {
+                "model": model_name,
+                "messages": messages,
+                "response_format": {"type": "json_object"},
+                "temperature": 0.2,
+                "max_tokens": 1024,
+            }
+            payload = apply_model_thinking_policy(
+                payload,
+                provider=provider,
+                task="classify",
+            )
+            response = post_chat_completion(
+                provider,
+                payload,
+                timeout=30,
+                provider_name=provider_name,
+            )
+            raw = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+            return parse_model_json(raw)
 
-        # 修正：AI 判为选择题但题干无 A/B/C/D 选项 → 解答题（修复"解答题被误判为单选题"）
-        if (
-            question_form == "choice"
-            and question_form_source != "structure"
-            and not detect_choice_options(content)
-        ):
-            question_form = "detailed_answer"
-            question_form_source = "corrected"
+        try:
+            try:
+                result = call_model()
+            except ValueError:
+                # JSON 解析失败：带着修复提示重试一次
+                result = call_model(
+                    "你上一次的输出不是合法 JSON。请只输出一个 JSON 对象，"
+                    "包含 chapter_code、question_type、difficulty、reason 四个 key，"
+                    "不要任何 Markdown 标记或解释文字。"
+                )
+        except Exception as exc:
+            # 全部失败：降级为纯规则结果，不再抛 500
+            fallback = classify_with_rules(content, {})
+            return {
+                "status": "partial",
+                "message": f"AI 智能分类失败（{exc}），已回退到规则层结果，请人工核对。",
+                **fallback,
+            }
 
-        # 必选项②：难度（easy/medium/hard，非法或缺失时回退 medium）
-        difficulty = str(result.get("difficulty", "") or "").strip()
-        if difficulty not in ("easy", "medium", "hard"):
-            difficulty = "medium"
-            difficulty_source = "fallback"
-        else:
-            difficulty_source = "ai"
+        # 题型 / 难度 / 章节统一由规则层与模型输出融合
+        fused = classify_with_rules(content, result)
+        return {"status": "success", **fused}
 
-        # 必选项③：教材章节（四级树 code，非法时回退首个章并标记需人工核对）
-        chapter_code = str(result.get("chapter_code", "") or "").strip()
-        chapter_path = ""
-        chapter_fallback = False
-        if chapter_code:
-            node = curriculum_index("A").get(chapter_code)
-            if node:
-                chapter_path = node.get("path", "")
-        if not chapter_path:
-            chapter_fallback = True
-            if chapter_options:
-                chapter_code, chapter_path = chapter_options[0]
-            else:
-                chapter_code, chapter_path = "", ""
-
-        return {
-            "status": "success",
-            "chapter_code": chapter_code,
-            "chapter_path": chapter_path,
-            "question_form": question_form,
-            "question_form_source": question_form_source,
-            "difficulty": difficulty,
-            "difficulty_source": difficulty_source,
-            "is_fallback": chapter_fallback or difficulty_source == "fallback",
-        }
-            
     except Exception as e:
+        try:
+            degraded = classify_with_rules(content, {})
+        except Exception:
+            degraded = {}
         return JSONResponse(
-            content={"status": "error", "message": f"AI 智能分类失败: {str(e)}"},
-            status_code=500
+            content={
+                "status": "partial",
+                "message": f"AI 智能分类失败: {str(e)}",
+                **degraded,
+            },
+            status_code=200,
         )
 
 # ----------------- LaTeX Batch Paper Import APIs -----------------

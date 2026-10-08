@@ -160,13 +160,35 @@ def test_classification_prompts_prefer_later_curriculum_module():
         assert "仅作为背景条件被提及" in prompt
 
 
-def test_single_question_classification_prompt_requests_only_coarse_question_form():
-    prompt = build_classification_system_prompt({"必修一": {"1. 集合": []}})
+def test_single_question_classification_prompt_requests_four_value_question_type():
+    prompt = build_classification_system_prompt([("B1-C1", "必修第一册 / 第一章 集合")])
 
-    assert '"compulsory"' in prompt
-    assert '"chapter"' in prompt
-    assert '"question_form"' in prompt
-    assert "question_type" not in prompt
-    assert "包含且仅包含以下三个 key" in prompt
-    assert "任何选择题一律为 `choice`" in prompt
-    assert "严禁输出或猜测 `single_choice`、`multi_choice`" in prompt
+    assert '"chapter_code"' in prompt
+    assert '"question_type"' in prompt
+    assert '"difficulty"' in prompt
+    assert '"reason"' in prompt
+    assert "包含且仅包含以下四个 key" in prompt
+    # 必须允许并鼓励输出单选题/多选题
+    assert "single_choice" in prompt
+    assert "multi_choice" in prompt
+    assert "严禁输出 single_choice" not in prompt
+    # 选择题与填空题互斥判据
+    assert "互斥判据" in prompt
+    # 非选项文本的典型反例必须写进 prompt
+    assert "角A、B、C的对边" in prompt
+    assert "抛物线C：" in prompt
+    # 难度 rubric 具体化
+    assert "单一步骤" in prompt
+    assert "含参讨论" in prompt
+
+
+def test_classification_prompt_injects_difficulty_prior_and_section_candidates():
+    prompt = build_classification_system_prompt(
+        [("B1-C1", "必修第一册 / 第一章 集合")],
+        difficulty_prior="hard",
+        section_candidates=[("B1-C1-S3", "必修第一册 / 第一章 / 1.3 集合的基本运算")],
+    )
+
+    assert "难度先验为 hard" in prompt
+    assert "B1-C1-S3" in prompt
+    assert "节/小节级候选" in prompt

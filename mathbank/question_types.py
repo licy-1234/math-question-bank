@@ -48,6 +48,39 @@ QUESTION_FORM_FILL_IN_BLANK = "fill_in_blank"
 QUESTION_FORM_DETAILED_ANSWER = "detailed_answer"
 QUESTION_FORM_UNKNOWN = "unknown"
 
+# Four-value question types.  ``single_choice`` / ``multi_choice`` are kept
+# apart here; the coarse ``*_FORM_*`` constants above stay for storage and
+# for callers (paper export, Word export) that only need three states.
+QUESTION_TYPE_SINGLE_CHOICE = "single_choice"
+QUESTION_TYPE_MULTI_CHOICE = "multi_choice"
+QUESTION_TYPE_FILL_IN_BLANK = "fill_in_blank"
+QUESTION_TYPE_DETAILED_ANSWER = "detailed_answer"
+QUESTION_TYPE_UNKNOWN = "unknown"
+
+
+_AI_TYPE_MAPPING = {
+    "single_choice": QUESTION_TYPE_SINGLE_CHOICE,
+    "single-choice": QUESTION_TYPE_SINGLE_CHOICE,
+    "singlechoice": QUESTION_TYPE_SINGLE_CHOICE,
+    "单选题": QUESTION_TYPE_SINGLE_CHOICE,
+    "单选": QUESTION_TYPE_SINGLE_CHOICE,
+    "multi_choice": QUESTION_TYPE_MULTI_CHOICE,
+    "multi-choice": QUESTION_TYPE_MULTI_CHOICE,
+    "multichoice": QUESTION_TYPE_MULTI_CHOICE,
+    "多选题": QUESTION_TYPE_MULTI_CHOICE,
+    "多选": QUESTION_TYPE_MULTI_CHOICE,
+    "多项选择题": QUESTION_TYPE_MULTI_CHOICE,
+    "fill_in_blank": QUESTION_TYPE_FILL_IN_BLANK,
+    "fill-in-blank": QUESTION_TYPE_FILL_IN_BLANK,
+    "填空题": QUESTION_TYPE_FILL_IN_BLANK,
+    "填空": QUESTION_TYPE_FILL_IN_BLANK,
+    "detailed_answer": QUESTION_TYPE_DETAILED_ANSWER,
+    "解答题": QUESTION_TYPE_DETAILED_ANSWER,
+    "解答": QUESTION_TYPE_DETAILED_ANSWER,
+    "unknown": QUESTION_TYPE_UNKNOWN,
+    "未知": QUESTION_TYPE_UNKNOWN,
+}
+
 
 _CHOICES_ENV_PATTERN = re.compile(
     r"\\begin\s*\{\s*choices\s*\}",
@@ -62,6 +95,12 @@ def detect_structured_question_form(content: str) -> str | None:
     A choices environment takes precedence because a choice option can itself
     contain a blank-like expression without changing the enclosing question
     into a fill-in-the-blank item.
+
+    Besides the two native macros the function now also recognises the
+    structural shapes that OCR / Word exports produce: a run of A/B/C/D
+    option markers, ``①②③④`` / ``甲乙丙丁`` markers, the choice macros
+    ``\\choice`` / ``\\fourchoices`` / ``\\begin{tasks}``, and on the blank
+    side ``\\underline{...}`` placeholders, ``____`` runs and bracket blanks.
     """
 
     normalized = str(content or "")
@@ -69,7 +108,26 @@ def detect_structured_question_form(content: str) -> str | None:
         return QUESTION_FORM_CHOICE
     if _FILLIN_PATTERN.search(normalized):
         return QUESTION_FORM_FILL_IN_BLANK
-    return None
+
+    # The richer evidence lives in ``classify_rules`` (which imports this
+    # module).  Importing it lazily keeps the module-level import graph
+    # one-directional while still routing every caller through one
+    # implementation.
+    from mathbank.classify_rules import structured_form_from_evidence  # noqa: PLC0415
+
+    return structured_form_from_evidence(normalized)
+
+
+def normalize_ai_question_type(value: object) -> str | None:
+    """Map model output to one of the four question types.
+
+    Returns ``None`` when the model only produced a coarse ``choice`` /
+    ``选择题`` (or nothing usable at all) so that the caller resolves
+    single-vs-multi and choice-vs-blank from the rule evidence instead.
+    """
+
+    normalized = str(value or "").strip().lower()
+    return _AI_TYPE_MAPPING.get(normalized)
 
 
 def normalize_ai_question_form(value: object) -> str:
@@ -105,6 +163,17 @@ def detect_choice_options(content: str) -> bool:
 
     Used to correct a common AI misclassification where a written-answer
     question (解答题, no options) is wrongly tagged as ``choice``.
+
+    The old single regex was replaced by the evidence based scanner in
+    ``mathbank.classify_rules.analyze_options``: the previous pattern
+    ``[A-D]\\s*[.、)．:：）]\\s*\\S`` matched anywhere in the stem, so
+    ``角A、B、C``, ``集合A、B``, ``抛物线C：y²`` and ``∁_U(A\\cup B)=`` were
+    all treated as option markers.  The new scanner enforces a leading
+    context (line start / whitespace / explicit bracket), rejects
+    function-call context such as ``P(A)``, and requires at least two
+    distinct A-D letters (or a recognised option macro).
     """
 
-    return bool(_OPTION_LETTER_PATTERN.search(str(content or "")))
+    from mathbank.classify_rules import analyze_options  # noqa: PLC0415
+
+    return analyze_options(content)["has_options"]

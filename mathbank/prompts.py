@@ -254,39 +254,76 @@ def build_curriculum_text(curriculum: dict) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def build_classification_system_prompt(chapters: list) -> str:
+def build_classification_system_prompt(
+    chapters: list,
+    difficulty_prior: str = "",
+    section_candidates: list | None = None,
+) -> str:
     """Build the classify prompt over the four-level curriculum tree.
 
-    ``chapters`` is a list of ``(code, path)`` pairs for every selectable
-    chapter node (e.g. ``("B1-C3", "必修第一册·第三章 函数的概念与性质")``).
-    The model must output the required-field trio: chapter code, coarse
-    question form and difficulty.
+    ``chapters`` is a list of ``(code, path)`` chapter-level pairs (18 nodes).
+    ``section_candidates`` is an optional list of finer ``(code, path)`` pairs
+    produced by :func:`mathbank.classify_rules.suggest_chapter_candidates`.
+    ``difficulty_prior`` is the rule-layer difficulty estimate used as a hint.
+
+    The model must output four keys: ``chapter_code``, ``question_type``
+    (four values, single/multi choice included), ``difficulty`` and ``reason``.
     """
-    chapter_lines = "\n".join(f"- {code}  {path}" for code, path in chapters)
+    if isinstance(chapters, dict):
+        chapter_lines = build_curriculum_text(chapters)
+    else:
+        chapter_lines = "\n".join(f"- {code}  {path}" for code, path in chapters)
+
+    section_block = ""
+    if section_candidates:
+        lines = "\n".join(f"- {code}  {path}" for code, path in section_candidates)
+        section_block = (
+            "\n【节/小节级候选（由规则层检索给出，供参考）】\n"
+            f"{lines}\n"
+            "只有当你能明确判断到节/小节时才从这里选；否则请退回到上面的章级 code。\n"
+        )
+
+    prior_line = ""
+    if difficulty_prior:
+        prior_line = (
+            f"规则层依据题干结构（小问数、含参讨论、设问词等）给出的难度先验为 {difficulty_prior}，"
+            "仅作参考，你可据题面修正；若你的判断与它相差两档（如 easy 与 hard），请在 reason 中说明理由。\n"
+        )
+
     return (
-        "你是高中数学题目分类专家。请分析题目，识别并输出以下【必选分类信息】三项。\n"
-        "【教材章节编码】从下列列表挑选最合适的一个 code，必须原样输出 code：\n"
+        "你是高中数学题目分类专家。请分析题目，识别并输出以下【必选分类信息】。\n"
+        "【教材章节候选】必须从下列列表中挑选，原样输出 code，禁止自行拼造 code：\n"
         f"{chapter_lines}\n"
-        "【分类规则】\n"
+        f"{section_block}"
+        "\n【分类规则】\n"
         "1. 仔细阅读并推导题目考点，定位其所属教材章节。定位必须依据题目实际考查的知识点，不得只看字面关键词。\n"
         "2. 章节编码按「册(B1/B2/X1/X2/X3)-章(Cn)」组织，优先定位到章级别；"
-        "仅当能明确判断到更细的节/小节时才选更细的 code。\n"
-        "3. 多模块融合题：按上面列表的先后顺序，选位置最靠后的模块；仅作背景、解题未用到的内容不计入候选。\n"
-        "4. 判定题型 question_form（务必准确，按以下标准）：\n"
-        "   - choice（选择题）：题干明确列出 A/B/C/D 选项（或含 \\begin{choices}），要求从选项中选答案。\n"
-        "   - fill_in_blank（填空题）：题干要求填写一个具体值/式子/结论（含 \\fillin 或下划线空格）。\n"
-        "   - detailed_answer（解答题）：题干要求写出完整解答或证明过程，且没有 A/B/C/D 选项。"
-        "典型如：已知…求…、证明/求证、解方程、求单调区间并讨论、求最值等。\n"
-        "   - unknown：无法可靠判断。\n"
-        "   严禁输出 single_choice、multi_choice、单选题、多选题。\n"
-        "   特别注意：没有 A/B/C/D 选项的题（如 证明、求证、求值并说明过程）必须判为 detailed_answer，"
-        "绝不能因为题目有明确答案就判为 choice。\n"
-        "5. 判定难度 difficulty：easy（基础题）、medium（中档题）、hard（难题）。\n"
-        "6. 输出必须是合法 JSON 字符串，包含且仅包含以下三个 key，不要任何 Markdown 标记、代码块或解释文字：\n"
+        "仅当能明确判断到更细的节/小节时才选更细的 code；无法判断时只输出到章级。\n"
+        f"{CLASSIFICATION_PRIORITY_RULE}\n"
+        "4. 判定题型 question_type（四选一，务必准确）：\n"
+        "   - single_choice（单选题）：题干列出 A/B/C/D 选项，且【有且只有一个】选项正确。\n"
+        "   - multi_choice（多选题）：题干列出 A/B/C/D 选项，且【有两个或以上】选项正确。\n"
+        "     多选题判据（出现任一即应判 multi_choice）：「多选题」「多项选择题」「（多选）」；"
+        "「有多项符合题目要求」；「全部选对的得X分，部分选对的得Y分」；"
+        "「选出所有满足条件的」；「正确的个数是」。\n"
+        "   - fill_in_blank（填空题）：题干有填空位（下划线/\\underline/\\fillin/括号留空/「将答案填在横线上」），且【没有】A/B/C/D 选项。\n"
+        "   - detailed_answer（解答题）：要求写出完整解答或证明过程，且【没有】A/B/C/D 选项、也【没有】填空位。\n"
+        "   选择题与填空题互斥判据：有 A/B/C/D 选项 → 一定是 single_choice 或 multi_choice，绝不判为 fill_in_blank；"
+        "有填空位且无选项 → 一定是 fill_in_blank，绝不判为 single/multi_choice。\n"
+        "   【重要】下列文本都【不是】选项标记，出现它们不代表本题是选择题："
+        "「角A、B、C的对边」「集合A、B」「已知A、B是两个互斥事件」「从A、B中各取一个」"
+        "「D、E分别为…的中点」「抛物线C：y²=4x」「∁_U(A∪B)=」「P(A)=…」「在三棱柱ABC-A1B1C1中」。\n"
+        "5. 判定难度 difficulty（三选一，rubric 如下）：\n"
+        "   - easy：单一步骤或直接套用公式，教材例题/练习题水平。\n"
+        "   - medium：需要 2-3 步转化，或含一个中等技巧（如换元、分类、配方、构造）。\n"
+        "   - hard：多个小问、含参讨论、证明/探究/新定义、恒成立或取值范围探究、跨模块综合。\n"
+        f"{prior_line}"
+        "6. 输出必须是合法 JSON 字符串，包含且仅包含以下四个 key，不要任何 Markdown 标记、代码块或解释文字：\n"
         "{\n"
-        '  "chapter_code": "章节编码",\n'
-        '  "question_form": "choice / fill_in_blank / detailed_answer / unknown",\n'
-        '  "difficulty": "easy / medium / hard"\n'
+        '  "chapter_code": "章节编码，只能取自上面的候选列表",\n'
+        '  "question_type": "single_choice / multi_choice / fill_in_blank / detailed_answer",\n'
+        '  "difficulty": "easy / medium / hard",\n'
+        '  "reason": "一句话说明判断依据（不超过40字），便于老师核对"\n'
         "}\n"
         "不要包含 ```json ``` 标记，只输出最干净的 JSON。"
     )
