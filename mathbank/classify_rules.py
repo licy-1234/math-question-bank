@@ -399,6 +399,20 @@ def detect_multi_choice_signals(content: str) -> bool:
     return bool(multi_choice_signals(content))
 
 
+# 「下列结论正确的是（　　）」这类设问在高考里单选、多选都会用，题干本身就分不出来。
+# 所以这里**不拿它去判定多选**（那会变成对着评测集硬凑），只用来标记「这条真的分不清」，
+# 交给老师点一下。最坏情况是多点一次，最好的情况是拦下一道静默入库的错题。
+_AMBIGUOUS_CHOICE_STEM = re.compile(
+    r"下列[^。；\n]{0,30}(?:正确|成立|符合|恰当|合理)[^。；\n]{0,8}(?:的是|的有|的选项)"
+)
+
+
+def detect_ambiguous_choice_stem(content: str) -> bool:
+    """「下列…正确的是」式设问 —— 单选/多选无法从题干区分。"""
+
+    return bool(_AMBIGUOUS_CHOICE_STEM.search(str(content or "")))
+
+
 # ---------------------------------------------------------------------------
 # 4. Sub-questions and parameter discussion (difficulty priors)
 # ---------------------------------------------------------------------------
@@ -496,13 +510,29 @@ def decide_question_type(content: str, ai_value=None) -> tuple[str, str, dict]:
 
     explicit_ai = ai_type in (QUESTION_TYPE_SINGLE_CHOICE, QUESTION_TYPE_MULTI_CHOICE)
 
+    # 单选 / 多选是只有模型能做的语义判断，规则层原则上不插手。但有一种情形例外：
+    # 题干里白纸黑字写了「多选题」「有多项符合题目要求」「全部选对得满分」这类提示语，
+    # 这是规则层手里唯一的硬证据。此时模型若判单选，必须纠正——否则规则层就退化成
+    # 模型的传声筒，错题会带着 needs_review=False 直接入库，老师完全看不到。
+    multi_conflict = bool(
+        multi
+        and ai_type == QUESTION_TYPE_SINGLE_CHOICE
+        and options["has_options"]
+        and structure != QUESTION_FORM_FILL_IN_BLANK
+    )
+    if multi_conflict:
+        evidence["type_conflict"] = "multi_signal_vs_single_choice"
+        return QUESTION_TYPE_MULTI_CHOICE, "corrected", evidence
+
     # 1. Structural macros are the strongest evidence -- but they can only
     # prove "this question has options", never whether one or several are
     # correct.  When the model already answered that, keep its answer: the
     # rule layer must not overwrite a semantic judgement it cannot make.
     if structure == QUESTION_FORM_CHOICE:
         if explicit_ai:
-            return ai_type, "structure", evidence
+            # 单选/多选这一层完全是模型的判断，来源必须标 ai，不能标 structure，
+            # 否则界面会告诉老师「这是结构判定的」，与事实不符。
+            return ai_type, "ai", evidence
         kind, _ = choice_kind("structure")
         return kind, "structure", evidence
     if structure == QUESTION_FORM_FILL_IN_BLANK:
@@ -516,7 +546,10 @@ def decide_question_type(content: str, ai_value=None) -> tuple[str, str, dict]:
             return ai_type, "ai", evidence
         if blanks:
             return QUESTION_TYPE_FILL_IN_BLANK, "corrected", evidence
-        return QUESTION_TYPE_DETAILED_ANSWER, "corrected", evidence
+        # 题干既没有选项也没有填空位：这**不是反对模型的证据**，很可能只是 OCR 把选项弄丢了。
+        # 所以保留模型的判断，交给 needs_review 提示老师核对，不做破坏性改写。
+        evidence["missing_structure"] = True
+        return ai_type, "ai", evidence
 
     if ai_type == QUESTION_TYPE_FILL_IN_BLANK:
         if options["has_options"] and not blanks:
@@ -924,38 +957,57 @@ def classify_with_rules(content: str, ai_payload: dict | None = None) -> dict:
     # 单选/多选无法可靠区分，必须交老师确认。
     ai_raw = str(payload.get("question_type", payload.get("question_form")) or "").strip().lower()
     ai_explicit = ai_raw in {"single_choice", "multi_choice", "单选题", "多选题", "单选", "多选"}
+    ambiguous_stem = detect_ambiguous_choice_stem(raw)
     choice_ambiguous = bool(
         question_type in (QUESTION_TYPE_SINGLE_CHOICE, QUESTION_TYPE_MULTI_CHOICE)
-        and not ai_explicit
         and not decision["multi_signals"]
+        and (
+            # 模型只给了粗粒度 choice，单选/多选本来就没定
+            not ai_explicit
+            # 模型说是多选，但题干找不到任何多选提示语 —— 对不上，要老师看一眼
+            or ai_expected == QUESTION_TYPE_MULTI_CHOICE
+            # 模型说是单选，但题干是「下列…正确的是」式设问 —— 这句式单多选都用，必须看一眼
+            or (ai_expected == QUESTION_TYPE_SINGLE_CHOICE and ambiguous_stem)
+        )
     )
 
     review_reasons: list[str] = []
-    if overridden:
+    type_conflict = decision.get("type_conflict")
+    if type_conflict == "multi_signal_vs_single_choice":
+        signals = [s for s in (decision.get("multi_signals") or []) if s]
+        # signals 里已经自带「」，不要再套一层，否则会显示成「出现「…」」
+        hint = "、".join(signals[:2]) if signals else "出现多选提示语"
+        review_reasons.append(f"题干{hint}，与模型判定的单选题冲突，已按多选题处理，请核对")
+    elif overridden:
         review_reasons.append(
             f"规则层依据题干结构把模型的「{_TYPE_LABELS.get(ai_expected, ai_expected)}」"
             f"判定为「{_TYPE_LABELS.get(question_type, question_type)}」，请核对"
         )
     if choice_ambiguous:
-        review_reasons.append("题干未出现多选提示语，单选题/多选题需人工确认")
+        review_reasons.append(
+            "题干是「下列…正确的是」式设问，单选题和多选都可能，请人工确认"
+            if ambiguous_stem
+            else "题干未出现多选提示语，单选题/多选题需人工确认"
+        )
     if question_type == QUESTION_TYPE_UNKNOWN:
         review_reasons.append("题型无法可靠判定，请手动选择")
+    if decision.get("missing_structure"):
+        review_reasons.append("题干未识别到选项或填空位，题型沿用模型判断，请核对选项是否缺失")
     if difficulty_conflict:
         review_reasons.append(
             f"难度判定存在分歧：模型判为{_LEVEL_LABELS.get(difficulty, difficulty)}，"
             f"规则先验为{_LEVEL_LABELS.get(prior, prior)}，请人工确认"
         )
+    if difficulty_source == "prior":
+        review_reasons.append("难度未能由模型给出，取规则先验值，请人工确认")
     if chapter_source == "rule":
         review_reasons.append("教材章节由规则检索得出，非模型判断，请核对")
     if chapter_source == "fallback" or not chapter_code:
         review_reasons.append("未能匹配到教材章节，请手动选择")
 
-    needs_review = bool(
-        review_reasons
-        or question_type == QUESTION_TYPE_UNKNOWN
-        or chapter_source != "ai"
-        or difficulty_source == "prior"
-    )
+    # 只要列得出具体理由就要复核；反过来，列不出理由就不该打扰老师。
+    # 这样前端永远拿得到「为什么要我看这一条」的答案，不会白屏。
+    needs_review = bool(review_reasons)
 
     ranked_candidates = _rank_type_candidates(
         question_type, options["has_options"], decision["blanks"], bool(decision["multi_signals"])

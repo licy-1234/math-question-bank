@@ -1307,7 +1307,11 @@
                 <!-- Recommendation Result -->
                 <div id="classifyResult" aria-live="polite" class="hidden space-y-3">
                     <p id="classifyStatusNotice" class="hidden text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2"><i class="fa-solid fa-triangle-exclamation mr-1.5"></i>AI 模型调用失败，以下为本地规则推断结果，请务必人工核对。</p>
-                    <p id="classifyReviewNotice" class="hidden text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2"><i class="fa-solid fa-circle-exclamation mr-1.5"></i>建议人工核对：本次判定存在不确定项（见下方标注）。</p>
+                    <div id="classifyReviewBlock" class="hidden rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 space-y-1.5">
+                        <p class="text-[11px] font-bold text-amber-800"><i class="fa-solid fa-circle-exclamation mr-1.5"></i>建议人工核对</p>
+                        <ul id="classifyReviewReasons" class="hidden list-disc list-inside space-y-1 text-[11px] text-amber-800 leading-relaxed"></ul>
+                        <p id="classifyReviewFallback" class="hidden text-[11px] text-amber-800 leading-relaxed">部分字段来自规则推断而非模型结论，请人工核对。</p>
+                    </div>
                     <div class="p-4 rounded-xl bg-brand-50 border border-brand-100 space-y-3">
                         <div>
                             <span class="text-[10px] uppercase font-bold text-brand-600 tracking-wider flex items-center mb-1.5"><i class="fa-solid fa-robot mr-1.5 animate-bounce"></i>AI 推荐教材章节：</span>
@@ -1346,7 +1350,11 @@
                                     </button>
                                 </div>
                             </div>
-                            <p id="unknownQuestionFormNotice" class="hidden text-[11px] text-amber-700 font-medium">题型无法自动判定，请手动选择；如为选择题可在上方直接点选单选 / 多选。未指定时本次不会写入题型，也不会自动保存。</p>
+                            <p id="unknownQuestionFormNotice" class="hidden text-[11px] text-amber-700 font-medium">题型无法自动判定，请手动选择。未选择时本次不会写入题型，也不会自动保存。</p>
+                            <div id="classifyTypeCandidateWrap" class="hidden space-y-2" role="radiogroup" aria-label="候选题型">
+                                <p id="classifyTypeCandidateHint" class="text-[11px] text-amber-700 font-medium"><i class="fa-solid fa-circle-info mr-1"></i>可在下方点选最可能的题型（不选择则本次不写入题型）。</p>
+                                <div id="classifyTypeCandidateList" class="grid grid-cols-2 gap-2"></div>
+                            </div>
                         </div>
                     </div>
                 </div>

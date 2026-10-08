@@ -102,6 +102,8 @@ THRESHOLDS = {
     "scenario_a_fine_min": 0.90,
     "scenario_b_fine_min": 0.85,
     "multi_distinguish_min": 0.90,
+    # 单选/多选被喂成相反值时，允许「跟着模型错」，但不允许「错且不提示」。
+    "choice_swap_silent_max": 0.10,
 }
 
 NOISE_CANDIDATES = {
@@ -199,6 +201,45 @@ def run_scenario(cases: list[dict], noise: dict[str, object] | None = None) -> l
                     "choice" if expected in CHOICE_FORMS else expected
                 ),
                 "fused": fused,
+            }
+        )
+    return rows
+
+
+def run_choice_swap_scenario(cases: list[dict]) -> list[dict]:
+    """情形C：把模型给出的单选 / 多选**互换**后喂进去。
+
+    情形 A / B 的噪声候选里，single_choice / multi_choice 只会变成填空题或解答题，
+    从不互相注入——所以「单选 vs 多选」这条轴在指标上永远是 100%，实际上根本没被测到。
+    这里专门补上：每条选择题都喂入相反的四值，看规则层是纠回来、提示复核、
+    还是静默跟着错（后者最危险，错题会带着 needs_review=False 直接入库）。
+    """
+
+    opposite = {"single_choice": "multi_choice", "multi_choice": "single_choice"}
+    rows = []
+    for case in cases:
+        expected = str(case.get("form", ""))
+        if expected not in opposite:
+            continue
+        injected = opposite[expected]
+        payload = {
+            "question_type": injected,
+            "difficulty": str(case.get("difficulty", "")),
+            "chapter_code": str(case.get("chapter_code", "")),
+        }
+        fused = classify_with_rules(str(case.get("content", "")), payload)
+        ok = fused["question_type"] == expected
+        flagged = bool(fused.get("needs_review"))
+        rows.append(
+            {
+                "id": str(case.get("id", "")),
+                "expected": expected,
+                "injected": injected,
+                "predicted": fused["question_type"],
+                "ok": ok,
+                "flagged": flagged,
+                # 静默接受 = 判错了，而且没给老师任何复核提示
+                "silent": (not ok) and (not flagged),
             }
         )
     return rows
@@ -653,6 +694,15 @@ def main(argv=None) -> int:
     multi_ok = sum(1 for r in choice_rows_a if r["ok"])
     print(f"  单选/多选取分（情形A）: {multi_ok}/{len(choice_rows_a)} = "
           f"{pct(multi_ok / len(choice_rows_a) if choice_rows_a else 0)}  (baseline 0/31 = 0.0%)")
+
+    # 情形C：单选/多选互喂，专门测这条在 A/B 里测不到的轴
+    rows_c = run_choice_swap_scenario(cases)
+    c_ok = sum(1 for r in rows_c if r["ok"])
+    c_silent = [r for r in rows_c if r["silent"]]
+    c_flagged = sum(1 for r in rows_c if (not r["ok"]) and r["flagged"])
+    c_total = len(rows_c)
+    print(f"  单选/多选抗错（情形C·模型喂反）: 纠回 {c_ok}/{c_total} = {pct(c_ok / c_total)}   "
+          f"跟着错但已提示 {c_flagged}   静默接受 {len(c_silent)}")
     print()
 
     chapter = chapter_metrics(cases) if args.chapter or True else {}
@@ -697,6 +747,11 @@ def main(argv=None) -> int:
              multi_ok / len(choice_rows_a) >= THRESHOLDS["multi_distinguish_min"], "≥90%",
              "0/31 (0.0%)", f"{multi_ok}/{len(choice_rows_a)} "
              f"({pct(multi_ok / len(choice_rows_a))})")
+    silent_rate = (len(c_silent) / c_total) if c_total else 0.0
+    register("6", "单选/多选抗错（情形C）静默接受率",
+             silent_rate <= THRESHOLDS["choice_swap_silent_max"],
+             f"≤{pct(THRESHOLDS['choice_swap_silent_max'])}",
+             "返工中曾达 47.5%", f"{len(c_silent)}/{c_total} ({pct(silent_rate)})")
 
     print("[验收门槛]")
     for name, passed, detail in checks:
