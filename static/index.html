@@ -1295,7 +1295,7 @@
 
             <div class="space-y-4">
                 <p class="text-xs text-slate-500 leading-relaxed">
-                    系统将通过题干结构规则与 AI 识别三项必选分类信息：<strong>题型</strong>、<strong>难度</strong>、<strong>教材章节</strong>；选择题仍需您手动确认单选或多选。
+                    系统将通过题干结构规则与 AI 识别三项必选分类信息：<strong>题型</strong>、<strong>难度</strong>、<strong>教材章节</strong>；选择题会自动判定单选 / 多选，您可直接点选修改。
                 </p>
 
                 <!-- Loading State -->
@@ -1306,6 +1306,8 @@
 
                 <!-- Recommendation Result -->
                 <div id="classifyResult" aria-live="polite" class="hidden space-y-3">
+                    <p id="classifyStatusNotice" class="hidden text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2"><i class="fa-solid fa-triangle-exclamation mr-1.5"></i>AI 模型调用失败，以下为本地规则推断结果，请务必人工核对。</p>
+                    <p id="classifyReviewNotice" class="hidden text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2"><i class="fa-solid fa-circle-exclamation mr-1.5"></i>建议人工核对：本次判定存在不确定项（见下方标注）。</p>
                     <div class="p-4 rounded-xl bg-brand-50 border border-brand-100 space-y-3">
                         <div>
                             <span class="text-[10px] uppercase font-bold text-brand-600 tracking-wider flex items-center mb-1.5"><i class="fa-solid fa-robot mr-1.5 animate-bounce"></i>AI 推荐教材章节：</span>
@@ -1314,6 +1316,7 @@
                                 <i class="fa-solid fa-chevron-right text-[10px] text-slate-500"></i>
                                 <span id="recChapterPath" class="text-slate-800 font-bold">必修第一册·第三章 函数的概念与性质</span>
                             </div>
+                            <p id="recChapterSource" class="hidden text-[10px] text-slate-500 font-medium leading-relaxed">章节来源：</p>
                         </div>
                         <div class="border-t border-brand-100/60 pt-3 space-y-2">
                             <div class="flex items-center justify-between gap-2">
@@ -1321,13 +1324,17 @@
                                 <span id="recQuestionFormSource" class="text-[10px] text-slate-500 font-medium">AI 建议</span>
                             </div>
                             <span id="recQuestionForm" class="inline-flex bg-indigo-100 text-indigo-800 px-2.5 py-1 rounded-lg text-[11px] font-bold">待识别</span>
+                            <p id="recQuestionTypeEvidence" class="hidden text-[10px] text-slate-500 font-medium leading-relaxed">判定依据：</p>
+                            <p id="recCorrectedNotice" class="hidden text-[10px] text-amber-700 font-bold leading-relaxed"><i class="fa-solid fa-arrows-rotate mr-1"></i>已根据题干结构纠正模型的题型判断</p>
                             <div class="flex items-center justify-between gap-2 mt-1">
                                 <span class="text-[10px] uppercase font-bold text-brand-600 tracking-wider flex items-center"><i class="fa-solid fa-gauge-high mr-1.5 text-amber-500"></i>难度识别：</span>
                                 <span id="recDifficultySource" class="text-[10px] text-slate-500 font-medium">AI 建议</span>
                             </div>
                             <span id="recDifficulty" class="inline-flex bg-amber-100 text-amber-800 px-2.5 py-1 rounded-lg text-[11px] font-bold">中档题</span>
+                            <p id="recDifficultyEvidence" class="hidden text-[10px] text-slate-500 font-medium leading-relaxed">判定依据：</p>
+                            <p id="recDifficultyConflict" class="hidden text-[10px] text-amber-700 font-bold leading-relaxed"><i class="fa-solid fa-triangle-exclamation mr-1"></i>难度判定存在分歧，请人工确认</p>
                             <div id="choiceTypeConfirm" class="hidden space-y-2" role="radiogroup" aria-label="确认选择题类型">
-                                <p class="text-[11px] text-amber-700 font-medium"><i class="fa-solid fa-circle-info mr-1"></i>已识别为选择题，请手动确认是单选题还是多选题。</p>
+                                <p id="choiceTypeConfirmHint" class="text-[11px] text-amber-700 font-medium"><i class="fa-solid fa-circle-info mr-1"></i>已识别为选择题，请手动确认是单选题还是多选题。</p>
                                 <div class="grid grid-cols-2 gap-2">
                                     <button type="button" id="classifySingleChoiceBtn" role="radio" aria-checked="false" onclick="selectClassifiedChoiceType('single_choice')" class="question-type-choice-button min-h-[44px] px-3 py-2 rounded-xl text-xs font-semibold">
                                         <i class="fa-solid fa-circle-check question-type-choice-check" aria-hidden="true"></i>
@@ -1339,7 +1346,7 @@
                                     </button>
                                 </div>
                             </div>
-                            <p id="unknownQuestionFormNotice" class="hidden text-[11px] text-slate-500 font-medium">无法可靠判断题型，将保留当前手动选择。</p>
+                            <p id="unknownQuestionFormNotice" class="hidden text-[11px] text-amber-700 font-medium">题型无法自动判定，请手动选择；如为选择题可在上方直接点选单选 / 多选。未指定时本次不会写入题型，也不会自动保存。</p>
                         </div>
                     </div>
                 </div>

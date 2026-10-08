@@ -95,7 +95,9 @@ BASELINE = {
 THRESHOLDS = {
     "options_fp_max": 2,
     "options_fn_max": 2,
-    "blanks_min": 15,
+    # ``cases.json`` 设计时有 17 条填空题，门槛写作 15/17；改成比例后换用别的
+    # 用例集（如留出集）也能直接复用同一套门槛，不会因样本数不同误报。
+    "blanks_rate_min": 15 / 17,
     "structure_rate_min": 0.40,
     "scenario_a_fine_min": 0.90,
     "scenario_b_fine_min": 0.85,
@@ -382,7 +384,7 @@ def render_report(
         f"门槛 ≤ {THRESHOLDS['options_fn_max']} |")
     add(f"| `detect_blank_slots` 填空题命中 | 无此能力 | "
         f"**{len(blanks_hit)}/{len(fills)} = {pct(len(blanks_hit) / len(fills) if fills else 0)}** | "
-        f"门槛 ≥ {THRESHOLDS['blanks_min']} |")
+        f"门槛 ≥ {pct(THRESHOLDS['blanks_rate_min'])} |")
     add(f"| `detect_structured_question_form` 命中率 | "
         f"{BASELINE['structure_hit']}/{BASELINE['total']} = 6.1% | "
         f"**{len(struct_hit)}/{total} = {pct(len(struct_hit) / total if total else 0)}** | "
@@ -621,7 +623,8 @@ def main(argv=None) -> int:
              f"{len(fp)}/{len(written)}", f"≤ {THRESHOLDS['options_fp_max']}"],
             ["选项漏判 FN", f"{BASELINE['options_fn']}/{BASELINE['options_fn_base']}",
              f"{len(fn)}/{len(choice)}", f"≤ {THRESHOLDS['options_fn_max']}"],
-            ["填空位命中", "无", f"{blanks_hit}/{len(fills)}", f"≥ {THRESHOLDS['blanks_min']}"],
+            ["填空位命中", "无", f"{blanks_hit}/{len(fills)}",
+             f"≥ {pct(THRESHOLDS['blanks_rate_min'])}"],
             ["结构命中率", "4/66 (6.1%)", f"{struct_hit}/{total} ({pct(struct_hit / total)})",
              f"≥ {int(THRESHOLDS['structure_rate_min'] * 100)}%"],
         ],
@@ -675,8 +678,10 @@ def main(argv=None) -> int:
              f"{BASELINE['options_fp']}/{BASELINE['options_fp_base']}", f"{len(fp)}/{len(written)}")
     register("1b", "选项漏判 FN（单选/多选题）", len(fn) <= THRESHOLDS["options_fn_max"], "≤2/31",
              f"{BASELINE['options_fn']}/{BASELINE['options_fn_base']}", f"{len(fn)}/{len(choice)}")
-    register("2", "`detect_blank_slots` 填空命中", blanks_hit >= THRESHOLDS["blanks_min"], "≥15/17",
-             "无此能力", f"{blanks_hit}/{len(fills)}")
+    blanks_rate = (blanks_hit / len(fills)) if fills else 0.0
+    register("2", "`detect_blank_slots` 填空命中",
+             blanks_rate >= THRESHOLDS["blanks_rate_min"], f"≥{pct(THRESHOLDS['blanks_rate_min'])}",
+             "无此能力", f"{blanks_hit}/{len(fills)} = {pct(blanks_rate)}")
     register("3", "`detect_structured_question_form` 命中率",
              struct_hit / total >= THRESHOLDS["structure_rate_min"], "≥40%", "4/66 (6.1%)",
              f"{struct_hit}/{total} ({pct(struct_hit / total)})")

@@ -1132,6 +1132,186 @@
         // AI classification modal handlers
         let temporaryClassifyData = null;
         let temporaryClassifyQuestionType = null;
+        // 后端没把握（question_type 缺失或为 unknown）时为 true：此时不自动写入题型、不自动保存
+        let classifyTypeNeedsManual = false;
+        // 旧版接口（只有粗粒度 question_form === 'choice'）时仍要求人工确认单选 / 多选
+        let classifyRequireManualChoice = false;
+
+        const CLASSIFY_QUESTION_TYPES = ['single_choice', 'multi_choice', 'fill_in_blank', 'detailed_answer'];
+        const QUESTION_TYPE_LABELS = {
+            single_choice: '单选题',
+            multi_choice: '多选题',
+            fill_in_blank: '填空题',
+            detailed_answer: '解答题',
+            unknown: '待手动确认'
+        };
+        // question_type_source：structure=结构标记 / ai=模型 / rule=规则 / corrected=规则纠正 / fallback=兜底
+        const QUESTION_TYPE_SOURCE_LABELS = {
+            structure: '结构标记识别',
+            ai: '模型判断',
+            rule: '规则推断',
+            corrected: '已按结构纠正',
+            fallback: '兜底默认值'
+        };
+        const CLASSIFY_DIFFICULTY_LABELS = { easy: '基础题', medium: '中档题', hard: '难题' };
+        const CLASSIFY_DIFFICULTY_SOURCE_LABELS = {
+            ai: '模型判断',
+            prior: '规则先验',
+            fallback: '兜底默认值'
+        };
+        // chapter_source：ai=模型给出 / rule=规则检索（可能不准，需提示核对）/ fallback=没识别出来
+        const CLASSIFY_CHAPTER_SOURCE_LABELS = {
+            ai: '模型判断',
+            rule: '规则推断',
+            fallback: '未识别'
+        };
+
+        function isChoiceQuestionType(questionType) {
+            return questionType === 'single_choice' || questionType === 'multi_choice';
+        }
+
+        // 新版接口直接返回细粒度 question_type；旧版只有粗粒度 question_form，需要优雅降级
+        function hasFineGrainedQuestionType(data) {
+            return !!(data && typeof data.question_type === 'string' && data.question_type.trim() !== '');
+        }
+
+        function resolveClassifyQuestionType(data) {
+            if (!data) return 'unknown';
+            const raw = typeof data.question_type === 'string' ? data.question_type.trim() : '';
+            if (CLASSIFY_QUESTION_TYPES.indexOf(raw) !== -1) return raw;
+            // 降级：旧的 question_form 只能区分非选择题，填空题 / 解答题可直接采信
+            const legacyForm = typeof data.question_form === 'string' ? data.question_form.trim() : '';
+            if (legacyForm === 'fill_in_blank' || legacyForm === 'detailed_answer') return legacyForm;
+            return 'unknown';
+        }
+
+        function buildClassifyTypeEvidence(data) {
+            const evidence = (data && data.evidence) ? data.evidence : {};
+            const options = evidence.options || {};
+            const parts = [];
+            if (options.count > 0) {
+                const letters = Array.isArray(options.letters) && options.letters.length
+                    ? '（' + options.letters.join('/') + '）'
+                    : '';
+                parts.push('识别到 ' + options.count + ' 个选项' + letters);
+            } else if (options.has_options) {
+                parts.push('识别到选项');
+            }
+            if (Array.isArray(evidence.multi_signals) && evidence.multi_signals.length) {
+                parts.push(evidence.multi_signals.join('、'));
+            }
+            if (evidence.blanks) parts.push('题干含填空线');
+            return parts.join('；');
+        }
+
+        function buildClassifyDifficultyEvidence(data) {
+            const evidence = (data && data.evidence) ? data.evidence : {};
+            const parts = [];
+            if (Array.isArray(evidence.difficulty_signals) && evidence.difficulty_signals.length) {
+                parts.push(evidence.difficulty_signals.join('、'));
+            }
+            if (evidence.subquestions > 0) parts.push('含 ' + evidence.subquestions + ' 个小问');
+            if (evidence.param_discussion) parts.push('含参讨论');
+            return parts.join('；');
+        }
+
+        function setClassifyText(id, text, visible) {
+            const element = document.getElementById(id);
+            if (!element) return;
+            element.textContent = text || '';
+            element.classList.toggle('hidden', !visible);
+        }
+
+        // 把分类结果写入结果区：题型（含来源 / 依据 / 纠正提示）、难度（含依据 / 分歧提示）、章节
+        function renderClassifyResult(data) {
+            const resolvedType = resolveClassifyQuestionType(data);
+            const typeLabel = QUESTION_TYPE_LABELS[resolvedType] || '待手动确认';
+            const isManual = resolvedType === 'unknown';
+            classifyTypeNeedsManual = isManual;
+            classifyRequireManualChoice = isManual
+                && !hasFineGrainedQuestionType(data)
+                && data.question_form === 'choice';
+
+            // ① 章节：空字符串表示后端没把握，不能拿去覆盖已有标签
+            const chapterCode = typeof data.chapter_code === 'string' ? data.chapter_code.trim() : '';
+            const chapterPath = typeof data.chapter_path === 'string' ? data.chapter_path.trim() : '';
+            setClassifyText('recChapterCode', chapterCode || '未识别', true);
+            setClassifyText('recChapterPath',
+                chapterCode ? (chapterPath || chapterCode) : '章节未能自动识别，请手动选择教材章节',
+                true);
+            // 章节来源：规则检索出来的章节不一定准，要明说，避免用户误以为是模型结论
+            const chapterSource = typeof data.chapter_source === 'string' ? data.chapter_source : '';
+            const chapterSourceLabel = CLASSIFY_CHAPTER_SOURCE_LABELS[chapterSource] || '';
+            setClassifyText('recChapterSource',
+                '章节来源：' + chapterSourceLabel + (chapterSource === 'rule' ? '，请人工核对' : ''),
+                !!chapterCode && !!chapterSourceLabel);
+
+            // ② 题型 + 判定来源 + 依据
+            setClassifyText('recQuestionForm', typeLabel, true);
+            const typeSource = typeof data.question_type_source === 'string' ? data.question_type_source : '';
+            const sourceKey = typeSource || (typeof data.question_form_source === 'string' ? data.question_form_source : '');
+            setClassifyText('recQuestionFormSource',
+                QUESTION_TYPE_SOURCE_LABELS[sourceKey] || (isManual ? '未能判定' : 'AI 建议'),
+                true);
+            const typeEvidence = buildClassifyTypeEvidence(data);
+            setClassifyText('recQuestionTypeEvidence', '判定依据：' + typeEvidence, !!typeEvidence);
+            setClassifyText('recCorrectedNotice', '已根据题干结构纠正模型的题型判断', sourceKey === 'corrected');
+
+            // ③ 难度 + 依据 + 分歧提示
+            const difficultyKey = typeof data.difficulty === 'string' ? data.difficulty : '';
+            setClassifyText('recDifficulty', CLASSIFY_DIFFICULTY_LABELS[difficultyKey] || '中档题', true);
+            const difficultySource = typeof data.difficulty_source === 'string' ? data.difficulty_source : '';
+            setClassifyText('recDifficultySource',
+                CLASSIFY_DIFFICULTY_SOURCE_LABELS[difficultySource] || (difficultySource === 'prior' ? '规则先验' : 'AI 建议'),
+                true);
+            const difficultyEvidence = buildClassifyDifficultyEvidence(data);
+            setClassifyText('recDifficultyEvidence', '判定依据：' + difficultyEvidence, !!difficultyEvidence);
+            // 分歧时把规则先验一并说出来，方便老师二选一（difficulty 本身仍是模型值，不静默覆盖）
+            const priorKey = typeof data.difficulty_prior === 'string' ? data.difficulty_prior : '';
+            const conflictText = priorKey && priorKey !== difficultyKey
+                ? '难度判定存在分歧：模型判为' + (CLASSIFY_DIFFICULTY_LABELS[difficultyKey] || difficultyKey)
+                    + '，规则先验为' + (CLASSIFY_DIFFICULTY_LABELS[priorKey] || priorKey) + '，请人工确认'
+                : '难度判定存在分歧，请人工确认';
+            setClassifyText('recDifficultyConflict', conflictText, data.difficulty_conflict === true);
+
+            // ④ partial：模型调用失败，仅本地规则推断
+            setClassifyText('classifyStatusNotice',
+                'AI 模型调用失败，以下为本地规则推断结果，请务必人工核对',
+                data.status === 'partial');
+            // needs_review：题型判不出 / 章节非模型给出 / 难度与先验差两档，任一成立即为 true
+            setClassifyText('classifyReviewNotice',
+                '建议人工核对：本次判定存在不确定项（见下方标注）。',
+                data.needs_review === true);
+
+            // ⑤ 选择题确认区：能自动判定时预选，不能判定时留给人工
+            const choiceConfirm = document.getElementById('choiceTypeConfirm');
+            const choiceHint = document.getElementById('choiceTypeConfirmHint');
+            const unknownNotice = document.getElementById('unknownQuestionFormNotice');
+            const showChoiceConfirm = isChoiceQuestionType(resolvedType) || isManual;
+            if (choiceConfirm) choiceConfirm.classList.toggle('hidden', !showChoiceConfirm);
+            if (unknownNotice) unknownNotice.classList.toggle('hidden', !isManual);
+
+            if (isChoiceQuestionType(resolvedType)) {
+                selectClassifiedChoiceType(resolvedType);
+                if (choiceHint) {
+                    choiceHint.textContent = typeEvidence
+                        ? '已自动判定为' + typeLabel + '（依据：' + typeEvidence + '）· 可点击修改'
+                        : '已自动判定为' + typeLabel + ' · 可点击修改';
+                }
+            } else if (isManual) {
+                resetClassifiedChoiceType();
+                if (choiceHint) {
+                    choiceHint.textContent = classifyRequireManualChoice
+                        ? '已识别为选择题，请手动确认是单选题还是多选题。'
+                        : '题型无法自动判定；如此题为选择题，可在此快速指定单选 / 多选（不指定则本次不写入题型）。';
+                }
+                setClassifyApplyEnabled(!classifyRequireManualChoice);
+            } else {
+                resetClassifiedChoiceType();
+                temporaryClassifyQuestionType = resolvedType;
+                setClassifyApplyEnabled(true);
+            }
+        }
 
         function setClassifyApplyEnabled(enabled) {
             const applyBtn = document.getElementById('classifyApplyButton');
@@ -1162,6 +1342,10 @@
                 button.setAttribute('aria-checked', selected ? 'true' : 'false');
             });
             setClassifyApplyEnabled(true);
+            const hint = document.getElementById('choiceTypeConfirmHint');
+            if (hint) {
+                hint.textContent = '已手动指定为' + (QUESTION_TYPE_LABELS[questionType] || '选择题') + '，点击「确认分类并保存题目」生效。';
+            }
         }
 
         function openClassifyModal() {
@@ -1176,7 +1360,18 @@
             document.getElementById('classifyApplyButton').classList.add('hidden');
             document.getElementById('choiceTypeConfirm').classList.add('hidden');
             document.getElementById('unknownQuestionFormNotice').classList.add('hidden');
+            ['classifyStatusNotice', 'classifyReviewNotice', 'recChapterSource', 'recQuestionTypeEvidence', 'recCorrectedNotice', 'recDifficultyEvidence', 'recDifficultyConflict']
+                .forEach(id => {
+                    const node = document.getElementById(id);
+                    if (node) node.classList.add('hidden');
+                });
+            const choiceHint = document.getElementById('choiceTypeConfirmHint');
+            if (choiceHint) {
+                choiceHint.textContent = '已识别为选择题，请手动确认是单选题还是多选题。';
+            }
             temporaryClassifyData = null;
+            classifyTypeNeedsManual = false;
+            classifyRequireManualChoice = false;
             resetClassifiedChoiceType();
             setClassifyApplyEnabled(true);
             
@@ -1220,45 +1415,11 @@
             .then(data => {
                 loading.classList.add('hidden');
                 
-                if (data.status === 'success') {
+                // success=模型+规则；partial=模型调用失败，仅本地规则推断
+                if (data.status === 'success' || data.status === 'partial') {
                     temporaryClassifyData = data;
-                    document.getElementById('recChapterCode').textContent = data.chapter_code || '—';
-                    document.getElementById('recChapterPath').textContent = data.chapter_path || '未匹配到章节，请手动选择';
-                    const formLabels = {
-                        'choice': '选择题',
-                        'fill_in_blank': '填空题',
-                        'detailed_answer': '解答题',
-                        'unknown': '待手动确认'
-                    };
-                    const questionForm = formLabels[data.question_form] ? data.question_form : 'unknown';
-                    document.getElementById('recQuestionForm').textContent = formLabels[questionForm];
-                    document.getElementById('recQuestionFormSource').textContent = data.question_form_source === 'structure'
-                        ? '结构规则识别'
-                        : (data.question_form_source === 'corrected' ? '已修正' : 'AI 建议');
-                    const diffLabels = { 'easy': '基础题', 'medium': '中档题', 'hard': '难题' };
-                    document.getElementById('recDifficulty').textContent = diffLabels[data.difficulty] || '中档题';
-                    document.getElementById('recDifficultySource').textContent = data.difficulty_source === 'fallback'
-                        ? '默认值'
-                        : 'AI 建议';
+                    renderClassifyResult(data);
 
-                    const choiceConfirm = document.getElementById('choiceTypeConfirm');
-                    const unknownNotice = document.getElementById('unknownQuestionFormNotice');
-                    choiceConfirm.classList.toggle('hidden', questionForm !== 'choice');
-                    unknownNotice.classList.toggle('hidden', questionForm !== 'unknown');
-                    resetClassifiedChoiceType();
-
-                    if (questionForm === 'fill_in_blank') {
-                        temporaryClassifyQuestionType = 'fill_in_blank';
-                        setClassifyApplyEnabled(true);
-                    } else if (questionForm === 'detailed_answer') {
-                        temporaryClassifyQuestionType = 'detailed_answer';
-                        setClassifyApplyEnabled(true);
-                    } else if (questionForm === 'choice') {
-                        setClassifyApplyEnabled(false);
-                    } else {
-                        setClassifyApplyEnabled(true);
-                    }
-                    
                     resultBox.classList.remove('hidden');
                     applyBtn.classList.remove('hidden');
                 } else {
@@ -1273,47 +1434,92 @@
             });
         }
 
+        // 下拉框里没有该取值时补一个兜底 option，避免 select.value 赋值静默失败
+        function ensureSelectOptionExists(select, value, label) {
+            const exists = Array.prototype.some.call(select.options, option => option.value === value);
+            if (exists) return;
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label || value;
+            select.appendChild(option);
+        }
+
         function applyClassifyRecommendation() {
             if (!temporaryClassifyData) return;
-            if (temporaryClassifyData.question_form === 'choice' && !temporaryClassifyQuestionType) {
+            const data = temporaryClassifyData;
+
+            // 旧版降级：后端只给出粗粒度 choice，单选题 / 多选题必须人工确认后才能应用
+            if (!hasFineGrainedQuestionType(data)
+                && temporaryClassifyData.question_form === 'choice'
+                && !temporaryClassifyQuestionType) {
                 showToast('请先确认此题是单选题还是多选题！', 'error');
                 return;
             }
-            
+
+            const appliedFields = [];
             const qtypeSelect = document.getElementById('editQType');
 
-            // 必选项① 题型
+            // 必选项① 题型：后端没把握（unknown）且用户未手动指定时不写入，避免静默污染
             if (temporaryClassifyQuestionType && qtypeSelect) {
+                ensureSelectOptionExists(qtypeSelect, temporaryClassifyQuestionType,
+                    QUESTION_TYPE_LABELS[temporaryClassifyQuestionType] || temporaryClassifyQuestionType);
                 qtypeSelect.value = temporaryClassifyQuestionType;
                 qtypeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+                appliedFields.push('题型');
             }
 
             // 必选项② 难度
             const difficultySelect = document.getElementById('editDifficulty');
-            if (temporaryClassifyData.difficulty && difficultySelect) {
-                difficultySelect.value = temporaryClassifyData.difficulty;
+            if (data.difficulty && difficultySelect) {
+                ensureSelectOptionExists(difficultySelect, data.difficulty,
+                    CLASSIFY_DIFFICULTY_LABELS[data.difficulty] || data.difficulty);
+                difficultySelect.value = data.difficulty;
                 difficultySelect.dispatchEvent(new Event('change', { bubbles: true }));
+                appliedFields.push('难度');
             }
 
-            // 必选项③ 教材章节（写入多值标签）
-            if (temporaryClassifyData.chapter_code && window.MathBankTags && typeof window.MathBankTags.setSelection === 'function') {
+            // 必选项③ 教材章节：空章节不写入；已有章节标签追加去重，不清空
+            const chapterCode = typeof data.chapter_code === 'string' ? data.chapter_code.trim() : '';
+            let chapterApplied = false;
+            if (chapterCode && window.MathBankTags && typeof window.MathBankTags.setSelection === 'function') {
                 const current = window.MathBankTags.getSelection();
+                const mergedChapters = Array.isArray(current.chapter_codes) ? current.chapter_codes.slice() : [];
+                if (mergedChapters.indexOf(chapterCode) === -1) mergedChapters.push(chapterCode);
                 window.MathBankTags.setSelection({
-                    chapter: [temporaryClassifyData.chapter_code],
+                    chapter: mergedChapters,
                     thought: current.thought_codes || [],
                     function: current.function_code ? [current.function_code] : []
                 });
+                chapterApplied = true;
+                appliedFields.push('章节');
             }
-            
+
             closeClassifyModal();
             if (typeof refreshEditorFeedback === 'function') refreshEditorFeedback();
-            const fallbackTip = temporaryClassifyData.is_fallback ? '（部分字段为默认值，请核对）' : '';
-            showToast(`已应用 AI 分类：题型、难度、章节${fallbackTip}。请核对后保存。`);
-            
-            // Save question now with skipCheck = true
-            setTimeout(() => {
-                saveQuestion(true);
-            }, 250);
+
+            if (!appliedFields.length) {
+                showToast('本次没有可自动写入的分类信息，请手动补充题型、难度与章节。', 'error');
+                return;
+            }
+
+            // toast 文案与实际写入的字段保持一致
+            let message = '已应用：' + appliedFields.join('、');
+            if (!chapterApplied) message += '；章节未识别，需手动选择教材章节';
+            if (classifyTypeNeedsManual && appliedFields.indexOf('题型') === -1) {
+                message += '；题型未判定，需手动选择';
+            }
+            if (data.is_fallback) message += '（部分字段为默认值，请核对）';
+            if (data.needs_review) message += '（建议人工复核）';
+            if (data.status === 'partial') message += '（本地规则推断，请核对）';
+            message += '。请核对后保存。';
+            showToast(message, appliedFields.length >= 3 ? 'success' : 'info');
+
+            // 只有题型被明确写入（自动判定或人工指定）后才自动保存，避免把"未判定的题型"静默写库
+            if (appliedFields.indexOf('题型') !== -1) {
+                setTimeout(() => {
+                    saveQuestion(true);
+                }, 250);
+            }
         }
 
         window.selectClassifiedChoiceType = selectClassifiedChoiceType;

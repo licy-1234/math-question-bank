@@ -76,15 +76,24 @@ _FOLLOW_PUNCT = set(".、)．:：，,;；]】］）〕」》〉）")
 _CIRCLED_NUMBERS = "①②③④⑤⑥⑦⑧⑨⑩"
 _CHINESE_MARKERS = "甲乙丙丁"
 
-_OPTION_MACROS: tuple[tuple[re.Pattern[str], str, int], ...] = (
-    # (pattern, evidence label, minimum number of occurrences)
-    (re.compile(r"\\begin\s*\{\s*choices\s*\}", re.IGNORECASE), "macro:begin{choices}", 1),
-    (re.compile(r"\\begin\s*\{\s*tasks\s*\}", re.IGNORECASE), "macro:begin{tasks}", 1),
-    (re.compile(r"\\fourchoices\b", re.IGNORECASE), "macro:fourchoices", 1),
-    (re.compile(r"\\twochoices\b", re.IGNORECASE), "macro:twochoices", 1),
-    (re.compile(r"\\fourch\b", re.IGNORECASE), "macro:fourch", 1),
-    (re.compile(r"\\xxchoise\b", re.IGNORECASE), "macro:xxchoise", 1),
-    (re.compile(r"\\choice\b", re.IGNORECASE), "macro:choice", 2),
+#: (pattern, teacher-facing Chinese label, machine-readable macro name, minimum hits)
+#: The Chinese label is rendered verbatim by the frontend; the macro name is
+#: only exposed through ``analyze_options()["macros"]`` for debugging.
+_OPTION_MACROS: tuple[tuple[re.Pattern[str], str, str, int], ...] = (
+    (re.compile(r"\\begin\s*\{\s*choices\s*\}", re.IGNORECASE),
+     "LaTeX 选择题排版环境", r"\begin{choices}", 1),
+    (re.compile(r"\\begin\s*\{\s*tasks\s*\}", re.IGNORECASE),
+     "LaTeX 选项列表环境", r"\begin{tasks}", 1),
+    (re.compile(r"\\fourchoices\b", re.IGNORECASE),
+     "LaTeX 四选一排版命令", r"\fourchoices", 1),
+    (re.compile(r"\\twochoices\b", re.IGNORECASE),
+     "LaTeX 二选一排版命令", r"\twochoices", 1),
+    (re.compile(r"\\fourch\b", re.IGNORECASE),
+     "LaTeX 四选项排版命令", r"\fourch", 1),
+    (re.compile(r"\\xxchoise\b", re.IGNORECASE),
+     "LaTeX 选项排版命令", r"\xxchoise", 1),
+    (re.compile(r"\\choice\b", re.IGNORECASE),
+     "LaTeX 选项排版命令", r"\choice", 2),
 )
 
 _ENUMERATE_ENV = re.compile(
@@ -172,58 +181,97 @@ def analyze_options(content: str) -> dict:
     raw = str(content or "")
     masked = _mask_latex_commands(raw)
     evidence: list[str] = []
-    styles: list[str] = []
+    # Machine-readable flags -- the frontend never needs these, they exist so
+    # callers do not have to string-parse ``evidence``.
+    macro_hit = False
+    marker_hit = False
+    spaced_run = 0
 
     # (f) LaTeX macros -- strongest signal, no visible letters required.
-    for pattern, label, minimum in _OPTION_MACROS:
+    macros: list[str] = []
+    for pattern, label, macro_name, minimum in _OPTION_MACROS:
         found = len(pattern.findall(raw))
         if found >= minimum:
-            evidence.append(f"{label}×{found}")
-    if _ENUMERATE_ENV.search(raw) and len(_ITEM_MACRO.findall(raw)) >= 3:
-        evidence.append(f"macro:enumerate+item×{len(_ITEM_MACRO.findall(raw))}")
+            macro_hit = True
+            macros.append(macro_name)
+            evidence.append(f"识别到{label}（{found} 处）")
+    # NOTE: 4 (not 3) is the bar for "this list is a set of options".  Chinese
+    # exams always use four options A/B/C/D (or ①②③④), while a 解答题 with
+    # three sub-questions (1)(2)(3) is by far the most common false positive.
+    item_count = len(_ITEM_MACRO.findall(raw))
+    if _ENUMERATE_ENV.search(raw) and item_count >= 4:
+        macro_hit = True
+        macros.append(r"\begin{enumerate}+\item")
+        evidence.append(f"识别到 LaTeX 列表环境，含 {item_count} 个选项条目")
     task_count = len(_TASK_MACRO.findall(raw))
-    if task_count >= 3:
-        evidence.append(f"macro:task×{task_count}")
+    if task_count >= 4:
+        macro_hit = True
+        macros.append(r"\task")
+        evidence.append(f"识别到 {task_count} 个 LaTeX 选项条目")
 
     # (a)(b)(c)(d) letter scanning.
     hits = _scan_option_letters(masked)
     letters = [letter for letter, _ in hits]
-    punct_letters = {l for l, style in hits if style == "punct"}
+    punct_letters = sorted({l for l, style in hits if style == "punct"})
     space_letters = [l for l, style in hits if style == "space"]
 
     if punct_letters:
-        styles.append("punct")
-        evidence.append("letters:" + "".join(sorted(punct_letters)))
+        evidence.append(f"识别到选项字母 {'、'.join(punct_letters)}")
     if space_letters:
-        styles.append("space")
-        evidence.append("spaced-letters:" + "".join(space_letters))
+        evidence.append(f"识别到无分隔选项字母 {'、'.join(sorted(set(space_letters)))}")
 
-    run = _longest_consecutive_run(space_letters)
-    if run >= 3:
-        evidence.append(f"spaced-run:{run}")
+    spaced_run = _longest_consecutive_run(space_letters)
+    if spaced_run >= 3:
+        evidence.append(f"无分隔符但字母连续递增，共 {spaced_run} 个")
 
-    # (e) non-latin markers.
+    # (e) non-latin markers.  Same "four options" convention as above: ①②③
+    # used as sub-question numbering is far more common than a three-option
+    # question, so three markers alone never proves a choice question.
     circled = sorted({ch for ch in _CIRCLED_NUMBERS if ch in raw})
-    if len(circled) >= 3:
-        evidence.append("circled:" + "".join(circled))
-    chinese = [ch for ch in _CHINESE_MARKERS if re.search(ch + r"\s*[.、．:：]", raw)]
+    if len(circled) >= 4:
+        marker_hit = True
+        evidence.append(f"识别到圈码选项 {'、'.join(circled)}")
+    # 天干选项后面跟的一定是句点类分隔符（甲．乙．丙．丁．）；纯顿号列举
+    # 「甲、乙、丙、丁、戊五名同学」是题干叙述，不是选项。
+    chinese = [ch for ch in _CHINESE_MARKERS if re.search(ch + r"\s*[.．:：]", raw)]
     if len(chinese) >= 3:
-        evidence.append("chinese:" + "".join(chinese))
+        marker_hit = True
+        evidence.append(f"识别到天干选项 {'、'.join(chinese)}")
 
-    has_options = bool(evidence) and (
-        bool(punct_letters) and len(punct_letters) >= 2
-        or run >= 3
-        or len(circled) >= 3
+    has_options = bool(
+        (len(punct_letters) >= 2)
+        or spaced_run >= 3
+        or len(circled) >= 4
         or len(chinese) >= 3
-        or any(item.startswith("macro:") for item in evidence)
+        or macro_hit
     )
+
+    styles: list[str] = []
+    if macro_hit:
+        styles.append("macro")
+    if punct_letters:
+        styles.append("letter")
+    if marker_hit:
+        styles.append("marker")
+    if spaced_run >= 3:
+        styles.append("spaced")
+
+    # 同一条证据可能被多个宏命中，去重后再交给前端展示
+    seen: set[str] = set()
+    unique_evidence = [item for item in evidence
+                       if not (item in seen or seen.add(item))]
 
     return {
         "has_options": has_options,
         "letters": sorted(set(letters)),
         "count": len(set(letters)),
         "styles": styles,
-        "evidence": evidence,
+        "punct_letters": punct_letters,
+        "macro": macro_hit,
+        "marker": marker_hit,
+        "spaced_run": spaced_run,
+        "macros": macros,
+        "evidence": unique_evidence,
     }
 
 
@@ -235,13 +283,11 @@ def _strong_option_evidence(options: dict) -> bool:
     non-latin marker set, or at least three distinct A-D letters.
     """
 
-    for item in options["evidence"]:
-        if item.startswith(("macro:", "circled:", "chinese:", "spaced-run:")):
-            return True
-    for item in options["evidence"]:
-        if item.startswith("letters:"):
-            return len(set(item[len("letters:"):])) >= 3
-    return False
+    if options["macro"] or options["marker"]:
+        return True
+    if options["spaced_run"] >= 3:
+        return True
+    return len(options["punct_letters"]) >= 3
 
 
 def structured_form_from_evidence(content: str) -> str | None:
@@ -326,14 +372,19 @@ def detect_blank_slots(content: str, has_options: bool | None = None) -> bool:
 # 3. Multi-choice signals (reuses the判据 already present in source_metadata)
 # ---------------------------------------------------------------------------
 
+#: NOTE: the labels below are shown to teachers verbatim by the frontend,
+#: so they must stay readable Chinese -- never English keys or regex source.
 _MULTI_SIGNAL_PATTERNS: tuple[tuple[str, str], ...] = (
-    (r"多选题|多项选择题|多项选择|（多选）|\(多选\)|多选\b", "label:多选题"),
-    (r"在每小题给出的四个选项中[^。；\n]{0,12}(?:有多项是符合题目要求的|有多项符合题目要求|有多个选项是符合题目要求的)", "phrase:在每小题给出的四个选项中…有多项"),
-    (r"有多项符合题目要求|有多个选项正确|有多个选项符合|有多个正确选项|不止一个正确|不止一项正确", "phrase:有多项符合"),
-    (r"选出所有满足条件|所有满足条件的|选出所有|全部满足条件", "phrase:选出所有满足条件的"),
-    (r"正确的个数|正确选项的个数|正确选项共有", "phrase:正确的个数"),
-    (r"全部选对(?:的)?得\s*\d|部分选对(?:的)?得\s*\d|选对一部分(?:的)?得\s*\d", "scoring:全部选对/部分选对"),
-    (r"部分选对的得部分分|对而不全|选对但不全|漏选", "scoring:部分分"),
+    (r"多选题|多项选择题|多项选择|（多选）|\(多选\)|多选\b", "题干标注「多选题」"),
+    (r"在每小题给出的四个选项中[^。；\n]{0,12}(?:有多项是符合题目要求的|有多项符合题目要求|有多个选项是符合题目要求的)",
+     "出现「在每小题给出的四个选项中，有多项符合题目要求」"),
+    (r"有多项符合题目要求|有多个选项正确|有多个选项符合|有多个正确选项|不止一个正确|不止一项正确",
+     "出现「有多项符合题目要求」"),
+    (r"选出所有满足条件|所有满足条件的|选出所有|全部满足条件", "出现「选出所有满足条件的」"),
+    (r"正确的个数|正确选项的个数|正确选项共有", "问的是「正确选项的个数」"),
+    (r"全部选对(?:的)?得\s*\d|部分选对(?:的)?得\s*\d|选对一部分(?:的)?得\s*\d",
+     "评分语含「全部选对得满分、部分选对得部分分」"),
+    (r"部分选对的得部分分|对而不全|选对但不全|漏选", "评分语含「部分选对的得部分分」"),
 )
 
 
@@ -363,17 +414,29 @@ def detect_subquestion_count(content: str) -> int:
 
     raw = str(content or "")
     found: set[int] = set()
+    # 圈码既可能是多选/单选的选项标号（①②③④），也可能是解答题的小问编号。
+    # 若选项扫描已把圈码认定为选项，就不能再把它计成小问，否则会虚增难度先验。
+    circled_as_option = False
+    try:
+        scanned = analyze_options(raw)
+        circled_count = len({ch for ch in _CIRCLED_NUMBERS if ch in raw})
+        circled_as_option = bool(scanned.get("marker")) and circled_count >= 4
+    except Exception:
+        circled_as_option = False
     for match in _SUBQUESTION_PATTERN.finditer(raw):
         token = match.group(1)
         if token.isdigit():
             found.add(int(token))
         elif token in _CIRCLED_TO_INT:
+            if circled_as_option:
+                continue
             found.add(_CIRCLED_TO_INT[token])
         elif token in _CN_NUMBERS:
             found.add(_CN_NUMBERS[token])
-    for index, ch in enumerate(_CIRCLED_NUMBERS, start=1):
-        if ch in raw:
-            found.add(index)
+    if not circled_as_option:
+        for index, ch in enumerate(_CIRCLED_NUMBERS, start=1):
+            if ch in raw:
+                found.add(index)
     count = 0
     while count + 1 in found:
         count += 1
@@ -431,17 +494,26 @@ def decide_question_type(content: str, ai_value=None) -> tuple[str, str, dict]:
     def choice_kind(source_hint: str) -> tuple[str, str]:
         return (QUESTION_TYPE_MULTI_CHOICE if multi else QUESTION_TYPE_SINGLE_CHOICE), source_hint
 
-    # 1. Structural macros are the strongest evidence.
+    explicit_ai = ai_type in (QUESTION_TYPE_SINGLE_CHOICE, QUESTION_TYPE_MULTI_CHOICE)
+
+    # 1. Structural macros are the strongest evidence -- but they can only
+    # prove "this question has options", never whether one or several are
+    # correct.  When the model already answered that, keep its answer: the
+    # rule layer must not overwrite a semantic judgement it cannot make.
     if structure == QUESTION_FORM_CHOICE:
+        if explicit_ai:
+            return ai_type, "structure", evidence
         kind, _ = choice_kind("structure")
         return kind, "structure", evidence
     if structure == QUESTION_FORM_FILL_IN_BLANK:
         return QUESTION_TYPE_FILL_IN_BLANK, "structure", evidence
 
     # 2. + 3. Normalized AI value, corrected by local evidence.
-    if ai_type == QUESTION_TYPE_SINGLE_CHOICE or ai_type == QUESTION_TYPE_MULTI_CHOICE:
+    if explicit_ai:
         if options["has_options"]:
-            return choice_kind("ai")
+            # 模型已明确区分单选/多选，直接采信；仅当模型只给了粗粒度 choice
+            # 时才用「多选提示语」兜底判断。
+            return ai_type, "ai", evidence
         if blanks:
             return QUESTION_TYPE_FILL_IN_BLANK, "corrected", evidence
         return QUESTION_TYPE_DETAILED_ANSWER, "corrected", evidence
@@ -508,25 +580,25 @@ def estimate_difficulty_prior(content: str) -> tuple[str, list[str]]:
     subquestions = detect_subquestion_count(raw)
     if subquestions >= 3:
         score += 2
-        signals.append(f"小问数≥3（{subquestions}）")
+        signals.append(f"共 {subquestions} 个小问，数量偏多")
     elif subquestions == 2:
         score += 1
-        signals.append("小问数=2")
+        signals.append("共 2 个小问")
 
     param_discussion = detect_parameter_discussion(raw)
     if param_discussion:
         score += 2
-        signals.append("含参讨论/存在性")
+        signals.append("含参讨论或存在性探究")
 
     hard_words = [word for word in _HARD_WORDS if word in raw]
     if hard_words:
         score += 1
-        signals.append("设问词:" + "/".join(hard_words))
+        signals.append("设问含「" + "、".join(hard_words) + "」")
 
     medium_words = [word for word in _MEDIUM_WORDS if word in raw]
     if medium_words:
         score += 1
-        signals.append("关键词:" + "/".join(medium_words))
+        signals.append("题干出现「" + "、".join(medium_words) + "」")
 
     options = analyze_options(raw)
     if options["has_options"] and detect_multi_choice_signals(raw):
@@ -570,7 +642,8 @@ _NODE_SPLIT = re.compile(r"[与和、/（(）),，·]|的应用|及其")
 
 #: Curated high-frequency 人教A版2019 terms -> node codes.
 _TERM_HINTS: dict[str, tuple[str, ...]] = {
-    "集合": ("B1-C1", "B1-C1-S1", "B1-C1-S2", "B1-C1-S3"),
+    # 注意：裸词「集合」已移出术语表（「求 a 的取值集合」会被误判到必修一第一章），
+    # 改由下方 _CONTEXT_HINTS 用带上下文的正则识别真正的集合运算。
     "交集": ("B1-C1-S3",), "并集": ("B1-C1-S3",), "补集": ("B1-C1-S3",),
     "子集": ("B1-C1-S2",), "全集": ("B1-C1-S3",),
     "充分条件": ("B1-C1-S4-P1",), "必要条件": ("B1-C1-S4-P1",), "充要条件": ("B1-C1-S4-P2",),
@@ -623,13 +696,41 @@ _TERM_HINTS: dict[str, tuple[str, ...]] = {
     "数学期望": ("X3-C7-S3-P1",), "期望": ("X3-C7-S3-P1",), "方差": ("X3-C7-S3-P2",),
     "二项分布": ("X3-C7-S4-P1",), "超几何分布": ("X3-C7-S4-P2",), "正态分布": ("X3-C7-S5",),
     "线性回归": ("X3-C8-S2",), "回归": ("X3-C8-S2",), "列联表": ("X3-C8-S3",), "独立性检验": ("X3-C8-S3",),
+
+    # ---- 补充：覆盖此前完全没有显式术语的节/小节节点 ----
+    "充分必要": ("B1-C1-S4",), "充要": ("B1-C1-S4-P2",),
+    "量词": ("B1-C1-S5",),
+    "函数值": ("B1-C3-S1-P1",), "分段函数": ("B1-C3-S4",),
+    "指数": ("B1-C4",), "根式": ("B1-C4-S1",),
+    "指数函数的概念": ("B1-C4-S2-P1",), "指数函数的图象": ("B1-C4-S2-P2",),
+    "常用对数": ("B1-C4-S3-P1",), "反函数": ("B1-C4-S4-P1",),
+    "对数函数的图象": ("B1-C4-S4-P2",), "二分法": ("B1-C4-S5",),
+    "简谐运动": ("B1-C5-S7",),
+    "样本空间": ("B2-C10",), "频率": ("B2-C10-S3",),
+    "有向线段": ("B2-C6-S1",), "单位向量": ("B2-C6-S1",),
+    "辐角": ("B2-C7-S3",), "三角形式": ("B2-C7-S3",),
+    "空间几何体": ("B2-C8",), "抽样": ("B2-C9",), "统计分析": ("B2-C9-S3",),
+    "空间向量的线性运算": ("X1-C1-S1-P1",), "空间向量基本定理": ("X1-C1-S2",),
+    "空间向量运算的坐标表示": ("X1-C1-S3-P2",), "法向量": ("X1-C1-S4",),
+    "直线方程": ("X1-C2",), "两条直线平行": ("X1-C2-S1-P2",),
+    "两点式": ("X1-C2-S2-P2",), "交点坐标": ("X1-C2-S3",),
+    "两条直线的交点": ("X1-C2-S3-P1",), "两点间的距离": ("X1-C2-S3-P2",),
+    "圆与圆的位置关系": ("X1-C2-S5",),
+    "椭圆的标准方程": ("X1-C3-S1-P1",), "双曲线的标准方程": ("X1-C3-S2-P1",),
+    "抛物线的标准方程": ("X1-C3-S3-P1",), "焦点弦": ("X1-C3-S3-P2",),
+    "平均变化率": ("X2-C5-S1-P1",), "瞬时速度": ("X2-C5-S1-P2",),
+    "导数公式": ("X2-C5-S2-P1",), "导数的四则运算": ("X2-C5-S2-P2",),
+    "排列与组合": ("X3-C6-S2",), "排列数": ("X3-C6-S2-P2",), "组合数": ("X3-C6-S2-P4",),
+    "随机变量": ("X3-C7",), "离散型随机变量的数字特征": ("X3-C7-S3",),
+    "成对数据": ("X3-C8",), "散点图": ("X3-C8-S1",), "相关关系": ("X3-C8-S1",),
 }
 
 #: Surface notation -> chapter hints.  OCR / Word exports often lose the
 #: Chinese topic words entirely (``f(x)=a^{x}`` never says 指数函数), so a
 #: small notation table keeps the retriever from returning nothing.
 _SURFACE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    (r"a\^\{?\s*x\s*\}?|\\?\^ ?\{?x\}?\}", ("B1-C4-S2",)),
+    # 只认底数为 a/b 的指数式（教材里指数函数写作 y=a^x），避免 e^{x}、2^{x} 误命中
+    (r"(?<![a-zA-Z])[ab]\s*\^\s*\{?\s*x\s*\}?", ("B1-C4-S2",)),
     (r"\\log|\blog|\blg\s|\bln\s", ("B1-C4-S3", "B1-C4-S4")),
     (r"\\sin|\\cos|\\tan|\bsin|\bcos|\btan", ("B1-C5-S2", "B1-C5-S4")),
     (r"\\vec|\\overrightarrow|向量", ("B2-C6", "X1-C1")),
@@ -646,10 +747,31 @@ _SURFACE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (r"△|对边|解三角形|余弦定理|正弦定理", ("B2-C6-S4",)),
     # a + k/a 与 1/a + 1/b 是「基本不等式」的标志性外形
     (r"[a-z]\s*\+\s*\d\s*/\s*[a-z]|\d\s*/\s*[a-z]\s*\+\s*\d\s*/\s*[a-z]", ("B1-C2-S2",)),
-    (r"f\s*\(\s*x\s*\)|函数", ("B1-C3",)),
+    # 裸的「函数」「f(x)」几乎出现在每一道题里，用它定位会淹没真正考点，
+    # 因此只在出现必修三专属问法（定义域/值域/单调性/奇偶性/解析式）时才生效。
+    (r"(?:定义域|值域|对应关系|单调性|奇偶性|解析式)", ("B1-C3",)),
 )
 
+#: 需要上下文才成立的术语：裸词过于泛化，直接匹配会误判。
+_CONTEXT_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (r"集合\s*[A-Z]|∁\s*[Uu]|[∩∪⊆⊇∁]|补集|交集|并集|子集|全集|空集|元素",
+     ("B1-C1", "B1-C1-S1", "B1-C1-S3")),
+)
+
+#: 这些词在教材里出现频率极高但指向性极弱，不作为定位依据。
+_TERM_STOPWORDS = frozenset({"集合", "函数", "方程", "图象", "图像", "性质", "应用"})
+
 _LEVEL_WEIGHT = {"book": 0.6, "chapter": 1.0, "section": 1.2, "subsection": 1.3}
+
+#: 面向老师的中文标签，直接渲染到弹窗上，不要改成英文枚举。
+_TYPE_LABELS = {
+    "single_choice": "单选题",
+    "multi_choice": "多选题",
+    "fill_in_blank": "填空题",
+    "detailed_answer": "解答题",
+    "unknown": "未判定",
+}
+_LEVEL_LABELS = {"easy": "基础题", "medium": "中档题", "hard": "难题"}
 
 
 @lru_cache(maxsize=1)
@@ -673,7 +795,7 @@ def _auto_terms() -> tuple[tuple[str, tuple[str, ...]], ...]:
             continue
         for piece in [name, *_NODE_SPLIT.split(name)]:
             piece = piece.strip()
-            if len(piece) >= 2:
+            if len(piece) >= 2 and piece not in _TERM_STOPWORDS:
                 bucket.setdefault(piece, set()).add(code)
     return tuple((term, tuple(sorted(codes))) for term, codes in bucket.items())
 
@@ -736,6 +858,11 @@ def suggest_chapter_candidates(content: str, top_n: int = 8) -> list[tuple[str, 
             weight = 4 ** 1.5
             for code in codes:
                 bump(code, weight)
+    for pattern, codes in _CONTEXT_HINTS:
+        if re.search(pattern, raw):
+            weight = 4 ** 1.5
+            for code in codes:
+                bump(code, weight)
 
     ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
     return [(code, node_path(code, "A")) for code, _ in ranked[:top_n]]
@@ -784,16 +911,67 @@ def classify_with_rules(content: str, ai_payload: dict | None = None) -> dict:
         else:
             chapter_code, chapter_path, chapter_source = "", "", "fallback"
 
+    # 规则层一旦覆盖（或纠正）模型给出的题型，必须让老师看见，绝不能静默改写。
+    ai_expected = normalize_ai_question_type(
+        payload.get("question_type", payload.get("question_form"))
+    )
+    overridden = bool(
+        ai_expected
+        and ai_expected != question_type
+        and type_source in ("structure", "corrected", "rule")
+    )
+    # 判为选择题、但模型没有明确区分单选/多选、且题干也没有多选提示语时，
+    # 单选/多选无法可靠区分，必须交老师确认。
+    ai_raw = str(payload.get("question_type", payload.get("question_form")) or "").strip().lower()
+    ai_explicit = ai_raw in {"single_choice", "multi_choice", "单选题", "多选题", "单选", "多选"}
+    choice_ambiguous = bool(
+        question_type in (QUESTION_TYPE_SINGLE_CHOICE, QUESTION_TYPE_MULTI_CHOICE)
+        and not ai_explicit
+        and not decision["multi_signals"]
+    )
+
+    review_reasons: list[str] = []
+    if overridden:
+        review_reasons.append(
+            f"规则层依据题干结构把模型的「{_TYPE_LABELS.get(ai_expected, ai_expected)}」"
+            f"判定为「{_TYPE_LABELS.get(question_type, question_type)}」，请核对"
+        )
+    if choice_ambiguous:
+        review_reasons.append("题干未出现多选提示语，单选题/多选题需人工确认")
+    if question_type == QUESTION_TYPE_UNKNOWN:
+        review_reasons.append("题型无法可靠判定，请手动选择")
+    if difficulty_conflict:
+        review_reasons.append(
+            f"难度判定存在分歧：模型判为{_LEVEL_LABELS.get(difficulty, difficulty)}，"
+            f"规则先验为{_LEVEL_LABELS.get(prior, prior)}，请人工确认"
+        )
+    if chapter_source == "rule":
+        review_reasons.append("教材章节由规则检索得出，非模型判断，请核对")
+    if chapter_source == "fallback" or not chapter_code:
+        review_reasons.append("未能匹配到教材章节，请手动选择")
+
     needs_review = bool(
-        difficulty_conflict
+        review_reasons
         or question_type == QUESTION_TYPE_UNKNOWN
         or chapter_source != "ai"
         or difficulty_source == "prior"
     )
 
+    ranked_candidates = _rank_type_candidates(
+        question_type, options["has_options"], decision["blanks"], bool(decision["multi_signals"])
+    )
+
+    # ``is_fallback`` means "the whole payload is degraded", not "something is
+    # uncertain": it is reserved for the case where neither the question type
+    # nor the chapter could be determined at all.  Softer cases (rule-derived
+    # chapter, difficulty conflict, corrected type) only raise
+    # ``needs_review`` so the UI never shows two overlapping warnings.
+    is_fallback = question_type == QUESTION_TYPE_UNKNOWN and chapter_source == "fallback"
+
     return {
         "question_type": question_type,
         "question_type_source": type_source,
+        "question_type_candidates": ranked_candidates,
         "question_form": question_form,
         "question_form_source": type_source,
         "difficulty": difficulty,
@@ -811,6 +989,30 @@ def classify_with_rules(content: str, ai_payload: dict | None = None) -> dict:
             "param_discussion": param_discussion,
             "difficulty_signals": prior_signals,
         },
+        "review_reasons": review_reasons,
         "needs_review": needs_review,
-        "is_fallback": question_type == QUESTION_TYPE_UNKNOWN or chapter_source == "fallback",
+        "is_fallback": is_fallback,
     }
+
+
+def _rank_type_candidates(
+    decided: str, has_options: bool, blanks: bool, multi: bool
+) -> list[str]:
+    """Ranked plausible question types, decided one first.
+
+    When the engine could not decide (``unknown``) this list is what the UI
+    offers the teacher as one-click alternatives instead of making them pick
+    from the full four-value set.
+    """
+
+    if has_options:
+        ranked = ["multi_choice", "single_choice"] if multi else ["single_choice", "multi_choice"]
+    elif blanks:
+        ranked = ["fill_in_blank", "detailed_answer"]
+    else:
+        ranked = ["detailed_answer", "fill_in_blank", "single_choice"]
+
+    if decided in (QUESTION_TYPE_SINGLE_CHOICE, QUESTION_TYPE_MULTI_CHOICE,
+                   QUESTION_TYPE_FILL_IN_BLANK, QUESTION_TYPE_DETAILED_ANSWER):
+        return [decided, *[item for item in ranked if item != decided][:2]]
+    return ranked[:3]
