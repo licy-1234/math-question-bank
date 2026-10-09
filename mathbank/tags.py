@@ -247,7 +247,9 @@ def normalize_tag_codes(dim: str, values: Iterable) -> list[str]:
             continue
         seen.add(code)
         if dim == "chapter":
-            # Chapter codes are validated against the tree, not the schema file.
+            # Chapter codes are validated against the tree (via normalize_codes),
+            # not the schema file, so there is no allowed-vocabulary check here.
+            result.append(code)
             continue
         if allowed and code not in allowed:
             continue

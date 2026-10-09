@@ -964,11 +964,19 @@
                 );
                 formData.append('tags', tags);
                 if (window.MathBankTags && typeof window.MathBankTags.getSelection === 'function') {
-                    const tagSelection = window.MathBankTags.getSelection();
-                    formData.append('tag_chapter_codes', JSON.stringify(tagSelection.chapter_codes || []));
-                    formData.append('tag_thought_codes', JSON.stringify(tagSelection.thought_codes || []));
-                    formData.append('tag_function_code', tagSelection.function_code || '');
-                    formData.append('tag_custom_tags', tagSelection.custom_tags || '');
+                    // 新建时始终提交标签；编辑时仅当用户真的动过标签才提交，
+                    // 否则后端会把"未提交"当作"原样保留"，避免纯改正文时误清空章节。
+                    const isUpdate = !!(editorSession && editorSession.questionId);
+                    const tagDirty = (typeof window.MathBankTags.isDirty === 'function')
+                        ? window.MathBankTags.isDirty()
+                        : true;
+                    if (!isUpdate || tagDirty) {
+                        const tagSelection = window.MathBankTags.getSelection();
+                        formData.append('tag_chapter_codes', JSON.stringify(tagSelection.chapter_codes || []));
+                        formData.append('tag_thought_codes', JSON.stringify(tagSelection.thought_codes || []));
+                        formData.append('tag_function_code', tagSelection.function_code || '');
+                        formData.append('tag_custom_tags', tagSelection.custom_tags || '');
+                    }
                 }
                 const combinedImages = typeof window.editorAssetReferences === 'function'
                     ? window.editorAssetReferences() : Array.from(new Set([

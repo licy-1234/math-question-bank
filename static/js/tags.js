@@ -17,7 +17,8 @@
         schema: null,
         chapters: [],   // 已选章节节点编码
         thoughts: [],   // 已选思想方法编码
-        functionCode: ''
+        functionCode: '',
+        dirty: false    // 用户是否主动改动过标签（用于区分"回显"与"编辑"）
     };
 
     function $(id) {
@@ -119,6 +120,7 @@
             remove.innerHTML = '<i class="fa-solid fa-xmark"></i>';
             remove.addEventListener('click', () => {
                 State.chapters = State.chapters.filter((item) => item !== code);
+                State.dirty = true;
                 renderChapterChips();
             });
             chip.appendChild(remove);
@@ -146,6 +148,7 @@
                 } else {
                     State.thoughts.splice(index, 1);
                 }
+                State.dirty = true;
                 renderThoughtChips();
             });
             container.appendChild(chip);
@@ -215,6 +218,7 @@
                     return;
                 }
                 if (State.chapters.indexOf(code) === -1) State.chapters.push(code);
+                State.dirty = true;
                 renderChapterChips();
             });
         }
@@ -238,6 +242,7 @@
             if (functionSelect) {
                 functionSelect.addEventListener('change', () => {
                     State.functionCode = functionSelect.value || '';
+                    State.dirty = true;
                 });
             }
             State.ready = true;
@@ -267,6 +272,7 @@
         State.chapters = chapters.filter(Boolean);
         State.thoughts = thoughts.filter(Boolean);
         State.functionCode = functions.length ? functions[0] : '';
+        State.dirty = false;  // 回显现有标签不算"改动"
         if (State.ready) {
             renderChapterChips();
             renderThoughtChips();
@@ -286,6 +292,7 @@
         State.chapters = [];
         State.thoughts = [];
         State.functionCode = '';
+        State.dirty = true;
         renderChapterChips();
         renderThoughtChips();
         const functionSelect = $('tagFunctionSelect');
@@ -296,5 +303,9 @@
         });
     }
 
-    window.MathBankTags = { init, getSelection, setSelection, clear, state: State };
+    function isDirty() {
+        return State.dirty === true;
+    }
+
+    window.MathBankTags = { init, getSelection, setSelection, clear, isDirty, state: State };
 })();

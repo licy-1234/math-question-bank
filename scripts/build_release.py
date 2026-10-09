@@ -1122,6 +1122,10 @@ def zip_macos_release():
     macos_build_dir = MACOS_BUILD_DIR
     copy_app_files(macos_build_dir, "启动题库系统.command")
     launcher_path = os.path.join(macos_build_dir, "启动题库系统.command")
+    # 强制 LF：Windows 上 core.autocrlf=true 检出后可能带 CRLF，
+    # macOS 下 `#!/bin/bash\r` 会报 "bad interpreter"，必须归一。
+    _launcher = Path(launcher_path)
+    _launcher.write_bytes(_launcher.read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n"))
     os.chmod(launcher_path, 0o755)
     try:
         return _build_archive(

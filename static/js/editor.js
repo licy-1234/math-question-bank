@@ -1287,7 +1287,7 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             }
         }
 
-        async function onStatsQueryChapterChange() {
+        function onStatsQueryChapterChange() {
             const bookVal = document.getElementById('statsQueryCompulsory').value;
             const chapterVal = document.getElementById('statsQueryChapter').value;
             

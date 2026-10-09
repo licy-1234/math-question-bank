@@ -2236,6 +2236,11 @@ def draw_tikz_from_image_endpoint(
 
 # ----------------- Questions Management API -----------------
 
+def _escape_like(term: str) -> str:
+    """转义 LIKE 通配符，使搜索词按字面匹配（% / _ / \\）。"""
+    return str(term or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 @app.get("/api/questions")
 def list_questions(
     q: str = None,
@@ -2287,22 +2292,23 @@ def list_questions(
                     target_id_by_seq = row[0]
 
     if search_q:
+        escaped_q = _escape_like(search_q)
         if target_id_by_seq is not None:
             query = query.filter(
                 (Question.id == target_id_by_seq) |
-                (Question.content.like(f"%{search_q}%")) | 
-                (Question.source.like(f"%{search_q}%")) |
-                (Question.answer_markdown.like(f"%{search_q}%")) |
-                (Question.review.like(f"%{search_q}%")) |
-                (Question.tags.like(f"%{search_q}%"))
+                (Question.content.like(f"%{escaped_q}%", escape="\\")) | 
+                (Question.source.like(f"%{escaped_q}%", escape="\\")) |
+                (Question.answer_markdown.like(f"%{escaped_q}%", escape="\\")) |
+                (Question.review.like(f"%{escaped_q}%", escape="\\")) |
+                (Question.tags.like(f"%{escaped_q}%", escape="\\"))
             )
         else:
             query = query.filter(
-                (Question.content.like(f"%{search_q}%")) | 
-                (Question.source.like(f"%{search_q}%")) |
-                (Question.answer_markdown.like(f"%{search_q}%")) |
-                (Question.review.like(f"%{search_q}%")) |
-                (Question.tags.like(f"%{search_q}%"))
+                (Question.content.like(f"%{escaped_q}%", escape="\\")) | 
+                (Question.source.like(f"%{escaped_q}%", escape="\\")) |
+                (Question.answer_markdown.like(f"%{escaped_q}%", escape="\\")) |
+                (Question.review.like(f"%{escaped_q}%", escape="\\")) |
+                (Question.tags.like(f"%{escaped_q}%", escape="\\"))
             )
     if comp_val:
         query = query.filter(Question.category_compulsory == comp_val)
@@ -2315,7 +2321,7 @@ def list_questions(
     if difficulty:
         query = query.filter(Question.difficulty == difficulty)
     if source:
-        query = query.filter(Question.source.like(f"%{source}%"))
+        query = query.filter(Question.source.like(f"%{_escape_like(source)}%", escape="\\"))
 
     # Multi-value tag filters.  Chapter codes match the node and every
     # descendant because a parent code covers its whole subtree.
@@ -2354,7 +2360,7 @@ def list_questions(
             Question.id.in_(
                 db.query(QuestionTag.question_id).filter(
                     QuestionTag.dim == "custom",
-                    QuestionTag.code.like(f"%{tag}%"),
+                    QuestionTag.code.like(f"%{_escape_like(tag)}%", escape="\\"),
                 )
             )
         )
@@ -4036,6 +4042,10 @@ def _chapter_statistics(db: Session) -> tuple[dict, list]:
             node = _node(code)
             if not node:
                 continue
+            if node.get("level") == "book":
+                # 册级标签（只选了册次）：无章号，归入该册"未分章节"桶
+                chapters.add((node.get("book", ""), "__BOOK__"))
+                continue
             book_code = node.get("book", "")
             chapter_code = f"{book_code}-C{node.get('chapter_no')}"
             if chapter_code in index:
@@ -4079,12 +4089,15 @@ def _chapter_statistics(db: Session) -> tuple[dict, list]:
         book_node = _node(book_code)
         book_name = (book_node or {}).get("name") or book_code
         for chapter_code in sorted(grouped[book_code], key=_chapter_sort_key):
-            ch_node = _node(chapter_code)
-            chapter_name = (
-                f"第{ch_node.get('chapter_no')}章 {ch_node.get('name')}"
-                if ch_node
-                else chapter_code
-            )
+            if chapter_code == "__BOOK__":
+                chapter_name = "未分章节"
+            else:
+                ch_node = _node(chapter_code)
+                chapter_name = (
+                    f"第{ch_node.get('chapter_no')}章 {ch_node.get('name')}"
+                    if ch_node
+                    else chapter_code
+                )
             count = grouped[book_code][chapter_code]
             compulsory_chapter_counts.setdefault(book_name, {})[chapter_name] = count
 
@@ -5402,10 +5415,10 @@ def ai_select_paper(payload: dict, db: Session = Depends(get_db)):
                 if question_type:
                     sub_query = sub_query.filter(Question.question_type == question_type)
                 sub_query = sub_query.filter(
-                    (Question.content.like(f"%{topic}%")) |
-                    (Question.category_chapter.like(f"%{topic}%")) |
-                    (Question.category_knowledge.like(f"%{topic}%")) |
-                    (Question.tags.like(f"%{topic}%"))
+                    (Question.content.like(f"%{_escape_like(topic)}%", escape="\\")) |
+                    (Question.category_chapter.like(f"%{_escape_like(topic)}%", escape="\\")) |
+                    (Question.category_knowledge.like(f"%{_escape_like(topic)}%", escape="\\")) |
+                    (Question.tags.like(f"%{_escape_like(topic)}%", escape="\\"))
                 )
                 order_clause = Question.usage_count.desc() if is_review_intent else Question.usage_count.asc()
                 for q in sub_query.order_by(order_clause, Question.id.desc()).all():

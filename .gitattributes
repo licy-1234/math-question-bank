@@ -1,2 +1,6 @@
 # cmd.exe batch files must keep Windows line endings on every build host.
 *.bat text eol=crlf
+# Shell / macOS launcher scripts must keep LF endings so `#!/bin/bash` stays
+# intact when the repo is checked out on Windows (core.autocrlf=true).
+*.sh text eol=lf
+*.command text eol=lf
