@@ -3995,6 +3995,131 @@ def save_metadata_config(
 
 # ----------------- DB Statistics API -----------------
 
+def _chapter_statistics(db: Session) -> tuple[dict, list]:
+    """Roll multi-value chapter tags up into 册 / 章 / 节 statistics.
+
+    The classification system stores a question's curriculum location as
+    multi-value ``question_tags`` rows (``dim='chapter'``) whose codes point into
+    the four-level tree (册 / 章 / 节 / 小节).  This helper turns those rows into
+    the shapes the statistics panel needs:
+
+      * ``compulsory_chapter_counts`` -- ``{册名: {章名: count}}`` (backward
+        compatible, display names use the same format as ``tags.js``:
+        book ``name`` and ``第N章 <name>``).
+      * ``chapter_stats`` -- one entry per (册, 章) carrying the codes plus a
+        per-section breakdown, so the panel can drill down without re-deriving
+        codes on the frontend.
+
+    Compatibility: a question with no chapter tag falls back to its legacy
+    ``category_compulsory`` / ``category_chapter`` fields, and a question with
+    neither lands in the ``未分类`` bucket.  ``migrate_db.py`` backfills tags
+    from the legacy fields so existing data keeps resolving correctly.
+    """
+
+    index = curriculum_index()
+
+    def _node(code: str):
+        return index.get(str(code or "").strip())
+
+    # question_id -> chapter tag codes (any depth)
+    tag_codes: dict[int, list[str]] = {}
+    for qid, code in db.query(QuestionTag.question_id, QuestionTag.code).filter(
+        QuestionTag.dim == "chapter"
+    ).all():
+        tag_codes.setdefault(qid, []).append(code)
+
+    chapter_buckets: dict[tuple[str, str], int] = {}
+    section_question_ids: dict[str, set] = {}
+    for qid, codes in tag_codes.items():
+        chapters: set[tuple[str, str]] = set()
+        for code in codes:
+            node = _node(code)
+            if not node:
+                continue
+            book_code = node.get("book", "")
+            chapter_code = f"{book_code}-C{node.get('chapter_no')}"
+            if chapter_code in index:
+                chapters.add((book_code, chapter_code))
+            if node.get("level") in ("section", "subsection"):
+                section_code = f"{chapter_code}-S{node.get('section_no')}"
+                if section_code in index:
+                    section_question_ids.setdefault(section_code, set()).add(qid)
+        for pair in chapters:
+            chapter_buckets[pair] = chapter_buckets.get(pair, 0) + 1
+
+    # legacy fallback for questions without any chapter tag
+    legacy_buckets: dict[tuple[str, str], int] = {}
+    for qid, comp, chap in db.query(
+        Question.id, Question.category_compulsory, Question.category_chapter
+    ).all():
+        if qid in tag_codes:
+            continue
+        comp_name = (comp or "").strip() or "未分类"
+        chap_name = (chap or "").strip() or "未分章节"
+        legacy_buckets[(comp_name, chap_name)] = legacy_buckets.get((comp_name, chap_name), 0) + 1
+
+    book_order = {"B1": 1, "B2": 2, "B3": 3, "X1": 4, "X2": 5, "X3": 6}
+
+    def _book_sort_key(code: str):
+        return (book_order.get(code, 99), code)
+
+    def _chapter_sort_key(code: str):
+        node = _node(code)
+        return ((node or {}).get("chapter_no") or 999, code)
+
+    compulsory_chapter_counts: dict[str, dict[str, int]] = {}
+    chapter_stats: list[dict] = []
+
+    grouped: dict[str, dict[str, int]] = {}
+    for (book_code, chapter_code), count in chapter_buckets.items():
+        inner = grouped.setdefault(book_code, {})
+        inner[chapter_code] = inner.get(chapter_code, 0) + count
+
+    for book_code in sorted(grouped, key=_book_sort_key):
+        book_node = _node(book_code)
+        book_name = (book_node or {}).get("name") or book_code
+        for chapter_code in sorted(grouped[book_code], key=_chapter_sort_key):
+            ch_node = _node(chapter_code)
+            chapter_name = (
+                f"第{ch_node.get('chapter_no')}章 {ch_node.get('name')}"
+                if ch_node
+                else chapter_code
+            )
+            count = grouped[book_code][chapter_code]
+            compulsory_chapter_counts.setdefault(book_name, {})[chapter_name] = count
+
+            sections: list[dict] = []
+            for section_code, qids in section_question_ids.items():
+                if not section_code.startswith(chapter_code + "-S"):
+                    continue
+                sec_node = _node(section_code)
+                sections.append(
+                    {
+                        "code": section_code,
+                        "name": (sec_node or {}).get("name") or section_code,
+                        "count": len(qids),
+                    }
+                )
+            sections.sort(key=lambda item: item["code"])
+            chapter_stats.append(
+                {
+                    "book_code": book_code,
+                    "book_name": book_name,
+                    "chapter_code": chapter_code,
+                    "chapter_name": chapter_name,
+                    "count": count,
+                    "sections": sections,
+                }
+            )
+
+    # append legacy-only buckets to the backward-compatible nested shape
+    for (comp_name, chap_name), count in legacy_buckets.items():
+        inner = compulsory_chapter_counts.setdefault(comp_name, {})
+        inner[chap_name] = inner.get(chap_name, 0) + count
+
+    return compulsory_chapter_counts, chapter_stats
+
+
 @app.get("/api/stats")
 def get_db_stats(db: Session = Depends(get_db)):
     try:
@@ -4003,38 +4128,9 @@ def get_db_stats(db: Session = Depends(get_db)):
         medium = db.query(Question).filter(Question.difficulty == "medium").count()
         hard = db.query(Question).filter(Question.difficulty == "hard").count()
         
-        # Cascaded Stage & Chapter Counts
-        rows = db.query(
-            Question.category_compulsory,
-            Question.category_chapter
-        ).all()
-        
-        comp_chap_stats = {}
-        for comp, chap in rows:
-            comp_val = comp or "未分类"
-            chap_val = chap or "未分章节"
-            if comp_val not in comp_chap_stats:
-                comp_chap_stats[comp_val] = {}
-            if chap_val not in comp_chap_stats[comp_val]:
-                comp_chap_stats[comp_val][chap_val] = 0
-            comp_chap_stats[comp_val][chap_val] += 1
-            
-        def compulsory_sort_key(comp_name: str):
-            if not comp_name or comp_name == "未分类":
-                return (99, 99, comp_name or "")
-            num_map = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6}
-            is_comp = 0 if ("必修" in comp_name and "选" not in comp_name) else 1
-            num = 99
-            for k, v in num_map.items():
-                if k in comp_name:
-                    num = min(num, v)
-            return (is_comp, num, comp_name)
+        # 册/章/节 统计：从多值标签系统（question_tags）读取，旧字段仅作兜底
+        compulsory_chapter_counts, chapter_stats = _chapter_statistics(db)
 
-        sorted_comp_chap_stats = {
-            k: comp_chap_stats[k]
-            for k in sorted(comp_chap_stats.keys(), key=compulsory_sort_key)
-        }
-            
         # Daily additions in local time (UTC+8)
         date_rows = db.query(Question.created_at).all()
         daily_adds = {}
@@ -4051,7 +4147,8 @@ def get_db_stats(db: Session = Depends(get_db)):
             "easy_count": easy,
             "medium_count": medium,
             "hard_count": hard,
-            "compulsory_chapter_counts": sorted_comp_chap_stats,
+            "compulsory_chapter_counts": compulsory_chapter_counts,
+            "chapter_stats": chapter_stats,
             "daily_adds": daily_adds
         }
     except Exception as e:

@@ -1256,25 +1256,31 @@ window.normalizeEditorFractions = normalizeEditorFractions;
         function populateStatsQueryCompulsory() {
             const compSelect = document.getElementById('statsQueryCompulsory');
             compSelect.innerHTML = '<option value="">-- 选择学段 --</option>';
-            if (globalStatsData && globalStatsData.compulsory_chapter_counts) {
-                Object.keys(globalStatsData.compulsory_chapter_counts).forEach(comp => {
-                    compSelect.innerHTML += `<option value="${window.MathBankSafe.escapeAttribute(comp)}">${window.MathBankSafe.escapeText(comp)}</option>`;
-                });
-            }
+            const stats = globalStatsData && globalStatsData.chapter_stats;
+            if (!Array.isArray(stats)) return;
+            const seen = {};
+            stats.forEach(item => {
+                if (!seen[item.book_code]) {
+                    seen[item.book_code] = true;
+                    compSelect.innerHTML += `<option value="${window.MathBankSafe.escapeAttribute(item.book_code)}">${window.MathBankSafe.escapeText(item.book_name)}</option>`;
+                }
+            });
         }
 
         function onStatsQueryCompulsoryChange() {
-            const compVal = document.getElementById('statsQueryCompulsory').value;
+            const bookVal = document.getElementById('statsQueryCompulsory').value;
             const chapSelect = document.getElementById('statsQueryChapter');
             
             chapSelect.innerHTML = '<option value="">-- 选择章节 --</option>';
             document.getElementById('statsQueryResultEmpty').classList.remove('hidden');
             document.getElementById('statsQueryResultData').classList.add('hidden');
             
-            if (compVal && globalStatsData && globalStatsData.compulsory_chapter_counts[compVal]) {
+            const stats = globalStatsData && globalStatsData.chapter_stats;
+            const chapters = Array.isArray(stats) ? stats.filter(item => item.book_code === bookVal) : [];
+            if (bookVal && chapters.length) {
                 chapSelect.disabled = false;
-                Object.keys(globalStatsData.compulsory_chapter_counts[compVal]).forEach(chap => {
-                    chapSelect.innerHTML += `<option value="${window.MathBankSafe.escapeAttribute(chap)}">${window.MathBankSafe.escapeText(chap)}</option>`;
+                chapters.forEach(item => {
+                    chapSelect.innerHTML += `<option value="${window.MathBankSafe.escapeAttribute(item.chapter_code)}">${window.MathBankSafe.escapeText(item.chapter_name)}</option>`;
                 });
             } else {
                 chapSelect.disabled = true;
@@ -1282,13 +1288,13 @@ window.normalizeEditorFractions = normalizeEditorFractions;
         }
 
         async function onStatsQueryChapterChange() {
-            const compVal = document.getElementById('statsQueryCompulsory').value;
-            const chapVal = document.getElementById('statsQueryChapter').value;
+            const bookVal = document.getElementById('statsQueryCompulsory').value;
+            const chapterVal = document.getElementById('statsQueryChapter').value;
             
             const emptyPanel = document.getElementById('statsQueryResultEmpty');
             const dataPanel = document.getElementById('statsQueryResultData');
             
-            if (!compVal || !chapVal) {
+            if (!bookVal || !chapterVal) {
                 emptyPanel.classList.remove('hidden');
                 dataPanel.classList.add('hidden');
                 return;
@@ -1297,40 +1303,30 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             emptyPanel.classList.add('hidden');
             dataPanel.classList.remove('hidden');
             
-            // Get count for selected chapter
-            const count = globalStatsData.compulsory_chapter_counts[compVal][chapVal] || 0;
+            const stats = globalStatsData && globalStatsData.chapter_stats;
+            const entry = Array.isArray(stats)
+                ? stats.find(item => item.chapter_code === chapterVal)
+                : null;
+            const count = entry ? entry.count : 0;
             document.getElementById('statsQueryCount').textContent = count;
             
-            // Query local questions list to get knowledge point distributions
-            const params = new URLSearchParams();
-            params.append('compulsory', compVal);
-            params.append('chapter', chapVal);
-            
+            // 小节分布：来自该章下按"节/小节"打的章节标签（新标签体系）
             const listContainer = document.getElementById('statsQueryKnowledgeList');
-            listContainer.innerHTML = '<div class="text-[10px] text-slate-400 py-4 text-center"><i class="fa-solid fa-spinner animate-spin mr-1"></i>正在计算知识点分布...</div>';
+            listContainer.innerHTML = '<div class="text-[10px] text-slate-400 py-4 text-center"><i class="fa-solid fa-spinner animate-spin mr-1"></i>正在计算小节分布...</div>';
             
             try {
-                const response = await fetch(`/api/questions?${params.toString()}`);
-                const questions = await response.json();
-                
-                // Group by knowledge
-                const knowStats = {};
-                questions.forEach(q => {
-                    const know = q.category_knowledge || '未细分知识点';
-                    knowStats[know] = (knowStats[know] || 0) + 1;
-                });
-                
+                const sections = (entry && Array.isArray(entry.sections)) ? entry.sections : [];
                 listContainer.innerHTML = '';
-                if (Object.keys(knowStats).length === 0) {
-                    listContainer.innerHTML = '<div class="text-[10px] text-slate-500 text-center py-4">本章暂无细分知识点</div>';
+                if (sections.length === 0) {
+                    listContainer.innerHTML = '<div class="text-[10px] text-slate-500 text-center py-4">本章暂无小节级细分标签</div>';
                 } else {
-                    Object.entries(knowStats).forEach(([know, knCount]) => {
-                        const pct = Math.round((knCount / count) * 100);
+                    sections.forEach(sec => {
+                        const pct = count ? Math.round((sec.count / count) * 100) : 0;
                         listContainer.innerHTML += `
                             <div class="space-y-1 bg-slate-50/70 dark:bg-slate-800/50 p-2 rounded-lg border border-slate-100 dark:border-slate-700/60">
                                 <div class="flex justify-between items-center text-[10px] font-semibold text-slate-700 dark:text-slate-200">
-                                    <span class="truncate pr-2">${window.MathBankSafe.escapeText(know)}</span>
-                                    <span class="font-mono text-slate-600 dark:text-slate-400 text-[10px]">${knCount} 题 (${pct}%)</span>
+                                    <span class="truncate pr-2">${window.MathBankSafe.escapeText(sec.name)}</span>
+                                    <span class="font-mono text-slate-600 dark:text-slate-400 text-[10px]">${sec.count} 题 (${pct}%)</span>
                                 </div>
                                 <div class="w-full bg-slate-200 dark:bg-slate-700 h-1.5 rounded-full overflow-hidden">
                                     <div class="bg-brand-500 h-1.5 rounded-full" style="width: ${pct}%"></div>
