@@ -182,6 +182,99 @@ def chapter_prefixes(code: str) -> list[str]:
     return [code, f"{code}-%"] if code else []
 
 
+_LEVEL_RANK = {"book": 0, "chapter": 1, "section": 2, "subsection": 3}
+
+
+def chapter_display_label(codes: Iterable, version: str = "A") -> str:
+    """Pick one readable location label for a question's chapter tags.
+
+    Card UI used to read the legacy ``category_knowledge`` column, which the
+    tag migration emptied -- every properly tagged question then showed the
+    misleading ``未分类`` badge.  This helper resolves the multi-value chapter
+    tags into the deepest shared display unit instead:
+
+      * one section (or subsections within it) → ``"2.5 直线与圆、圆与圆的位置关系"``
+      * several sections of one chapter / a chapter tag → ``"第2章 直线和圆的方程"``
+      * a book-level tag / chapters across one book → the book name
+
+    Returns ``''`` when the question carries no resolvable chapter tag, so
+    callers can fall back to legacy fields.
+    """
+
+    index = curriculum_index(version)
+    nodes = [
+        index[str(code or "").strip()]
+        for code in (codes or [])
+        if str(code or "").strip() in index
+    ]
+    if not nodes:
+        return ""
+
+    deepest = max(_LEVEL_RANK.get(node.get("level"), -1) for node in nodes)
+    # Display unit: a subsection collapses into its parent section, every
+    # other level represents itself.
+    units: dict[str, str] = {}
+    for node in nodes:
+        if _LEVEL_RANK.get(node.get("level"), -1) != deepest:
+            continue
+        if node.get("level") == "subsection":
+            parent_code = (
+                f"{node.get('book')}-C{node.get('chapter_no')}"
+                f"-S{node.get('section_no')}"
+            )
+            parent = index.get(parent_code)
+            if parent:
+                units[parent_code] = parent.get("name", "")
+            else:
+                units[node["code"]] = node.get("name", "")
+        else:
+            units[node["code"]] = node.get("name", "")
+    if not units:
+        return ""
+
+    def _section_label(code: str, name: str) -> str:
+        node = index.get(code, {})
+        chapter_no = node.get("chapter_no")
+        section_no = node.get("section_no")
+        if chapter_no is not None and section_no is not None:
+            return f"{chapter_no}.{section_no} {name}"
+        return name
+
+    if len(units) == 1:
+        (code, name) = next(iter(units.items()))
+        node = index.get(code, {})
+        level = node.get("level")
+        if level == "section":
+            return _section_label(code, name)
+        if level == "chapter":
+            chapter_no = node.get("chapter_no")
+            return f"第{chapter_no}章 {name}" if chapter_no is not None else name
+        return name
+
+    # Several display units: prefer the closest shared ancestor.
+    chapter_codes = {
+        f"{index[code].get('book')}-C{index[code].get('chapter_no')}"
+        for code in units
+        if index.get(code, {}).get("chapter_no") is not None
+    }
+    if len(chapter_codes) == 1:
+        chapter = index.get(next(iter(chapter_codes)))
+        if chapter:
+            chapter_no = chapter.get("chapter_no")
+            label = f"第{chapter_no}章 {chapter.get('name', '')}"
+            return label if chapter_no is not None else chapter.get("name", "")
+    book_codes = {index[code].get("book") for code in units if index.get(code)}
+    if len(book_codes) == 1:
+        book = index.get(next(iter(book_codes)))
+        if book:
+            return book.get("name", "")
+    # Tags scattered across books: join the two smallest unit labels.
+    ordered = sorted(units.items())
+    labels = [_section_label(code, name) for code, name in ordered[:2]]
+    suffix = " 等" if len(units) > 2 else ""
+    return " / ".join(labels) + suffix
+
+
 def normalize_codes(values: Iterable, version: str = "A") -> list[str]:
     """Keep only known node codes, preserving order and removing duplicates."""
 

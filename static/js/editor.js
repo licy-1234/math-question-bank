@@ -1111,7 +1111,7 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                     </div>
                     <div class="text-xs text-slate-700 leading-relaxed font-medium line-clamp-2 card-formula-render">${cleanContent || '[未填题干]'}</div>
                     <div class="flex justify-between items-center text-[9px] text-slate-400 border-t pt-1.5">
-                        <span class="truncate max-w-[120px] font-semibold text-emerald-600"><i class="fa-solid fa-box mr-0.5"></i>${window.MathBankSafe.escapeText(item.category_knowledge || item.category_chapter || '未分类')}</span>
+                        <span class="truncate max-w-[120px] font-semibold text-emerald-600" title="${window.MathBankSafe.escapeAttribute(item.chapter_label || item.category_knowledge || item.category_chapter || '未分类')}"><i class="fa-solid fa-box mr-0.5"></i>${window.MathBankSafe.escapeText(item.chapter_label || item.category_knowledge || item.category_chapter || '未分类')}</span>
                         <span class="font-mono text-slate-400">${window.MathBankSafe.escapeText(item.source ? item.source.substring(0, 12) : '草稿暂存')}</span>
                     </div>
                 `;
@@ -1256,6 +1256,17 @@ window.normalizeEditorFractions = normalizeEditorFractions;
         function populateStatsQueryCompulsory() {
             const compSelect = document.getElementById('statsQueryCompulsory');
             compSelect.innerHTML = '<option value="">-- 选择学段 --</option>';
+            // Full stage catalog from the curriculum tree: zero-count books stay visible.
+            const catalog = globalStatsData && Array.isArray(globalStatsData.book_catalog)
+                ? globalStatsData.book_catalog
+                : null;
+            if (catalog) {
+                catalog.forEach(book => {
+                    compSelect.innerHTML += `<option value="${window.MathBankSafe.escapeAttribute(book.book_code)}">${window.MathBankSafe.escapeText(book.book_name)}（${Number(book.count) || 0} 题）</option>`;
+                });
+                return;
+            }
+            // Backward fallback for cached payloads without book_catalog.
             const stats = globalStatsData && globalStatsData.chapter_stats;
             if (!Array.isArray(stats)) return;
             const seen = {};
@@ -1267,20 +1278,74 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             });
         }
 
+        function statsQueryBookEntry(bookVal) {
+            const catalog = globalStatsData && Array.isArray(globalStatsData.book_catalog)
+                ? globalStatsData.book_catalog
+                : null;
+            if (!catalog || !bookVal) return null;
+            return catalog.find(book => book.book_code === bookVal) || null;
+        }
+
+        function renderStatsQueryDistribution(listContainer, entries, total, emptyText) {
+            listContainer.innerHTML = '';
+            if (!Array.isArray(entries) || entries.length === 0) {
+                listContainer.innerHTML = `<div class="text-[10px] text-slate-500 text-center py-4">${emptyText}</div>`;
+                return;
+            }
+            entries.forEach(entry => {
+                const pct = total ? Math.round((entry.count / total) * 100) : 0;
+                listContainer.innerHTML += `
+                    <div class="space-y-1 bg-slate-50/70 dark:bg-slate-800/50 p-2 rounded-lg border border-slate-100 dark:border-slate-700/60">
+                        <div class="flex justify-between items-center text-[10px] font-semibold text-slate-700 dark:text-slate-200">
+                            <span class="truncate pr-2">${window.MathBankSafe.escapeText(entry.name)}</span>
+                            <span class="font-mono text-slate-600 dark:text-slate-400 text-[10px]">${entry.count} 题 (${pct}%)</span>
+                        </div>
+                        <div class="w-full bg-slate-200 dark:bg-slate-700 h-1.5 rounded-full overflow-hidden">
+                            <div class="bg-brand-500 h-1.5 rounded-full" style="width: ${pct}%"></div>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        function showStatsQueryBookSummary(bookVal) {
+            const emptyPanel = document.getElementById('statsQueryResultEmpty');
+            const dataPanel = document.getElementById('statsQueryResultData');
+            const book = statsQueryBookEntry(bookVal);
+            if (!book) {
+                emptyPanel.classList.remove('hidden');
+                dataPanel.classList.add('hidden');
+                return;
+            }
+            emptyPanel.classList.add('hidden');
+            dataPanel.classList.remove('hidden');
+            document.getElementById('statsQueryCountLabel').textContent = '本册题目总数:';
+            document.getElementById('statsQueryCount').textContent = book.count;
+            const listContainer = document.getElementById('statsQueryKnowledgeList');
+            const chapters = Array.isArray(book.chapters)
+                ? book.chapters.map(ch => ({ name: ch.chapter_name, count: ch.count }))
+                : [];
+            renderStatsQueryDistribution(
+                listContainer,
+                chapters,
+                book.count,
+                book.count > 0 ? '本册题目尚未标注到具体章节' : '本册暂无题目'
+            );
+        }
+
         function onStatsQueryCompulsoryChange() {
             const bookVal = document.getElementById('statsQueryCompulsory').value;
             const chapSelect = document.getElementById('statsQueryChapter');
-            
-            chapSelect.innerHTML = '<option value="">-- 选择章节 --</option>';
-            document.getElementById('statsQueryResultEmpty').classList.remove('hidden');
-            document.getElementById('statsQueryResultData').classList.add('hidden');
-            
-            const stats = globalStatsData && globalStatsData.chapter_stats;
-            const chapters = Array.isArray(stats) ? stats.filter(item => item.book_code === bookVal) : [];
+
+            chapSelect.innerHTML = '<option value="">-- 选择章节（可选） --</option>';
+            showStatsQueryBookSummary(bookVal);
+
+            const book = statsQueryBookEntry(bookVal);
+            const chapters = book && Array.isArray(book.chapters) ? book.chapters : [];
             if (bookVal && chapters.length) {
                 chapSelect.disabled = false;
-                chapters.forEach(item => {
-                    chapSelect.innerHTML += `<option value="${window.MathBankSafe.escapeAttribute(item.chapter_code)}">${window.MathBankSafe.escapeText(item.chapter_name)}</option>`;
+                chapters.forEach(chapter => {
+                    chapSelect.innerHTML += `<option value="${window.MathBankSafe.escapeAttribute(chapter.chapter_code)}">${window.MathBankSafe.escapeText(chapter.chapter_name)}（${chapter.count}）</option>`;
                 });
             } else {
                 chapSelect.disabled = true;
@@ -1290,51 +1355,51 @@ window.normalizeEditorFractions = normalizeEditorFractions;
         function onStatsQueryChapterChange() {
             const bookVal = document.getElementById('statsQueryCompulsory').value;
             const chapterVal = document.getElementById('statsQueryChapter').value;
-            
-            const emptyPanel = document.getElementById('statsQueryResultEmpty');
-            const dataPanel = document.getElementById('statsQueryResultData');
-            
-            if (!bookVal || !chapterVal) {
-                emptyPanel.classList.remove('hidden');
-                dataPanel.classList.add('hidden');
+
+            if (!bookVal) {
+                document.getElementById('statsQueryResultEmpty').classList.remove('hidden');
+                document.getElementById('statsQueryResultData').classList.add('hidden');
                 return;
             }
-            
+            if (!chapterVal) {
+                // Back to the book-level summary instead of a blank panel.
+                showStatsQueryBookSummary(bookVal);
+                return;
+            }
+
+            const emptyPanel = document.getElementById('statsQueryResultEmpty');
+            const dataPanel = document.getElementById('statsQueryResultData');
             emptyPanel.classList.add('hidden');
             dataPanel.classList.remove('hidden');
-            
+
+            const book = statsQueryBookEntry(bookVal);
+            const chapterEntry = book && Array.isArray(book.chapters)
+                ? book.chapters.find(ch => ch.chapter_code === chapterVal)
+                : null;
+
+            // Section breakdown comes from the tag-derived chapter_stats payload;
+            // chapters without questions simply show zero.
             const stats = globalStatsData && globalStatsData.chapter_stats;
-            const entry = Array.isArray(stats)
+            const statsEntry = Array.isArray(stats)
                 ? stats.find(item => item.chapter_code === chapterVal)
                 : null;
-            const count = entry ? entry.count : 0;
+            const count = chapterEntry ? chapterEntry.count : (statsEntry ? statsEntry.count : 0);
+            document.getElementById('statsQueryCountLabel').textContent = '章节题目总数:';
             document.getElementById('statsQueryCount').textContent = count;
-            
-            // 小节分布：来自该章下按"节/小节"打的章节标签（新标签体系）
+
             const listContainer = document.getElementById('statsQueryKnowledgeList');
             listContainer.innerHTML = '<div class="text-[10px] text-slate-400 py-4 text-center"><i class="fa-solid fa-spinner animate-spin mr-1"></i>正在计算小节分布...</div>';
-            
+
             try {
-                const sections = (entry && Array.isArray(entry.sections)) ? entry.sections : [];
-                listContainer.innerHTML = '';
-                if (sections.length === 0) {
-                    listContainer.innerHTML = '<div class="text-[10px] text-slate-500 text-center py-4">本章暂无小节级细分标签</div>';
-                } else {
-                    sections.forEach(sec => {
-                        const pct = count ? Math.round((sec.count / count) * 100) : 0;
-                        listContainer.innerHTML += `
-                            <div class="space-y-1 bg-slate-50/70 dark:bg-slate-800/50 p-2 rounded-lg border border-slate-100 dark:border-slate-700/60">
-                                <div class="flex justify-between items-center text-[10px] font-semibold text-slate-700 dark:text-slate-200">
-                                    <span class="truncate pr-2">${window.MathBankSafe.escapeText(sec.name)}</span>
-                                    <span class="font-mono text-slate-600 dark:text-slate-400 text-[10px]">${sec.count} 题 (${pct}%)</span>
-                                </div>
-                                <div class="w-full bg-slate-200 dark:bg-slate-700 h-1.5 rounded-full overflow-hidden">
-                                    <div class="bg-brand-500 h-1.5 rounded-full" style="width: ${pct}%"></div>
-                                </div>
-                            </div>
-                        `;
-                    });
-                }
+                const sections = (statsEntry && Array.isArray(statsEntry.sections))
+                    ? statsEntry.sections.map(sec => ({ name: sec.name, count: sec.count }))
+                    : [];
+                renderStatsQueryDistribution(
+                    listContainer,
+                    sections,
+                    count,
+                    count > 0 ? '本章暂无小节级细分标签' : '本章暂无题目'
+                );
             } catch (err) {
                 listContainer.innerHTML = '<div class="text-[10px] text-red-500 py-4 text-center">加载失败</div>';
             }
@@ -1594,7 +1659,7 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                             </div>
                             <div class="bank-question-excerpt text-xs text-slate-700 leading-relaxed font-medium line-clamp-2 card-formula-render">${cleanContent || '[空白题干]'}</div>
                             <div class="bank-question-meta flex justify-between items-center text-[9px] text-slate-400 border-t pt-1.5">
-                                <span class="truncate max-w-[120px] font-semibold"><i class="fa-solid fa-folder-open mr-0.5"></i>${window.MathBankSafe.escapeText(item.category_knowledge || item.category_chapter || '未分类')}</span>
+                                <span class="truncate max-w-[120px] font-semibold" title="${window.MathBankSafe.escapeAttribute(item.chapter_label || item.category_knowledge || item.category_chapter || '未分类')}"><i class="fa-solid fa-folder-open mr-0.5"></i>${window.MathBankSafe.escapeText(item.chapter_label || item.category_knowledge || item.category_chapter || '未分类')}</span>
                                 <span class="font-mono text-slate-400">${window.MathBankSafe.escapeText(item.source ? item.source.substring(0, 12) : '本地录入')}</span>
                                 <time class="bank-question-time" title="录入于 ${window.MathBankSafe.escapeText(formatChineseDate(item.created_at))}">${window.MathBankSafe.escapeText(String(item.created_at || '').slice(0, 10))}</time>
                             </div>

@@ -22,6 +22,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import declarative_base, object_session, sessionmaker
 from mathbank.paths import DATABASE_FILE, sqlite_url
 from mathbank.question_types import normalize_section_order
+from mathbank.tags import chapter_display_label
 
 
 FIGURE_ALIGN_VALUES = frozenset({"right", "center", "bottom_left", "bottom_right"})
@@ -244,6 +245,7 @@ class Question(Base):
         return grouped
 
     def to_dict(self):
+        tag_codes = self.tag_codes()
         return {
             "id": self.id,
             "content": self.content,
@@ -251,7 +253,8 @@ class Question(Base):
             "category_compulsory": self.category_compulsory,
             "category_chapter": self.category_chapter,
             "category_knowledge": self.category_knowledge,
-            "tag_codes": self.tag_codes(),
+            "tag_codes": tag_codes,
+            "chapter_label": chapter_display_label(tag_codes.get("chapter") or []),
             "difficulty": self.difficulty,
             "source": self.source,
             "answer_markdown": self.answer_markdown,
@@ -273,6 +276,7 @@ class Question(Base):
         }
 
     def to_summary_dict(self):
+        tag_codes = self.tag_codes()
         return {
             "id": self.id,
             "content": self.content,
@@ -280,7 +284,8 @@ class Question(Base):
             "category_compulsory": self.category_compulsory,
             "category_chapter": self.category_chapter,
             "category_knowledge": self.category_knowledge,
-            "tag_codes": self.tag_codes(),
+            "tag_codes": tag_codes,
+            "chapter_label": chapter_display_label(tag_codes.get("chapter") or []),
             "difficulty": self.difficulty,
             "source": self.source,
             "has_answer": bool((self.answer_markdown or "").strip()),

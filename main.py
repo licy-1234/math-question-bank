@@ -3998,7 +3998,7 @@ def save_metadata_config(
 
 # ----------------- DB Statistics API -----------------
 
-def _chapter_statistics(db: Session) -> tuple[dict, list]:
+def _chapter_statistics(db: Session) -> tuple[dict, list, list]:
     """Roll multi-value chapter tags up into 册 / 章 / 节 statistics.
 
     The classification system stores a question's curriculum location as
@@ -4012,6 +4012,10 @@ def _chapter_statistics(db: Session) -> tuple[dict, list]:
       * ``chapter_stats`` -- one entry per (册, 章) carrying the codes plus a
         per-section breakdown, so the panel can drill down without re-deriving
         codes on the frontend.
+      * ``book_catalog`` -- every book of the active curriculum tree in
+        teaching order, zero-count books included, each with its full chapter
+        list.  The statistics panel builds its stage dropdown from this so
+        stages without any question yet stay visible and selectable.
 
     Compatibility: a question with no chapter tag falls back to its legacy
     ``category_compulsory`` / ``category_chapter`` fields, and a question with
@@ -4127,7 +4131,58 @@ def _chapter_statistics(db: Session) -> tuple[dict, list]:
         inner = compulsory_chapter_counts.setdefault(comp_name, {})
         inner[chap_name] = inner.get(chap_name, 0) + count
 
-    return compulsory_chapter_counts, chapter_stats
+    # Full stage catalog: every book of the curriculum tree in teaching
+    # order, zero-count books included, each with its complete chapter list
+    # (zero-count chapters included) so the panel never hides a stage.
+    book_catalog: list[dict] = []
+    for book in load_curriculum_tree("A").get("books", []):
+        book_code = book.get("code", "")
+        chapters_out: list[dict] = []
+        book_count = 0
+        for chapter in book.get("chapters", []):
+            chapter_code = chapter.get("code", "")
+            chapter_count = grouped.get(book_code, {}).get(chapter_code, 0)
+            book_count += chapter_count
+            chapters_out.append(
+                {
+                    "chapter_code": chapter_code,
+                    "chapter_name": f"第{chapter.get('no')}章 {chapter.get('name', '')}",
+                    "count": chapter_count,
+                }
+            )
+        book_level_count = grouped.get(book_code, {}).get("__BOOK__", 0)
+        if book_level_count:
+            book_count += book_level_count
+            chapters_out.append(
+                {
+                    "chapter_code": "__BOOK__",
+                    "chapter_name": "未分章节",
+                    "count": book_level_count,
+                }
+            )
+        book_catalog.append(
+            {
+                "book_code": book_code,
+                "book_name": book.get("name", book_code),
+                "count": book_count,
+                "chapters": chapters_out,
+            }
+        )
+
+    # Questions carrying neither chapter tags nor usable legacy fields stay
+    # reachable through a trailing pseudo stage.
+    untagged = legacy_buckets.get(("未分类", "未分章节"), 0)
+    if untagged:
+        book_catalog.append(
+            {
+                "book_code": "__UNTAGGED__",
+                "book_name": "未分类",
+                "count": untagged,
+                "chapters": [],
+            }
+        )
+
+    return compulsory_chapter_counts, chapter_stats, book_catalog
 
 
 @app.get("/api/stats")
@@ -4139,7 +4194,7 @@ def get_db_stats(db: Session = Depends(get_db)):
         hard = db.query(Question).filter(Question.difficulty == "hard").count()
         
         # 册/章/节 统计：从多值标签系统（question_tags）读取，旧字段仅作兜底
-        compulsory_chapter_counts, chapter_stats = _chapter_statistics(db)
+        compulsory_chapter_counts, chapter_stats, book_catalog = _chapter_statistics(db)
 
         # Daily additions in local time (UTC+8)
         date_rows = db.query(Question.created_at).all()
@@ -4159,6 +4214,7 @@ def get_db_stats(db: Session = Depends(get_db)):
             "hard_count": hard,
             "compulsory_chapter_counts": compulsory_chapter_counts,
             "chapter_stats": chapter_stats,
+            "book_catalog": book_catalog,
             "daily_adds": daily_adds
         }
     except Exception as e:

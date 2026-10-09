@@ -3563,9 +3563,10 @@
                         
                         renderParsedQuestionsList(parsedQuestionsData);
                         renderSourceIntegrityReport(texDiagnostics);
-                        
+
                         document.getElementById('importLoadingState').classList.add('hidden');
                         document.getElementById('parsedQuestionsWrapper').classList.remove('hidden');
+                        scheduleParsedDuplicateAutoPrecheck();
 
                         if (generateAnswers) {
                             processAsyncAnswerGeneration(parsedQuestionsData, parsedQuestionsGeneration);
@@ -3772,10 +3773,11 @@
                         
                         renderParsedQuestionsList(parsedQuestionsData);
                         renderSourceIntegrityReport(task.diagnostics);
-                        
+
                         document.getElementById('importLoadingState').classList.add('hidden');
                         document.getElementById('parsedQuestionsWrapper').classList.remove('hidden');
-                        
+                        scheduleParsedDuplicateAutoPrecheck();
+
                         if (['pdf', 'docx'].includes(task.document_type) && task.generate_answers === true) {
                             processAsyncAnswerGeneration(parsedQuestionsData, parsedQuestionsGeneration);
                         }
@@ -4465,6 +4467,30 @@
                     generation: generation
                 };
             }
+        }
+
+        function scheduleParsedDuplicateAutoPrecheck() {
+            // Paper just parsed: proactively compare every unsaved question
+            // against the existing bank so similarity warnings show on the
+            // cards BEFORE the teacher starts importing.  Saving still runs
+            // its own fresh gate, so this pass is advisory only.
+            if (typeof precheckParsedQuestionDuplicates !== 'function') return;
+            if (!Array.isArray(parsedQuestionsData) || parsedQuestionsData.length === 0) return;
+            const indices = parsedQuestionsData
+                .map((q, index) => (q && !q.saved ? index : -1))
+                .filter(index => index >= 0);
+            if (indices.length === 0) return;
+            if (indices.length > 500) {
+                showToast(`本批共 ${indices.length} 题，超过单次查重上限 500 题，已跳过自动查重；可分批勾选后导入。`, 'info');
+                return;
+            }
+            setTimeout(() => {
+                precheckParsedQuestionDuplicates({
+                    indices: indices,
+                    showSummary: true,
+                    notifyFailure: false
+                });
+            }, 400);
         }
 
         function duplicateReasonLabel(reason) {
