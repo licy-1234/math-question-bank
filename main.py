@@ -3745,17 +3745,14 @@ def load_or_init_metadata():
 load_or_init_metadata()
 
 def get_active_version_code() -> str:
-    curriculum = METADATA_CACHE.get("curriculum", {})
-    combined_chapters = ""
-    for book_content in curriculum.values():
-        if isinstance(book_content, dict):
-            combined_chapters += " ".join(book_content.keys())
-    if "第一章" in combined_chapters:
-        return "B"
-    if "第 1 章 集合与逻辑" in combined_chapters or "数学建模活动案例" in combined_chapters or "第 2 章 等式与不等式" in combined_chapters or "第 3 章 幂、指数与对数" in combined_chapters:
-        return "H"
-    if "第1章" in combined_chapters:
-        return "S"
+    """返回当前启用的教材大纲版本码。
+
+    本项目仅支持人教A版（2019）。四级章节树只存在 A2019.json，标签体系
+    （mathbank/tags.py）也硬编码 A 版，因此这里固定返回 "A"，不再按章节名
+    启发式猜测 B/S/H 版本（历史遗留的多版本启发式已废弃，避免在元数据里
+    出现"第一章"这类关键字时误判成 B 版、进而读取不存在的 B2019.json）。
+    """
+
     return "A"
 
 @app.get("/api/config/metadata")
