@@ -997,12 +997,20 @@
 
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <!-- Left: Review Input - Apple Glass Style -->
-                            <div class="space-y-1.5">
+                            <div class="space-y-1.5" data-review-dropzone="editReview">
                                 <label for="editReview" class="block text-[11px] font-semibold text-slate-500 flex items-center space-x-1">
                                     <i class="fa-solid fa-comment-dots text-indigo-500 mr-1"></i>批注
                                 </label>
-                                <textarea id="editReview" rows="3" placeholder="在此输入本题教学思考、解析评注（允许空白，将实时在预览区展示）..."
-                                          class="w-full p-3.5 rounded-xl text-xs leading-relaxed resize-y font-mono border border-slate-200 focus:border-brand-500 focus:ring-2 focus:ring-brand-100 transition-all"></textarea>
+                                <div class="flex items-center gap-2 mb-1.5">
+                                    <button type="button" id="reviewInsertImageBtn" class="h-8 px-2.5 rounded-lg text-[11px] border border-slate-200 bg-white hover:bg-slate-50 text-slate-600" title="插入本地图片">
+                                        <i class="fa-regular fa-image mr-1"></i>插入图片
+                                    </button>
+                                    <span class="text-[10px] text-slate-400">支持 LaTeX：$…$ 行内、$$…$$ 块级；支持 Markdown：**加粗**、- 列表、| 表格 |、[链接](url)</span>
+                                </div>
+                                <input type="file" id="reviewImageInput" accept="image/png,image/jpeg,image/gif,image/webp" multiple class="hidden">
+                                <textarea id="editReview" rows="8" placeholder="在此输入本题教学思考、解析评注（允许空白，将实时在预览区展示）..."
+                                          style="overflow-y:auto"
+                                          class="w-full p-3.5 rounded-xl text-xs leading-relaxed resize-y review-autogrow border border-slate-200 focus:border-brand-500 focus:ring-2 focus:ring-brand-100 transition-all"></textarea>
                             </div>
                             
                             <!-- Right: Association Selector - Apple Glass Style -->
@@ -1010,16 +1018,21 @@
                                 <label class="block text-[11px] font-semibold text-slate-500 flex items-center space-x-1">
                                     <i class="fa-solid fa-link text-brand-500 mr-1"></i>关联题库中的其他题目
                                 </label>
+                                <div class="space-y-1">
+                                    <select id="editRelationType" class="w-full max-w-sm h-9 px-2.5 rounded-xl text-xs border border-slate-200 bg-white"></select>
+                                    <input type="text" id="editRelationCustom" maxlength="40" placeholder="自定义关联主题（如：一题多解对比）"
+                                           class="hidden w-full max-w-sm h-9 px-2.5 rounded-xl text-xs border border-slate-200 bg-white mt-1">
+                                </div>
                                 <div class="flex space-x-2 items-center">
                                     <input type="number" id="editRelatedQuestionNum" placeholder="编号" class="w-16 h-10 px-2 rounded-xl text-xs text-center border border-slate-200 focus:border-brand-500 focus:ring-2 focus:ring-brand-100 transition-all" min="1" title="输入要关联题目的显示编号数字">
                                     <select id="editRelatedQuestion" class="flex-1 min-w-0 h-10 px-2.5 rounded-xl text-xs truncate border border-slate-200 focus:border-brand-500 focus:ring-2 focus:ring-brand-100 transition-all">
                                         <option value="">-- 选择要关联的题目 (可选) --</option>
                                     </select>
-                                    <button type="button" onclick="associateRelatedQuestion()" class="h-10 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shrink-0 bg-brand-50 hover:bg-brand-100 text-brand-700 font-bold border border-brand-200 shadow-sm hover:shadow-sm transition-all active:scale-95" title="点击确认将选中的题目与当前题目绑定关联">
+                                    <button type="button" onclick="associateRelatedQuestion()" class="h-10 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shrink-0 bg-brand-50 hover:bg-brand-100 text-brand-700 font-bold border border-brand-200 shadow-sm hover:shadow-sm transition-all active:scale-95" title="按所选关联类型建立关联">
                                         <i class="fa-solid fa-link text-brand-600"></i>
                                         <span>关联</span>
                                     </button>
-                                    <button type="button" onclick="clearRelatedQuestion()" class="h-10 px-2.5 rounded-xl text-xs flex items-center justify-center shrink-0 text-rose-500 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 transition-all active:scale-95" title="解除当前题目的关联关系">
+                                    <button type="button" onclick="clearRelatedQuestion()" class="h-10 px-2.5 rounded-xl text-xs flex items-center justify-center shrink-0 text-rose-500 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 transition-all active:scale-95" title="删除本题的全部关联关系">
                                         <i class="fa-solid fa-link-slash"></i>
                                     </button>
                                 </div>
@@ -1117,6 +1130,7 @@
                             <h5 class="text-xs font-extrabold tracking-wider text-teal-600 uppercase flex items-center space-x-1.5">
                                 <i class="fa-solid fa-circle-nodes text-teal-500 text-xs"></i>
                                 <span>关联题目群组</span>
+                                <span id="relatedCountBadge" class="hidden normal-case tracking-normal text-[10px] font-bold px-2 py-0.5 rounded-full bg-teal-50 text-teal-600 border border-teal-200"></span>
                             </h5>
                             <div class="space-y-2 text-xs max-h-48 overflow-y-auto custom-scrollbar" id="paperAssociatedList">
                                 <!-- Injected by JS -->

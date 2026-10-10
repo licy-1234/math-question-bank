@@ -18,14 +18,18 @@ from sqlalchemy.engine import Engine
 from mathbank.paths import SCHEMA_SNAPSHOT_DIR
 
 
-LATEST_SCHEMA_VERSION = 11
+LATEST_SCHEMA_VERSION = 12
 LEGACY_REQUIRED_TABLES = {
     "questions",
     "question_curriculums",
     "papers",
     "paper_questions",
 }
-REQUIRED_TABLES = LEGACY_REQUIRED_TABLES | {"question_fingerprints", "question_tags"}
+REQUIRED_TABLES = LEGACY_REQUIRED_TABLES | {
+    "question_fingerprints",
+    "question_tags",
+    "question_relations",
+}
 
 V6_QUESTION_FINGERPRINT_COLUMNS = {
     "question_id",
@@ -571,6 +575,125 @@ def _backfill_question_tags(connection) -> int:
     return inserted
 
 
+QUESTION_RELATION_INDEXES = {
+    "idx_qrel_question": ("question_id",),
+    "idx_qrel_related": ("related_id",),
+    "idx_qrel_code": ("relation_code",),
+}
+
+
+def _ensure_question_relations_table(connection) -> dict[str, int]:
+    """Create the typed question-relation table and backfill legacy groups.
+
+    Purely additive: the table/indexes are created idempotently and derived
+    ``legacy_group`` rows are inserted.  The original ``questions`` rows are
+    never modified, so a rollback only loses the derived relation index.
+    """
+
+    table_exists = bool(
+        connection.exec_driver_sql(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type='table' AND name='question_relations'"
+        ).first()
+    )
+    if not table_exists:
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE question_relations (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                question_id INTEGER NOT NULL,
+                related_id INTEGER NOT NULL,
+                relation_code VARCHAR(60) NOT NULL,
+                relation_label VARCHAR(120) NOT NULL DEFAULT '',
+                note TEXT DEFAULT '',
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT uq_question_relation
+                    UNIQUE (question_id, related_id, relation_code),
+                CONSTRAINT ck_question_relation_order CHECK (question_id < related_id),
+                CONSTRAINT fk_qrel_question
+                    FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE,
+                CONSTRAINT fk_qrel_related
+                    FOREIGN KEY(related_id) REFERENCES questions(id) ON DELETE CASCADE
+            )
+            """
+        )
+        for index_name, columns in QUESTION_RELATION_INDEXES.items():
+            connection.exec_driver_sql(
+                f"CREATE INDEX {index_name} ON question_relations "
+                f"({', '.join(columns)})"
+            )
+    else:
+        for index_name, columns in QUESTION_RELATION_INDEXES.items():
+            connection.exec_driver_sql(
+                f"CREATE INDEX IF NOT EXISTS {index_name} ON question_relations "
+                f"({', '.join(columns)})"
+            )
+
+    seeded = _backfill_question_relations(connection)
+    return {
+        "added_question_relations": int(not table_exists),
+        "backfilled_question_relations": seeded,
+    }
+
+
+def _backfill_question_relations(connection) -> int:
+    """Derive pairwise relations from legacy ``association_group_id`` (idempotent).
+
+    The scan is strictly read-only for ``questions``: it only inserts the
+    missing ``legacy_group`` rows into ``question_relations``.  It returns the
+    number of rows actually inserted so repeated calls report zero.
+    """
+
+    columns = {
+        row[1]
+        for row in connection.exec_driver_sql(
+            'PRAGMA table_info("questions")'
+        ).fetchall()
+    }
+    if "association_group_id" not in columns:
+        # Very old databases upgraded outside init_db may not have added this
+        # column yet; there is no legacy grouping to migrate in that case.
+        return 0
+
+    groups = connection.exec_driver_sql(
+        "SELECT DISTINCT association_group_id FROM questions "
+        "WHERE association_group_id IS NOT NULL AND association_group_id <> ''"
+    ).fetchall()
+
+    inserted = 0
+    for (group_id,) in groups:
+        member_ids = [
+            int(row[0])
+            for row in connection.exec_driver_sql(
+                "SELECT id FROM questions WHERE association_group_id = ? "
+                "ORDER BY id ASC",
+                (group_id,),
+            ).fetchall()
+        ]
+        # Every unordered pair (i < j) inside the group becomes one row.  The
+        # ascending id order satisfies the CHECK (question_id < related_id).
+        for i in range(len(member_ids)):
+            for j in range(i + 1, len(member_ids)):
+                left, right = member_ids[i], member_ids[j]
+                if left == right:
+                    continue
+                exists = connection.exec_driver_sql(
+                    "SELECT 1 FROM question_relations "
+                    "WHERE question_id = ? AND related_id = ?",
+                    (left, right),
+                ).first()
+                if exists:
+                    continue
+                connection.exec_driver_sql(
+                    "INSERT INTO question_relations "
+                    "(question_id, related_id, relation_code, relation_label) "
+                    "VALUES (?, ?, 'legacy_group', '题组')",
+                    (left, right),
+                )
+                inserted += 1
+    return inserted
+
+
 def _rebuild_relationship_tables(engine: Engine) -> dict[str, int]:
     """Rebuild relation tables with real FKs while repairing legacy drift."""
 
@@ -704,6 +827,7 @@ def _rebuild_relationship_tables(engine: Engine) -> dict[str, int]:
             figure_layout_stats = _ensure_figure_layout_columns(connection)
             added_question_fingerprints = _ensure_question_fingerprint_table(connection)
             tag_stats = _ensure_question_tags_table(connection)
+            relation_stats = _ensure_question_relations_table(connection)
             _validate_figure_layout_schema(connection)
 
             violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
@@ -720,6 +844,7 @@ def _rebuild_relationship_tables(engine: Engine) -> dict[str, int]:
                 **tikz_column_stats,
                 **figure_layout_stats,
                 **tag_stats,
+                **relation_stats,
             }
         except Exception:
             if transaction_started:
@@ -747,6 +872,7 @@ def _upgrade_derived_schema(engine: Engine) -> dict[str, int]:
                 _ensure_question_fingerprint_table(connection)
             )
             stats.update(_ensure_question_tags_table(connection))
+            stats.update(_ensure_question_relations_table(connection))
             _validate_figure_layout_schema(connection)
             connection.exec_driver_sql(f"PRAGMA user_version={LATEST_SCHEMA_VERSION}")
             connection.exec_driver_sql("COMMIT")
@@ -817,6 +943,7 @@ def _upgrade_v6_or_v7_fingerprint_schema(
             _validate_question_fingerprint_schema(connection)
             figure_layout_stats = _ensure_figure_layout_columns(connection)
             tag_stats = _ensure_question_tags_table(connection)
+            relation_stats = _ensure_question_relations_table(connection)
             _validate_figure_layout_schema(connection)
             connection.exec_driver_sql(f"PRAGMA user_version={LATEST_SCHEMA_VERSION}")
             connection.exec_driver_sql("COMMIT")
@@ -827,6 +954,7 @@ def _upgrade_v6_or_v7_fingerprint_schema(
                 "added_question_fingerprint_text_indexes": added_text_indexes,
                 **figure_layout_stats,
                 **tag_stats,
+                **relation_stats,
             }
         except Exception:
             if transaction_started:
@@ -848,6 +976,13 @@ def migrate_database(
         )
     table_names = set(inspect(engine).get_table_names())
     if current == LATEST_SCHEMA_VERSION:
+        # A database that already reports the current version may still predate
+        # a freshly introduced derived table.  Re-run the additive ensure (and
+        # its idempotent backfill) before the completeness check so a version-12
+        # database can never silently lack question_relations.
+        with engine.begin() as connection:
+            _ensure_question_relations_table(connection)
+        table_names = set(inspect(engine).get_table_names())
         if not REQUIRED_TABLES.issubset(table_names):
             missing = ", ".join(sorted(REQUIRED_TABLES - table_names))
             raise RuntimeError(f"数据库结构不完整，缺少必要数据表: {missing}")

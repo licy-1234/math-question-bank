@@ -38,6 +38,7 @@ from mathbank.database import (
     Question,
     QuestionCurriculum,
     QuestionTag,
+    QuestionRelation,
     QuestionFingerprint as StoredQuestionFingerprint,
     Paper,
     PaperQuestion,
@@ -660,6 +661,17 @@ DOCUMENT_TASKS = TaskManager(
 PDF_OCR_SEMAPHORE = threading.BoundedSemaphore(4)
 MAX_PDF_TASK_PAGES = 80
 
+# Typed question-to-question relations (schema v12).  The contract is frozen:
+# the frontend consumes these codes/labels verbatim, so do not rename them.
+BUILTIN_RELATION_TYPES = (
+    ("same_topic", "同知识点掌握"),
+    ("multi_q_one_solution", "多题一解"),
+    ("one_method_multi_use", "一法多用"),
+    ("multi_method_one", "多法归一"),
+    ("one_q_variants", "一题多变"),
+)
+RELATION_CUSTOM_PREFIX = "custom:"
+
 def get_seq_mapping(db: Session, question_ids=None):
     """Map physical ID order to the user-facing contiguous sequence number."""
 
@@ -680,6 +692,42 @@ def get_seq_mapping(db: Session, question_ids=None):
         ranked.c.question_id.in_(normalized_ids)
     ).all()
     return {question_id: int(seq_num) for question_id, seq_num in rows}
+
+
+def _relation_counts_for_questions(
+    db: Session, question_ids: list[int]
+) -> dict[int, int]:
+    """Count each question's relation rows with one aggregate query (no N+1).
+
+    Relations are undirected: a question can appear on either the question_id or
+    the related_id side, so both sides are grouped and merged.
+    """
+
+    from sqlalchemy import func
+
+    ids = {int(qid) for qid in question_ids if qid is not None}
+    if not ids:
+        return {}
+    id_list = list(ids)
+    left_side = db.query(
+        QuestionRelation.question_id.label("question_id"),
+        func.count().label("relation_count"),
+    ).filter(QuestionRelation.question_id.in_(id_list)).group_by(
+        QuestionRelation.question_id
+    )
+    right_side = db.query(
+        QuestionRelation.related_id.label("question_id"),
+        func.count().label("relation_count"),
+    ).filter(QuestionRelation.related_id.in_(id_list)).group_by(
+        QuestionRelation.related_id
+    )
+    combined = left_side.union_all(right_side).subquery()
+    rows = (
+        db.query(combined.c.question_id, func.sum(combined.c.relation_count))
+        .group_by(combined.c.question_id)
+        .all()
+    )
+    return {int(question_id): int(total or 0) for question_id, total in rows}
 
 # ----------------- Static Files & Index -----------------
 
@@ -2259,6 +2307,8 @@ def list_questions(
     thought: Optional[List[str]] = Query(None),
     function_code: Optional[str] = None,
     tag: Optional[str] = None,
+    relation_code: Optional[str] = None,
+    relation_group: Optional[str] = None,
     page: Optional[int] = None,
     page_size: int = 20,
     sort: str = "desc",
@@ -2364,7 +2414,37 @@ def list_questions(
                 )
             )
         )
-        
+
+    # Typed relation filters.  Relations are undirected, so a question matches
+    # whether it sits on the question_id or the related_id side.
+    if relation_code:
+        query = query.filter(
+            db.query(QuestionRelation.id)
+            .filter(
+                QuestionRelation.relation_code == relation_code,
+                or_(
+                    QuestionRelation.question_id == Question.id,
+                    QuestionRelation.related_id == Question.id,
+                ),
+            )
+            .exists()
+        )
+    relation_group_val = str(relation_group or "").strip().lower()
+    if relation_group_val in {"any", "none"}:
+        has_relation = (
+            db.query(QuestionRelation.id)
+            .filter(
+                or_(
+                    QuestionRelation.question_id == Question.id,
+                    QuestionRelation.related_id == Question.id,
+                )
+            )
+            .exists()
+        )
+        query = query.filter(
+            has_relation if relation_group_val == "any" else ~has_relation
+        )
+
     order_columns = (
         (Question.created_at.asc(), Question.id.asc())
         if str(sort).lower() == "asc"
@@ -2382,9 +2462,16 @@ def list_questions(
             .all()
         )
         seq_map = get_seq_mapping(db, [item.id for item in questions])
+        relation_counts = _relation_counts_for_questions(
+            db, [item.id for item in questions]
+        )
         return {
             "items": [
-                {**item.to_summary_dict(), "seq_num": seq_map.get(item.id)}
+                {
+                    **item.to_summary_dict(),
+                    "seq_num": seq_map.get(item.id),
+                    "relation_count": relation_counts.get(item.id, 0),
+                }
                 for item in questions
             ],
             "total": total,
@@ -2395,7 +2482,15 @@ def list_questions(
 
     questions = query.order_by(*order_columns).all()
     seq_map = get_seq_mapping(db, [item.id for item in questions])
-    return [{**item.to_summary_dict(), "seq_num": seq_map.get(item.id)} for item in questions]
+    relation_counts = _relation_counts_for_questions(db, [item.id for item in questions])
+    return [
+        {
+            **item.to_summary_dict(),
+            "seq_num": seq_map.get(item.id),
+            "relation_count": relation_counts.get(item.id, 0),
+        }
+        for item in questions
+    ]
 
 def _duplicate_payload_list(value, *, field_name: str, max_items: int = 50):
     if value is None:
@@ -2707,6 +2802,7 @@ def prepare_question_assets(
     tikz_reference_image_path: str,
     answer_tikz_assets: str,
     tikz_code: str = "",
+    review: str = "",
     *,
     promotion_log: list[tuple[Path, Path]],
     path_map: dict[str, str] | None = None,
@@ -2718,8 +2814,13 @@ def prepare_question_assets(
     str,
     list[dict[str, str]],
     list[dict[str, str]],
+    str,
 ]:
-    """Promote and validate all visible and AI-only assets in one policy path."""
+    """Promote and validate all visible and AI-only assets in one policy path.
+
+    ``review`` (评述) is treated exactly like the 题干/答案 as an asset source so
+    images referenced only there are promoted, rewritten and registered too.
+    """
 
     parsed_img_paths = json.loads(image_paths) if image_paths else []
     if not isinstance(parsed_img_paths, list):
@@ -2729,10 +2830,11 @@ def prepare_question_assets(
         legacy_reference=tikz_reference_image_path,
     ))
     replacements: dict[str, str] = {}
-    content, answer_markdown, parsed_img_paths = promote_question_temp_assets(
+    content, answer_markdown, review, parsed_img_paths = promote_question_temp_assets(
         content,
         answer_markdown,
         parsed_img_paths,
+        review=review,
         promotion_log=promotion_log,
         path_map=replacements,
     )
@@ -2784,6 +2886,7 @@ def prepare_question_assets(
         parsed_tikz_reference_image_path,
         parsed_content_tikz_assets,
         parsed_answer_tikz_assets,
+        review,
     )
 
 
@@ -3036,6 +3139,7 @@ def create_question(
             parsed_tikz_reference_image_path,
             parsed_content_tikz_assets,
             parsed_answer_tikz_assets,
+            review,
         ) = prepare_question_assets(
             content,
             answer_markdown,
@@ -3044,6 +3148,7 @@ def create_question(
             tikz_reference_image_path,
             answer_tikz_assets,
             tikz_code,
+            review,
             promotion_log=asset_promotions,
             path_map=asset_path_map,
         )
@@ -3253,6 +3358,7 @@ def update_question(
             parsed_tikz_reference_image_path,
             parsed_content_tikz_assets,
             parsed_answer_tikz_assets,
+            review,
         ) = prepare_question_assets(
             content,
             answer_markdown,
@@ -3261,6 +3367,7 @@ def update_question(
             tikz_reference_image_path,
             answer_tikz_assets,
             tikz_code,
+            review,
             promotion_log=asset_promotions,
             path_map=asset_path_map,
         )
@@ -3296,7 +3403,10 @@ def update_question(
             db_question.figure_size = figure_size
         db_question.tags = tags
         # Physical cleanup happens only after the database commit succeeds.
+        # Images still referenced by the (rewritten) 评述 must never be treated
+        # as removed, so union the review references back in.
         removed_images = set(old_images) - set(parsed_img_paths)
+        removed_images -= set(embedded_question_assets(review))
 
         db_question.image_layouts = rewrite_image_layout_paths(
             image_layouts if image_layouts is not None else db_question.image_layouts,
@@ -3596,6 +3706,219 @@ def remove_association(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=f"解除关联失败: {str(e)}")
+
+
+def _relation_type_items(db: Session) -> list[dict]:
+    """Built-in relation types followed by any custom ``custom:`` codes in use."""
+
+    items = [
+        {"code": code, "label": label, "builtin": True}
+        for code, label in BUILTIN_RELATION_TYPES
+    ]
+    builtin_codes = {code for code, _ in BUILTIN_RELATION_TYPES}
+    custom_rows = (
+        db.query(
+            QuestionRelation.relation_code,
+            QuestionRelation.relation_label,
+        )
+        .filter(QuestionRelation.relation_code.like(f"{RELATION_CUSTOM_PREFIX}%"))
+        .distinct()
+        .all()
+    )
+    resolved: dict[str, str] = {}
+    for code, label in custom_rows:
+        code = str(code or "")
+        if not code or code in builtin_codes:
+            continue
+        clean_label = str(label or "").strip()
+        if code not in resolved or (clean_label and not resolved[code]):
+            resolved[code] = clean_label or code
+    for code, label in resolved.items():
+        items.append({"code": code, "label": label, "builtin": False})
+    return items
+
+
+@app.get("/api/relation-types")
+def list_relation_types(db: Session = Depends(get_db)):
+    """List selectable relation types (built-ins first, then custom codes)."""
+
+    return {"items": _relation_type_items(db)}
+
+
+@app.get("/api/questions/{question_id}/relations")
+def get_question_relations(question_id: int, db: Session = Depends(get_db)):
+    """Return every typed relation touching this question (both directions)."""
+
+    question = db.query(Question).filter(Question.id == question_id).first()
+    if not question:
+        raise HTTPException(status_code=404, detail="未找到题目")
+
+    rows = (
+        db.query(QuestionRelation)
+        .filter(
+            or_(
+                QuestionRelation.question_id == question_id,
+                QuestionRelation.related_id == question_id,
+            )
+        )
+        .order_by(QuestionRelation.created_at.asc(), QuestionRelation.id.asc())
+        .all()
+    )
+    other_ids = [
+        row.related_id if row.question_id == question_id else row.question_id
+        for row in rows
+    ]
+    others = (
+        {
+            item.id: item
+            for item in db.query(Question).filter(Question.id.in_(other_ids)).all()
+        }
+        if other_ids
+        else {}
+    )
+    seq_map = get_seq_mapping(db, other_ids)
+
+    items = []
+    for row in rows:
+        other_id = row.related_id if row.question_id == question_id else row.question_id
+        other = others.get(other_id)
+        if other is None:
+            # A dangling relation (question removed elsewhere) is skipped rather
+            # than failing the whole listing.
+            continue
+        items.append(
+            {
+                "relation_id": row.id,
+                "relation_code": row.relation_code,
+                "relation_label": row.relation_label or "",
+                "note": row.note or "",
+                "created_at": (
+                    row.created_at.isoformat() if row.created_at else None
+                ),
+                "other": {
+                    "id": other.id,
+                    "seq_num": seq_map.get(other.id),
+                    "question_type": other.question_type or "",
+                    "content": other.content or "",
+                    "association_group_id": other.association_group_id or "",
+                },
+            }
+        )
+    return {"items": items}
+
+
+@app.post("/api/questions/{question_id}/relations")
+def create_question_relation(
+    background_tasks: BackgroundTasks,
+    question_id: int,
+    target_id: int = Form(...),
+    relation_code: str = Form(...),
+    relation_label: str = Form(""),
+    note: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """Create (or idempotently update) one typed, undirected relation row."""
+
+    from sqlalchemy.exc import IntegrityError
+
+    code = str(relation_code or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="关联类型不能为空。")
+    if int(question_id) == int(target_id):
+        raise HTTPException(status_code=400, detail="不能与自身建立关联。")
+
+    source = db.query(Question).filter(Question.id == question_id).first()
+    target = db.query(Question).filter(Question.id == target_id).first()
+    if not source or not target:
+        raise HTTPException(status_code=404, detail="未找到对应题目")
+
+    # Normalise the pair so the CHECK (question_id < related_id) always holds.
+    a, b = sorted((int(question_id), int(target_id)))
+    label = str(relation_label or "").strip()
+    note_val = str(note or "")
+
+    def _apply_update(row: QuestionRelation) -> None:
+        if label:
+            row.relation_label = label
+        row.note = note_val
+
+    try:
+        existing = (
+            db.query(QuestionRelation)
+            .filter(
+                QuestionRelation.question_id == a,
+                QuestionRelation.related_id == b,
+                QuestionRelation.relation_code == code,
+            )
+            .first()
+        )
+        if existing is not None:
+            _apply_update(existing)
+            relation, created = existing, False
+        else:
+            relation = QuestionRelation(
+                question_id=a,
+                related_id=b,
+                relation_code=code,
+                relation_label=label,
+                note=note_val,
+            )
+            db.add(relation)
+            created = True
+        db.commit()
+        db.refresh(relation)
+    except IntegrityError:
+        # A concurrent duplicate slipped past the pre-check: fall back to the
+        # idempotent update instead of surfacing a 409.
+        db.rollback()
+        existing = (
+            db.query(QuestionRelation)
+            .filter(
+                QuestionRelation.question_id == a,
+                QuestionRelation.related_id == b,
+                QuestionRelation.relation_code == code,
+            )
+            .first()
+        )
+        if existing is None:
+            raise HTTPException(status_code=400, detail="建立关联失败")
+        _apply_update(existing)
+        db.commit()
+        db.refresh(existing)
+        relation, created = existing, False
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"建立关联失败: {str(exc)}")
+
+    schedule_database_export(background_tasks, operation="create_question_relation")
+    return {"status": "success", "relation_id": relation.id, "created": created}
+
+
+@app.delete("/api/relations/{relation_id}")
+def delete_question_relation(
+    relation_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Delete a single typed relation row.  Never touches the questions table."""
+
+    relation = (
+        db.query(QuestionRelation)
+        .filter(QuestionRelation.id == relation_id)
+        .first()
+    )
+    if not relation:
+        raise HTTPException(status_code=404, detail="未找到关联关系")
+    try:
+        db.delete(relation)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"删除关联失败: {str(exc)}")
+
+    schedule_database_export(background_tasks, operation="delete_question_relation")
+    return {"status": "success"}
+
 
 @app.delete("/api/questions/{question_id}")
 @serialize_asset_lifecycle
@@ -4917,11 +5240,20 @@ def _referenced_question_assets(db: Session) -> set[Path]:
         Question._image_paths,
         Question.content,
         Question.answer_markdown,
+        Question.review,
         Question._content_tikz_assets,
         Question._answer_tikz_assets,
         Question.tikz_reference_image_path,
     ).all()
-    for raw_paths, content, answer_markdown, content_assets, answer_assets, legacy_reference in rows:
+    for (
+        raw_paths,
+        content,
+        answer_markdown,
+        review,
+        content_assets,
+        answer_assets,
+        legacy_reference,
+    ) in rows:
         references = []
         try:
             parsed = json.loads(raw_paths or "[]")
@@ -4933,11 +5265,11 @@ def _referenced_question_assets(db: Session) -> set[Path]:
             ))
         except (TypeError, ValueError) as exc:
             raise ValueError("题目图片记录损坏，已停止清理") from exc
-        references.extend(embedded_question_assets(content, answer_markdown))
+        references.extend(embedded_question_assets(content, answer_markdown, review))
         references.extend(
             re.findall(
                 r'/static/(?:uploads|test_uploads)/[a-zA-Z0-9_./-]+',
-                f"{content or ''}\n{answer_markdown or ''}",
+                f"{content or ''}\n{answer_markdown or ''}\n{review or ''}",
             )
         )
         for reference in references:
@@ -4995,6 +5327,7 @@ def promote_question_temp_assets(
     answer_markdown: str,
     image_paths_list: list,
     *,
+    review: str = "",
     promotion_log: list[tuple[Path, Path]] | None = None,
     path_map: dict[str, str] | None = None,
 ) -> tuple:
@@ -5004,7 +5337,9 @@ def promote_question_temp_assets(
     if not isinstance(image_paths_list, list):
         raise AssetSecurityError("image_paths 必须是插图路径数组。")
 
-    embedded_paths = embedded_question_assets(content, answer_markdown)
+    # review images participate in the same promotion/validation path as the
+    # 题干 and 答案 so an image referenced only by the 评述 is never orphaned.
+    embedded_paths = embedded_question_assets(content, answer_markdown, review)
     all_references = [value for value in image_paths_list if value] + embedded_paths
 
     # Validate the complete set before moving anything.  A bad second path must
@@ -5083,6 +5418,7 @@ def promote_question_temp_assets(
 
     new_content = rewrite_question_asset_paths(content, replacements)
     new_answer = rewrite_question_asset_paths(answer_markdown, replacements)
+    new_review = rewrite_question_asset_paths(review, replacements)
     if path_map is not None:
         path_map.update({old: new for old, new in replacements.items() if old != new})
 
@@ -5099,7 +5435,7 @@ def promote_question_temp_assets(
         if promoted not in updated_paths:
             updated_paths.append(promoted)
 
-    return new_content, new_answer, updated_paths
+    return new_content, new_answer, new_review, updated_paths
 
 
 @app.post("/api/ai/manual-crop-pdf")

@@ -5,13 +5,15 @@
                 ALLOWED_TAGS: [
                     'div', 'span', 'p', 'br', 'strong', 'b', 'em', 'i',
                     'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tfoot',
-                    'tr', 'th', 'td', 'img', 'sub', 'sup', 'code', 'pre', 'hr'
+                    'tr', 'th', 'td', 'img', 'sub', 'sup', 'code', 'pre', 'hr',
+                    'a'
                 ],
                 ALLOWED_ATTR: [
                     'class', 'src', 'alt', 'title', 'colspan', 'rowspan',
                     'role', 'aria-label', 'aria-hidden',
                     'data-preferred-columns', 'data-choice-columns',
-                    'data-safe-image-open', 'data-figure-align-qid'
+                    'data-safe-image-open', 'data-figure-align-qid',
+                    'href', 'target', 'rel'
                 ],
                 ALLOW_DATA_ATTR: false,
                 ALLOW_ARIA_ATTR: true,
@@ -90,6 +92,40 @@
                 }
             }
 
+            function safeAnchorHref(value) {
+                const raw = asString(value).trim();
+                if (!raw || /[\u0000-\u001F\u007F]/.test(raw)) return '';
+                try {
+                    const url = new URL(raw, window.location.href);
+                    // Only navigational web schemes are allowed. javascript:,
+                    // data:, vbscript: and friends are rejected here as a
+                    // second layer on top of DOMPurify's own URI filtering.
+                    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+                    return raw;
+                } catch (error) {
+                    return '';
+                }
+            }
+
+            function hardenAnchors(root) {
+                if (!root || typeof root.querySelectorAll !== 'function') return root;
+                root.querySelectorAll('a').forEach((anchor) => {
+                    const safeHref = safeAnchorHref(anchor.getAttribute('href'));
+                    if (!safeHref) {
+                        // No usable destination: strip the link semantics so the
+                        // label renders as inert text instead of a live link.
+                        anchor.removeAttribute('href');
+                        anchor.removeAttribute('target');
+                        anchor.removeAttribute('rel');
+                        return;
+                    }
+                    anchor.setAttribute('href', safeHref);
+                    anchor.setAttribute('target', '_blank');
+                    anchor.setAttribute('rel', 'noopener noreferrer');
+                });
+                return root;
+            }
+
             function sanitizeRichHtml(value) {
                 const purified = purify(value, RICH_HTML_CONFIG);
                 if (typeof document === 'undefined' || !document.createElement) {
@@ -108,6 +144,7 @@
                     img.setAttribute('loading', 'lazy');
                     img.setAttribute('decoding', 'async');
                 });
+                hardenAnchors(template.content);
                 return template.innerHTML;
             }
 
@@ -117,6 +154,7 @@
                 sanitizePlainText,
                 sanitizeRichHtml,
                 safeImageUrl,
+                hardenAnchors,
                 safeClassList
             });
         })();

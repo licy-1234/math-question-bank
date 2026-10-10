@@ -181,6 +181,9 @@
                     e.preventDefault();
                 }
             });
+
+            // Review-box (评述框) image insertion: button / paste / drag-drop
+            setupReviewImageHandlers();
         }
         function setupDragDropListeners(zone, onFileReceived) {
             ['dragenter', 'dragover'].forEach(eventName => {
@@ -222,6 +225,91 @@
                     }
                 }
             });
+        }
+
+        // ---- Review box (评述框) image pipeline --------------------------------
+        // #reviewInsertImageBtn / #reviewImageInput / [data-review-dropzone] are
+        // authored in index.html. Every lookup is null-safe so older DOM builds
+        // keep working, and the wiring runs exactly once.
+        let reviewImageHandlersBound = false;
+
+        function triggerReviewImageUpload() {
+            const input = document.getElementById('reviewImageInput');
+            if (input) input.click();
+        }
+        window.triggerReviewImageUpload = triggerReviewImageUpload;
+
+        function setupReviewPasteListener(element) {
+            if (!element) return;
+            element.addEventListener('paste', (e) => {
+                const clipboard = e.clipboardData || (e.originalEvent && e.originalEvent.clipboardData);
+                if (!clipboard || !clipboard.items) return;
+                const images = [];
+                for (let i = 0; i < clipboard.items.length; i++) {
+                    const item = clipboard.items[i];
+                    if (item && item.kind === 'file' && item.type && item.type.startsWith('image/')) {
+                        const file = item.getAsFile();
+                        if (file) images.push(file);
+                    }
+                }
+                // Only claim image pastes; plain text pastes fall through to the
+                // native textarea behaviour.
+                if (images.length === 0) return;
+                // Stop the global screenshot router from diverting this paste to
+                // another drop zone.
+                e.preventDefault();
+                e.stopPropagation();
+                images.forEach((file) => uploadIllustration(file, 'editReview'));
+            });
+        }
+
+        function setupReviewDropzone(zone) {
+            if (!zone || zone.dataset.reviewDropzoneBound === 'true') return;
+            // Mark the zone so a repeated init cannot stack duplicate listeners
+            // (drag/drop listeners added by the shared scaffolding cannot be
+            // removed individually).
+            zone.dataset.reviewDropzoneBound = 'true';
+            setupDragDropListeners(zone, (file) => {
+                if (file && file.type && file.type.startsWith('image/')) {
+                    uploadIllustration(file, 'editReview');
+                }
+            });
+        }
+
+        function setupReviewImageHandlers() {
+            if (reviewImageHandlersBound) return;
+            reviewImageHandlersBound = true;
+
+            const insertBtn = document.getElementById('reviewInsertImageBtn');
+            const imageInput = document.getElementById('reviewImageInput');
+            const reviewTextarea = document.getElementById('editReview');
+            const dropzone = document.querySelector('[data-review-dropzone="editReview"]');
+
+            if (insertBtn) {
+                insertBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    triggerReviewImageUpload();
+                });
+            }
+
+            if (imageInput) {
+                imageInput.addEventListener('change', () => {
+                    const files = imageInput.files ? Array.from(imageInput.files) : [];
+                    files.forEach((file) => uploadIllustration(file, 'editReview'));
+                    imageInput.value = '';
+                });
+            }
+
+            if (reviewTextarea) {
+                setupReviewPasteListener(reviewTextarea);
+            }
+            // Prefer the wrapper dropzone; fall back to the textarea itself so a
+            // missing wrapper cannot disable drops.
+            if (dropzone) {
+                setupReviewDropzone(dropzone);
+            } else if (reviewTextarea) {
+                setupReviewDropzone(reviewTextarea);
+            }
         }
 
         // Clean and strip leading question numbers and exclamation noise from OCR LaTeX results
@@ -390,8 +478,10 @@
         });
 
         // 1. Upload Illustration handler
-        function uploadIllustration(file) {
-            if (!file.type.startsWith('image/')) {
+        // `textareaId` defaults to the content editor so every existing caller
+        // keeps its behaviour; review-box uploads pass 'editReview'.
+        function uploadIllustration(file, textareaId = 'editContent') {
+            if (!file || !file.type || !file.type.startsWith('image/')) {
                 showToast('请上传有效的图片格式！', 'error');
                 return;
             }
@@ -411,11 +501,16 @@
                 if (!EditorState.isCurrent(editorSession)) return;
                 if (data.status === 'success') {
                     showToast('图片上传成功！');
-                    uploadedImages.push(data.file_path);
-                    renderIllustrationBadges();
+                    // Only content illustrations feed the illustration badge
+                    // list and the persisted image_paths payload. Review-box
+                    // images are referenced purely through their inline markdown.
+                    if (textareaId === 'editContent') {
+                        uploadedImages.push(data.file_path);
+                        renderIllustrationBadges();
+                    }
                     
-                    // Insert image markdown tag into textarea where cursor is
-                    insertImageTag(data.file_path);
+                    // Insert image markdown tag into the target textarea where cursor is
+                    insertImageTag(data.file_path, textareaId);
                 } else {
                     showToast(data.message, 'error');
                 }
@@ -426,8 +521,11 @@
             });
         }
 
-        function insertImageTag(filePath) {
-            const textarea = document.getElementById('editContent');
+        // Insert the illustration markdown at the cursor of the target textarea.
+        // `textareaId` defaults to 'editContent' to preserve existing callers.
+        function insertImageTag(filePath, textareaId = 'editContent') {
+            const textarea = document.getElementById(textareaId);
+            if (!textarea) return;
             const markdownTag = `\n\n![插图](${filePath})\n\n`;
             
             const startPos = textarea.selectionStart;
@@ -436,7 +534,7 @@
             
             textarea.value = originalVal.substring(0, startPos) + markdownTag + originalVal.substring(endPos);
             
-            // Dispatch input event to refresh preview
+            // Dispatch input event to refresh preview (and trigger auto-grow)
             textarea.dispatchEvent(new Event('input'));
             textarea.focus();
             

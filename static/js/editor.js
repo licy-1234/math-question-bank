@@ -1644,12 +1644,29 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                             }
                         }
 
+                        // Relationship badge: shown only when the list item
+                        // reports a positive relation count; older payloads
+                        // without the field fall back to a non-empty
+                        // association_group_id.
+                        let relationCount = 0;
+                        if (item.relation_count !== undefined && item.relation_count !== null) {
+                            const parsedRelationCount = parseInt(item.relation_count, 10);
+                            relationCount = Number.isFinite(parsedRelationCount) && parsedRelationCount > 0
+                                ? parsedRelationCount : 0;
+                        } else if (item.association_group_id) {
+                            relationCount = 1;
+                        }
+                        const relationBadgeHtml = relationCount > 0
+                            ? `<span class="bank-question-relation inline-flex items-center gap-0.5 text-[9px] font-bold text-brand-600 bg-brand-50 border border-brand-200/60 px-1.5 py-0.5 rounded-full cursor-default" onclick="event.stopPropagation()" title="关联题目 ${relationCount} 道"><i class="fa-solid fa-link text-[7px]"></i>关联 ${relationCount}</span>`
+                            : '';
+
                         itemCard.innerHTML = `
                             <div class="bank-question-card-header flex items-start justify-between">
                                 <span class="bank-question-type text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500 shrink-0 mt-0.5">${window.MathBankSafe.escapeText(typeText)}</span>
                                 <div class="bank-question-badges flex items-center gap-1.5 justify-end flex-wrap flex-1 ml-2">
                                     <div class="bank-question-tags">${tagsHtml}</div>
                                     ${difficultyBadge}
+                                    ${relationBadgeHtml}
                                     <span class="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-brand-50 text-brand-600 shadow-sm">#${window.MathBankSafe.escapeText(item.seq_num)}</span>
                                     <!-- Delete Button -->
                                     <button type="button" aria-label="删除题目" onclick="event.stopPropagation(); deleteQuestion(${item.id})" class="text-slate-400 hover:text-red-500 p-0.5 rounded hover:bg-slate-100 transition-all opacity-0 group-hover:opacity-100" title="删除">
@@ -2022,6 +2039,23 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                 }
             };
             editReview.addEventListener('input', debounce(updateReviewPreview, 250));
+
+            // Auto-grow the review textarea (min 120px, capped at 60vh with
+            // internal scrolling). This listener is intentionally NOT debounced
+            // and lives alongside the debounced preview listener above, whose
+            // semantics are left untouched.
+            const autoGrowReview = () => {
+                if (!editReview) return;
+                const minHeight = 120;
+                const maxHeight = Math.max(minHeight, Math.round(window.innerHeight * 0.6));
+                editReview.style.height = 'auto';
+                const nextHeight = Math.max(minHeight, Math.min(editReview.scrollHeight, maxHeight));
+                editReview.style.height = nextHeight + 'px';
+                editReview.style.overflowY = editReview.scrollHeight > maxHeight ? 'auto' : 'hidden';
+            };
+            editReview.addEventListener('input', autoGrowReview);
+            autoGrowReview();
+            window.autoGrowReview = autoGrowReview;
             
             // Expose update preview functions to global scope to allow synchronous direct updates when loading questions/drafts
             window.updateContentPreview = updateContentPreview;
@@ -2391,7 +2425,13 @@ window.normalizeEditorFractions = normalizeEditorFractions;
         }
 
         function previewLiteralPattern() {
-            return /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|(`+)[^\n]*?\1(?!`)|\\begin\{(tikzpicture|verbatim\*?|Verbatim\*?|lstlisting|minted|comment)\}[\s\S]*?(?:\\end\{\2\}|$)|\\(?:verb|Verb|lstinline)\*?(?:\[[^\]\n]*\])?([^\w\s{])[^\n]*?(?:\3|(?=\r?\n)|$)|\\mintinline(?:\[[^\]\n]*\])?\{[^{}\n]*\}([^\w\s{])[^\n]*?(?:\4|(?=\r?\n)|$)|\\(?:detokenize|url|path|lstinline\*?(?:\[[^\]\n]*\])?|mintinline(?:\[[^\]\n]*\])?\{[^{}\n]*\})\s*\{|<(?:[cC][oO][dD][eE]|[pP][rR][eE])\b[^>]*>[\s\S]*?(?:<\/(?:[cC][oO][dD][eE]|[pP][rR][eE])\s*>|$)|!\[[^\]\n]*\]\([^\n)]*\)|\]\([^\n)]*\)|[hH][tT][tT][pP][sS]?:\/\/[^\s<>"']+|<mathbank-math\b[^>]*>[\s\S]*?<\/mathbank-math\s*>|<\/?[A-Za-z][^>\n]*>|\[\[MBM_[A-Za-z0-9_:-]+\]\]/g;
+            // Bare http(s) URLs and markdown link targets (`](...)`) are no
+            // longer captured here: they are routed through the link channel
+            // (see the markdown-lite block in preprocessFormulaForKaTeX) so
+            // they render as clickable anchors instead of literal <code>.
+            // Image markdown (`![alt](src)`) keeps its literal capture so the
+            // existing <img> conversion still owns it.
+            return /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|(`+)[^\n]*?\1(?!`)|\\begin\{(tikzpicture|verbatim\*?|Verbatim\*?|lstlisting|minted|comment)\}[\s\S]*?(?:\\end\{\2\}|$)|\\(?:verb|Verb|lstinline)\*?(?:\[[^\]\n]*\])?([^\w\s{])[^\n]*?(?:\3|(?=\r?\n)|$)|\\mintinline(?:\[[^\]\n]*\])?\{[^{}\n]*\}([^\w\s{])[^\n]*?(?:\4|(?=\r?\n)|$)|\\(?:detokenize|url|path|lstinline\*?(?:\[[^\]\n]*\])?|mintinline(?:\[[^\]\n]*\])?\{[^{}\n]*\})\s*\{|<(?:[cC][oO][dD][eE]|[pP][rR][eE])\b[^>]*>[\s\S]*?(?:<\/(?:[cC][oO][dD][eE]|[pP][rR][eE])\s*>|$)|!\[[^\]\n]*\]\([^\n)]*\)|<mathbank-math\b[^>]*>[\s\S]*?<\/mathbank-math\s*>|<\/?[A-Za-z][^>\n]*>|\[\[MBM_[A-Za-z0-9_:-]+\]\]/g;
         }
 
         function previewLiteralEnd(text, match) {
@@ -2949,6 +2989,185 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                                
             // Replace LaTeX line breaks with HTML br tags outside math environments
             tempText = tempText.replace(/\\\\/g, '<br>');
+
+            // ---- Markdown-lite prose conversions ---------------------------------
+            // Runs after raw HTML tags are stripped (see the `<[^>]*>` pass
+            // above) and before math placeholders / literal markers are restored
+            // at the end of this function, so it only ever sees prose. Math
+            // placeholders (@@MATH_PLACEHOLDER_n@@) and literal markers
+            // (\uE002L..\uE003) carry no markdown metacharacters, so formulas and
+            // inline code stay inert. This is the link channel referenced by
+            // previewLiteralPattern: [label](http(s)://…) and bare http(s) URLs
+            // become anchors here.
+            function markdownEscapeAttr(value) {
+                return escapeHtml(String(value == null ? '' : value))
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#039;')
+                    .replace(/\r?\n/g, ' ');
+            }
+
+            function buildMarkdownAnchor(href, label) {
+                const target = String(href == null ? '' : href).trim();
+                let valid = false;
+                try {
+                    const parsed = new URL(target, window.location.href);
+                    valid = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+                } catch (error) {
+                    valid = false;
+                }
+                const safeLabel = escapeHtml(String(label == null ? '' : label));
+                // Reject anything that is not plain http(s): the label degrades
+                // to inert text so no javascript:/data: scheme can slip through.
+                if (!valid) return safeLabel;
+                return '<a href="' + markdownEscapeAttr(target)
+                    + '" target="_blank" rel="noopener noreferrer">' + safeLabel + '</a>';
+            }
+
+            function convertLiteMarkdown(rawText) {
+                // Protect image markdown first so the link / bare-URL passes do
+                // not rewrite an image's target URL. Images are restored verbatim
+                // and then handled by the existing <img> conversion below.
+                const imagePayloads = [];
+                const imagePrefix = '\uE004IMG';
+                const guardedText = String(rawText).replace(/!\[[^\]\n]*\]\([^\n)]*\)/g, (match) => {
+                    const marker = imagePrefix + imagePayloads.length + '\uE005';
+                    imagePayloads.push({ marker, original: match });
+                    return marker;
+                });
+
+                const lines = guardedText.split('\n');
+                const out = [];
+                const tableRowRe = /^\s*\|.*\|/;
+                const cellCount = (line) => (line.match(/\|/g) || []).length;
+                // A divider row contains only pipes, dashes, colons and spaces
+                // (so a data row such as `| a-b | c |` is not misread as one).
+                const isDividerRow = (line) => /^[\s|:-]+$/.test(line)
+                    && line.includes('-') && line.includes('|');
+                const splitCells = (line) => {
+                    let trimmed = line.trim();
+                    if (trimmed.charAt(0) === '|') trimmed = trimmed.slice(1);
+                    if (trimmed.charAt(trimmed.length - 1) === '|') trimmed = trimmed.slice(0, -1);
+                    return trimmed.split('|').map((cell) => cell.trim());
+                };
+                const ulRe = /^\s{0,3}[-*]\s+(.+)$/;
+                const olRe = /^\s{0,3}\d+[.)]\s+(.+)$/;
+                const padCells = (cells, count) => {
+                    const padded = cells.slice(0, count);
+                    while (padded.length < count) padded.push('');
+                    return padded;
+                };
+
+                let index = 0;
+                while (index < lines.length) {
+                    const line = lines[index];
+
+                    // Pipe table: consecutive lines starting with `|` that
+                    // contain at least two `|`.
+                    if (tableRowRe.test(line) && cellCount(line) >= 2) {
+                        const block = [line];
+                        let next = index + 1;
+                        while (next < lines.length && tableRowRe.test(lines[next]) && cellCount(lines[next]) >= 2) {
+                            block.push(lines[next]);
+                            next++;
+                        }
+                        let bodyStart = 1;
+                        if (block.length >= 2 && isDividerRow(block[1])) {
+                            bodyStart = 2;
+                        }
+                        const headerCells = splitCells(block[0]);
+                        const bodyRows = block.slice(bodyStart).map(splitCells);
+                        let columnCount = Math.max(1, headerCells.length);
+                        bodyRows.forEach((row) => { columnCount = Math.max(columnCount, row.length); });
+                        let html = '<table class="mb-preview-markdown-table my-2 max-w-full border-collapse"><thead><tr>';
+                        padCells(headerCells, columnCount).forEach((cell) => {
+                            html += '<th class="border border-slate-300 dark:border-slate-600 px-2 py-1 text-left bg-slate-50 dark:bg-slate-800 font-bold">' + cell + '</th>';
+                        });
+                        html += '</tr></thead><tbody>';
+                        bodyRows.forEach((row) => {
+                            html += '<tr>';
+                            padCells(row, columnCount).forEach((cell) => {
+                                html += '<td class="border border-slate-300 dark:border-slate-600 px-2 py-1 align-top">' + cell + '</td>';
+                            });
+                            html += '</tr>';
+                        });
+                        html += '</tbody></table>';
+                        out.push(html);
+                        index = next;
+                        continue;
+                    }
+
+                    // Unordered list.
+                    if (ulRe.test(line)) {
+                        const items = [];
+                        let next = index;
+                        while (next < lines.length) {
+                            const item = ulRe.exec(lines[next]);
+                            if (!item) break;
+                            items.push(item[1]);
+                            next++;
+                        }
+                        out.push('<ul class="list-disc pl-4 my-1">'
+                            + items.map((text) => '<li class="my-0.5">' + text + '</li>').join('') + '</ul>');
+                        index = next;
+                        continue;
+                    }
+
+                    // Ordered list.
+                    if (olRe.test(line)) {
+                        const items = [];
+                        let next = index;
+                        while (next < lines.length) {
+                            const item = olRe.exec(lines[next]);
+                            if (!item) break;
+                            items.push(item[1]);
+                            next++;
+                        }
+                        out.push('<ol class="list-decimal pl-4 my-1">'
+                            + items.map((text) => '<li class="my-0.5">' + text + '</li>').join('') + '</ol>');
+                        index = next;
+                        continue;
+                    }
+
+                    out.push(line);
+                    index++;
+                }
+
+                let result = out.join('\n');
+
+                // **bold** before links so a bold span that also holds a link
+                // keeps the generated anchor intact.
+                result = result.replace(/\*\*([\s\S]+?)\*\*/g, (match, inner) =>
+                    '<strong>' + escapeHtml(inner) + '</strong>');
+
+                // [label](http://…) -> anchor. Inline code never reaches here as
+                // backticks are already literal markers, so no double wrapping.
+                result = result.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+                    (match, label, href) => buildMarkdownAnchor(href, label));
+
+                // Bare http(s) URLs, skipping anything already inside a generated
+                // href (always preceded by a quote) and trailing punctuation.
+                // CJK characters terminate the URL so prose like
+                // "链接https://x 结束" keeps its trailing text.
+                result = result.replace(/(^|[^"=/\w])(https?:\/\/[^\s<>"'（）()【】\[\]\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+)/g,
+                    (match, prefix, url) => {
+                        let trailing = '';
+                        let core = url;
+                        const tail = /[.,;:!?、。，；：！？]+$/.exec(url);
+                        if (tail) {
+                            trailing = tail[0];
+                            core = url.slice(0, -tail[0].length);
+                        }
+                        if (!core) return match;
+                        return prefix + buildMarkdownAnchor(core, core) + trailing;
+                    });
+
+                imagePayloads.forEach(({ marker, original }) => {
+                    result = result.split(marker).join(original);
+                });
+                return result;
+            }
+
+            tempText = convertLiteMarkdown(tempText);
             
             // A paragraph starts a new line with a short visual gap; two BRs
             // would additionally create a whole empty text line in Word answers.

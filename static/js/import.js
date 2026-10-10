@@ -235,6 +235,7 @@
                 if (document.getElementById('editTags')) document.getElementById('editTags').value = '';
                 document.getElementById('editRelatedQuestion').value = '';
                 document.getElementById('editRelatedQuestionNum').value = '';
+                resetEditorRelationTypeControl();
                 document.getElementById('editReview').dispatchEvent(new Event('input')); // Hide review preview
                 loadAssociatedQuestionsInList(null); // Reset associated questions panel
                 
@@ -293,6 +294,7 @@
             
             document.getElementById('editRelatedQuestion').value = '';
             document.getElementById('editRelatedQuestionNum').value = '';
+            resetEditorRelationTypeControl();
             document.getElementById('editReview').dispatchEvent(new Event('input')); // Hide review preview
             loadAssociatedQuestionsInList(null); // Reset associated questions panel
             
@@ -347,6 +349,202 @@
 
         let relatedListLoadSequence = 0;
         let relatedDropdownLoadSequence = 0;
+
+        // Cache of /api/relation-types within this session. null = not fetched yet,
+        // [] = fetched and failed/empty (dropdown degrades to the custom option only).
+        let relationTypesCache = null;
+        let relationTypesLoading = null;
+
+        // Escape helper that mirrors the existing escapeText usage in this module.
+        function escapeRelationText(value) {
+            if (window.MathBankSafe && typeof window.MathBankSafe.escapeText === 'function') {
+                return window.MathBankSafe.escapeText(value);
+            }
+            return String(value == null ? '' : value);
+        }
+
+        // Build the relation-code slug for a user supplied custom topic name.
+        function buildCustomRelationCode(label) {
+            let slug = String(label || '')
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '');
+            slug = slug.substring(0, 40).replace(/-+$/g, '');
+            if (!slug) slug = String(Date.now());
+            return 'custom:' + slug;
+        }
+
+        // Fill #editRelationType with builtin relation types plus a trailing custom option.
+        function renderRelationTypeOptions(select, types) {
+            if (!select) return;
+            const previous = select.value;
+            let html = '';
+            (types || []).forEach(t => {
+                if (!t || !t.code) return;
+                html += `<option value="${escapeRelationText(t.code)}">${escapeRelationText(t.label || t.code)}</option>`;
+            });
+            html += '<option value="__custom__">自定义…</option>';
+            select.innerHTML = html;
+            const exists = previous && Array.from(select.options).some(o => o.value === previous);
+            if (exists) {
+                select.value = previous;
+            } else if (select.options.length) {
+                select.selectedIndex = 0;
+            }
+        }
+
+        // Fetch builtin relation types once per session. Failures degrade gracefully.
+        function loadRelationTypes() {
+            const select = document.getElementById('editRelationType');
+            if (relationTypesCache !== null) {
+                if (select) renderRelationTypeOptions(select, relationTypesCache);
+                return Promise.resolve(true);
+            }
+            if (relationTypesLoading) return relationTypesLoading;
+            relationTypesLoading = fetch('/api/relation-types')
+                .then(r => {
+                    if (!r.ok) throw new Error('无法加载关联类型');
+                    return r.json();
+                })
+                .then(payload => {
+                    const items = payload && Array.isArray(payload.items) ? payload.items : [];
+                    relationTypesCache = items
+                        .filter(t => t && t.code)
+                        .map(t => ({
+                            code: String(t.code),
+                            label: String(t.label || t.code),
+                            builtin: t.builtin !== false
+                        }));
+                    const el = document.getElementById('editRelationType');
+                    if (el) renderRelationTypeOptions(el, relationTypesCache);
+                    return true;
+                })
+                .catch(err => {
+                    console.error('Failed to load relation types:', err);
+                    relationTypesCache = [];
+                    const el = document.getElementById('editRelationType');
+                    if (el) renderRelationTypeOptions(el, relationTypesCache);
+                    return false;
+                })
+                .finally(() => { relationTypesLoading = null; });
+            return relationTypesLoading;
+        }
+
+        // Reset the relation type selector back to its first builtin option and hide the custom input.
+        function resetEditorRelationTypeControl() {
+            const select = document.getElementById('editRelationType');
+            if (select && select.options.length) select.selectedIndex = 0;
+            const custom = document.getElementById('editRelationCustom');
+            if (custom) {
+                custom.value = '';
+                custom.classList.add('hidden');
+            }
+        }
+
+        // Update the "共 N 条关联" badge and toggle the associated panel visibility.
+        function updateRelatedCountBadge(count, badgeEl, wrapperEl) {
+            const badge = badgeEl || document.getElementById('relatedCountBadge');
+            const wrapper = wrapperEl || document.getElementById('paperAssociatedWrapper');
+            const total = Math.max(0, parseInt(count, 10) || 0);
+            if (badge) {
+                badge.textContent = `共 ${total} 条关联`;
+                badge.classList.toggle('hidden', total <= 0);
+            }
+            if (wrapper) {
+                wrapper.classList.toggle('hidden', total <= 0);
+            }
+        }
+
+        // Build a single row of the associated-question list (pair relation).
+        function buildRelatedItemElement(relation, other) {
+            const item = document.createElement('div');
+            item.className = 'glass-list-item p-2.5 rounded-xl text-xs text-slate-700 flex items-center justify-between';
+            item.onclick = () => selectQuestionById(other.id);
+
+            const code = String(relation && relation.relation_code || '');
+            const label = String(relation && relation.relation_label || '') || code;
+            const isLegacy = code === 'legacy_group';
+            const badgeCls = isLegacy
+                ? 'bg-slate-100 text-slate-500 border border-slate-200'
+                : 'bg-teal-50 text-teal-700 border border-teal-200';
+
+            let cleanContent = String(other && other.content || '').replace(/[\$\#\*\_]/g, '');
+            if (cleanContent.length > 50) cleanContent = cleanContent.substring(0, 50) + '...';
+
+            const content = document.createElement('div');
+            content.className = 'flex-1 min-w-0 flex items-center gap-1.5';
+            content.innerHTML = `
+                <span class="font-bold text-brand-600 bg-brand-50 px-1.5 py-0.5 rounded text-[10px] shadow-sm shrink-0">#${escapeRelationText(other.seq_num)}</span>
+                <span class="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-500 shrink-0">${escapeRelationText(getTypeText(other.question_type))}</span>
+                <span class="flex-1 min-w-0 truncate">${escapeRelationText(cleanContent)}</span>
+                <span class="text-[10px] px-1.5 py-0.5 rounded shrink-0 ${badgeCls}">${escapeRelationText(label)}</span>
+            `;
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'shrink-0 ml-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg p-1 transition-all';
+            removeBtn.title = '删除该条关联';
+            removeBtn.innerHTML = '<i class="fa-solid fa-xmark text-[10px]"></i>';
+            removeBtn.addEventListener('click', ev => {
+                ev.stopPropagation();
+                deleteSingleRelation(relation ? relation.relation_id : null, item);
+            });
+
+            item.appendChild(content);
+            item.appendChild(removeBtn);
+            return item;
+        }
+
+        // Delete exactly one pair relation and remove its row without reloading the question.
+        function deleteSingleRelation(relationId, rowEl) {
+            const id = parseInt(relationId, 10);
+            if (!Number.isSafeInteger(id) || id <= 0) {
+                showToast('关联记录无效，无法删除', 'error');
+                return;
+            }
+            const session = EditorState.snapshot();
+            fetch(`/api/relations/${id}`, {
+                method: 'DELETE',
+                headers: {
+                    'X-Local-Token': localStorage.getItem('local_token') || ''
+                }
+            })
+                .then(r => {
+                    if (!r.ok) throw new Error('删除关联失败');
+                    return r.json();
+                })
+                .then(data => {
+                    if (EditorState.questionId !== session.questionId) return false;
+                    if (data && data.status === 'success') {
+                        if (rowEl && rowEl.parentNode) rowEl.parentNode.removeChild(rowEl);
+                        const container = document.getElementById('paperAssociatedList');
+                        const remaining = container
+                            ? container.querySelectorAll('.glass-list-item').length
+                            : 0;
+                        updateRelatedCountBadge(remaining);
+                        showToast('已删除该条关联', 'success');
+                    } else {
+                        showToast((data && (data.detail || data.message)) || '删除关联失败', 'error');
+                    }
+                    return true;
+                })
+                .catch(err => {
+                    console.error('Failed to delete relation:', err);
+                    showToast('删除关联失败: ' + err.message, 'error');
+                });
+        }
+
+        // Clear every associated-question related DOM surface.
+        function clearRelatedUi() {
+            const dropdown = document.getElementById('editRelatedQuestion');
+            const numInput = document.getElementById('editRelatedQuestionNum');
+            if (dropdown) dropdown.value = '';
+            if (numInput) numInput.value = '';
+            const container = document.getElementById('paperAssociatedList');
+            if (container) container.innerHTML = '';
+            updateRelatedCountBadge(0);
+            resetEditorRelationTypeControl();
+        }
 
         // Load all questions to populate the related question dropdown list.
         // Preserve selections made while either association GET is pending.
@@ -413,7 +611,7 @@
                 });
         }
 
-        // Associate selected target question with current loaded question (bidirectional, backend + UI)
+        // Associate selected target question with current loaded question (typed pair relation)
         async function associateRelatedQuestion() {
             const targetSelect = document.getElementById('editRelatedQuestion');
             const targetId = targetSelect ? targetSelect.value : '';
@@ -432,14 +630,43 @@
                 return;
             }
 
+            // Resolve the relation type (builtin selection or custom topic).
+            const typeSelect = document.getElementById('editRelationType');
+            const customInput = document.getElementById('editRelationCustom');
+            let relationCode = '';
+            let relationLabel = '';
+            if (typeSelect) {
+                const selectedVal = typeSelect.value;
+                if (selectedVal === '__custom__') {
+                    relationLabel = (customInput ? customInput.value : '').trim();
+                    if (!relationLabel) {
+                        showToast('请输入自定义关联主题', 'warning');
+                        if (customInput) customInput.focus();
+                        return;
+                    }
+                    relationCode = buildCustomRelationCode(relationLabel);
+                } else if (selectedVal) {
+                    const selectedTypeOpt = typeSelect.options[typeSelect.selectedIndex];
+                    relationCode = selectedVal;
+                    relationLabel = selectedTypeOpt ? selectedTypeOpt.textContent : selectedVal;
+                }
+            }
+            if (!relationCode) {
+                showToast('请先选择关联类型', 'warning');
+                return;
+            }
+
             const session = EditorState.snapshot();
             const sequence = ++relatedListLoadSequence;
             ++relatedDropdownLoadSequence;
             try {
                 const formData = new FormData();
                 formData.append('target_id', targetId);
+                formData.append('relation_code', relationCode);
+                formData.append('relation_label', relationLabel);
+                formData.append('note', '');
 
-                const res = await fetch(`/api/questions/${session.questionId}/associate`, {
+                const res = await fetch(`/api/questions/${session.questionId}/relations`, {
                     method: 'POST',
                     headers: {
                         'X-Local-Token': localStorage.getItem('local_token') || ''
@@ -453,11 +680,17 @@
                     commitEditorRelatedBaseline(session, targetId);
                     const selectedOpt = Array.from(targetSelect.options).find(option => option.value === targetId);
                     const seqNum = selectedOpt ? selectedOpt.getAttribute('data-seq-num') : '';
-                    showToast(`成功与题目 #${seqNum || targetId} 建立关联绑定！`, 'success');
+                    showToast(`已按「${relationLabel}」与题目 #${seqNum || targetId} 建立关联！`, 'success');
+
+                    // Reset the target selector and any custom topic input.
+                    if (targetSelect) targetSelect.value = '';
+                    const numInput = document.getElementById('editRelatedQuestionNum');
+                    if (numInput) numInput.value = '';
+                    resetEditorRelationTypeControl();
 
                     // 刷新右侧预览区的关联变式题目卡片及下拉框
                     if (typeof loadAssociatedQuestionsInList === 'function') {
-                        await loadAssociatedQuestionsInList(session.questionId, targetId);
+                        await loadAssociatedQuestionsInList(session.questionId);
                     }
                 } else {
                     showToast(data.detail || data.message || '关联建立失败', 'error');
@@ -468,7 +701,7 @@
             }
         }
 
-        // Clear the related question association (bidirectional, backend + UI)
+        // Remove every pair relation of the current question (backend + UI)
         function clearRelatedQuestion() {
             if (!EditorState.questionId) {
                 // No question loaded, just clear the UI
@@ -476,49 +709,62 @@
                 const numInput = document.getElementById('editRelatedQuestionNum');
                 if (dropdown) dropdown.value = '';
                 if (numInput) numInput.value = '';
+                resetEditorRelationTypeControl();
                 showToast('已清除关联选择', 'success');
                 return;
             }
 
             const session = EditorState.snapshot();
-            const expectedValue = document.getElementById('editRelatedQuestion').value;
             const sequence = ++relatedListLoadSequence;
             ++relatedDropdownLoadSequence;
-            return fetch(`/api/questions/${session.questionId}/associated`, { method: 'DELETE' })
+            return fetch(`/api/questions/${session.questionId}/relations`)
                 .then(r => {
-                    if (!r.ok) throw new Error('解除关联请求失败');
+                    if (!r.ok) throw new Error('无法加载关联关系');
                     return r.json();
                 })
-                .then(data => {
+                .then(payload => {
                     if (!EditorState.isCurrent(session) || sequence !== relatedListLoadSequence) return false;
-                    if (data.status === 'success') {
+                    const items = payload && Array.isArray(payload.items) ? payload.items : [];
+                    const ids = items
+                        .map(rel => parseInt(rel && rel.relation_id, 10))
+                        .filter(id => Number.isSafeInteger(id) && id > 0);
+                    if (ids.length === 0) {
                         commitEditorRelatedBaseline(session, '');
-                        // Clear UI
-                        const dropdown = document.getElementById('editRelatedQuestion');
-                        const numInput = document.getElementById('editRelatedQuestionNum');
-                        if (dropdown && dropdown.value === expectedValue) {
-                            dropdown.value = '';
-                            if (numInput) numInput.value = '';
-                        }
-
-                        // Hide associated list in preview
-                        const wrapper = document.getElementById('paperAssociatedWrapper');
-                        const container = document.getElementById('paperAssociatedList');
-                        if (wrapper) wrapper.classList.add('hidden');
-                        if (container) container.innerHTML = '';
-
-                        showToast('已解除所有关联（双向生效）', 'success');
-                    } else {
-                        showToast(data.detail || '解除关联失败', 'error');
+                        clearRelatedUi();
+                        showToast('当前没有可删除的关联关系', 'info');
+                        return true;
                     }
+                    // Delete relations serially so one failure never masquerades as success.
+                    return ids.reduce((chain, id) => chain.then(() => {
+                        return fetch(`/api/relations/${id}`, {
+                            method: 'DELETE',
+                            headers: {
+                                'X-Local-Token': localStorage.getItem('local_token') || ''
+                            }
+                        }).then(r => {
+                            if (!r.ok) throw new Error('删除关联失败');
+                            return r.json();
+                        }).then(data => {
+                            if (!data || data.status !== 'success') {
+                                throw new Error((data && (data.detail || data.message)) || '删除关联失败');
+                            }
+                            return true;
+                        });
+                    }), Promise.resolve(true)).then(() => {
+                        if (EditorState.questionId !== session.questionId) return false;
+                        commitEditorRelatedBaseline(session, '');
+                        clearRelatedUi();
+                        showToast(`已删除全部 ${ids.length} 条关联关系`, 'success');
+                        return true;
+                    });
                 })
                 .catch(err => {
-                    console.error('Failed to remove association:', err);
+                    console.error('Failed to remove relations:', err);
                     showToast('解除关联失败: ' + err.message, 'error');
                 });
         }
 
-        // Fetch associated questions under transitive group and populate live preview
+        // Fetch all pair relations of a question and populate the live preview panel.
         function loadAssociatedQuestionsInList(questionId, expectedValue) {
             const session = EditorState.snapshot();
             const sequence = ++relatedListLoadSequence;
@@ -531,42 +777,35 @@
             const container = document.getElementById('paperAssociatedList');
             if (wrapper) wrapper.classList.add('hidden');
             if (container) container.innerHTML = '';
-            
+            updateRelatedCountBadge(0, null, wrapper);
+
             if (!questionId) {
                 return refreshRelatedDropdown('', { session, isCurrent, expectedValue: selectionAtRequest });
             }
-            
-            return fetch(`/api/questions/${questionId}/associated`)
+
+            return fetch(`/api/questions/${questionId}/relations`)
                 .then(r => {
                     if (!r.ok) throw new Error('无法加载已关联题目');
                     return r.json();
                 })
-                .then(list => {
+                .then(payload => {
                     if (!isCurrent()) return false;
-                    if (!Array.isArray(list)) throw new Error('已关联题目格式错误');
-                    let associatedId = "";
+                    const list = payload && Array.isArray(payload.items) ? payload.items : [];
+                    let associatedId = '';
                     if (list.length > 0) {
-                        associatedId = list[0].id;
-                        if (wrapper) wrapper.classList.remove('hidden');
-                        
-                        list.forEach(q => {
-                            let cleanContent = (q.content || '').replace(/[\$\#\*\_]/g, '');
-                            if (cleanContent.length > 50) cleanContent = cleanContent.substring(0, 50) + '...';
-
-                            const item = document.createElement('div');
-                            item.className = "glass-list-item p-2.5 rounded-xl text-xs text-slate-700 flex items-center justify-between";
-                            item.onclick = () => selectQuestionById(q.id);
-                            item.innerHTML = `
-                                <div class="truncate pr-2">
-                                    <span class="font-bold text-brand-600 bg-brand-50 px-1.5 py-0.5 rounded text-[10px] mr-1.5 shadow-sm">#${window.MathBankSafe.escapeText(q.seq_num)}</span>
-                                    <span class="text-[10px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-500 mr-1.5">${window.MathBankSafe.escapeText(getTypeText(q.question_type))}</span>
-                                    <span>${window.MathBankSafe.escapeText(cleanContent)}</span>
-                                </div>
-                                <i class="fa-solid fa-chevron-right text-[9px] text-slate-400 shrink-0"></i>
-                            `;
+                        if (container) container.innerHTML = '';
+                        list.forEach(rel => {
+                            const other = rel && rel.other ? rel.other : null;
+                            if (!other || other.id == null) return;
+                            if (!associatedId) associatedId = other.id;
+                            const item = buildRelatedItemElement(rel, other);
                             if (container) container.appendChild(item);
                         });
                     }
+                    const rendered = container
+                        ? container.querySelectorAll('.glass-list-item').length
+                        : 0;
+                    updateRelatedCountBadge(rendered, null, wrapper);
                     return refreshRelatedDropdown(associatedId, {
                         session, isCurrent, expectedValue: selectionAtRequest, commitBaseline: true
                     });
@@ -776,6 +1015,7 @@
                     // Load associated questions list and handle group selection
                     document.getElementById('editRelatedQuestion').value = '';
                     document.getElementById('editRelatedQuestionNum').value = '';
+                    resetEditorRelationTypeControl();
                     loadAssociatedQuestionsInList(fullItem.id);
                     
                     // Scroll editor
@@ -6157,6 +6397,23 @@
             
             // Load and populate related questions dropdown
             refreshRelatedDropdown();
+
+            // Load relation types and wire the custom-topic toggle
+            loadRelationTypes();
+            const relationTypeSelect = document.getElementById('editRelationType');
+            if (relationTypeSelect) {
+                relationTypeSelect.addEventListener('change', () => {
+                    const custom = document.getElementById('editRelationCustom');
+                    if (!custom) return;
+                    if (relationTypeSelect.value === '__custom__') {
+                        custom.classList.remove('hidden');
+                        custom.focus();
+                    } else {
+                        custom.classList.add('hidden');
+                        custom.value = '';
+                    }
+                });
+            }
 
             // Set up related question display number input two-way synchronization
             const relatedNumInput = document.getElementById('editRelatedQuestionNum');

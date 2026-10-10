@@ -548,6 +548,52 @@ class QuestionTag(Base):
     )
 
 
+class QuestionRelation(Base):
+    """One row per typed, undirected question-to-question relation."""
+
+    __tablename__ = "question_relations"
+    __table_args__ = (
+        UniqueConstraint(
+            "question_id", "related_id", "relation_code",
+            name="uq_question_relation",
+        ),
+        CheckConstraint(
+            "question_id < related_id", name="ck_question_relation_order"
+        ),
+        Index("idx_qrel_question", "question_id"),
+        Index("idx_qrel_related", "related_id"),
+        Index("idx_qrel_code", "relation_code"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    question_id = Column(
+        Integer,
+        ForeignKey("questions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    related_id = Column(
+        Integer,
+        ForeignKey("questions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    relation_code = Column(String(60), nullable=False, index=True)
+    relation_label = Column(
+        String(120),
+        nullable=False,
+        default="",
+        server_default="",
+    )
+    note = Column(Text, default="")
+    created_at = Column(
+        DateTime,
+        default=_utcnow_naive,
+        server_default=text("CURRENT_TIMESTAMP"),
+        nullable=False,
+    )
+
+
 class Paper(Base):
     __tablename__ = "papers"
 
@@ -729,6 +775,7 @@ def init_db():
                 Question.__table__,
                 QuestionCurriculum.__table__,
                 QuestionTag.__table__,
+                QuestionRelation.__table__,
                 Paper.__table__,
                 PaperQuestion.__table__,
             ],
@@ -778,6 +825,28 @@ def init_db():
             # Create indexes on question_curriculums
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_question_curriculums_lookup ON question_curriculums (version_code, compulsory, chapter, knowledge)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_question_curriculums_qid ON question_curriculums (question_id)"))
+
+            # Additive fallback for the v12 typed relation table.  Same idempotent
+            # "create if missing" style as the columns above so the ORM can always
+            # query it even before the explicit migration transaction runs.
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS question_relations (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    question_id INTEGER NOT NULL,
+                    related_id INTEGER NOT NULL,
+                    relation_code VARCHAR(60) NOT NULL,
+                    relation_label VARCHAR(120) NOT NULL DEFAULT '',
+                    note TEXT DEFAULT '',
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_question_relation UNIQUE (question_id, related_id, relation_code),
+                    CONSTRAINT ck_question_relation_order CHECK (question_id < related_id),
+                    CONSTRAINT fk_qrel_question FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE,
+                    CONSTRAINT fk_qrel_related FOREIGN KEY(related_id) REFERENCES questions(id) ON DELETE CASCADE
+                )
+            """))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_qrel_question ON question_relations (question_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_qrel_related ON question_relations (related_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_qrel_code ON question_relations (relation_code)"))
 
             # Auto-migrate legacy data to A-version question_curriculums
             cursor = conn.execute(text("SELECT COUNT(*) FROM question_curriculums"))

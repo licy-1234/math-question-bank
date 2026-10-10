@@ -31,6 +31,7 @@
             knowledge: '',
             question_type: '',
             difficulty: '',
+            relation_code: '',
             keyword: '',
             tab: 'all' // 'all' or 'selected'
         },
@@ -452,7 +453,7 @@
 
     // Toggle Part 2 Filter Bar Collapsing
     function refreshPaperFilterSummary() {
-        const count = ['compulsory', 'chapter', 'knowledge', 'question_type', 'difficulty'].filter(key => window.PaperStore.filters[key]).length;
+        const count = ['compulsory', 'chapter', 'knowledge', 'question_type', 'difficulty', 'relation_code'].filter(key => window.PaperStore.filters[key]).length;
         const label = document.getElementById('paperFilterToggleTxt');
         const button = document.getElementById('togglePaperFilterBtn');
         if (label) label.textContent = count ? `筛选 (${count})` : '筛选';
@@ -479,7 +480,7 @@
         document.getElementById(meta ? 'togglePaperMetaBtn' : 'togglePaperAiBtn')?.setAttribute('aria-expanded', String(open));
     };
     window.clearPaperFilters = function () {
-        Object.assign(window.PaperStore.filters, {compulsory:'', chapter:'', knowledge:'', question_type:'', difficulty:''});
+        Object.assign(window.PaperStore.filters, {compulsory:'', chapter:'', knowledge:'', question_type:'', difficulty:'', relation_code:''});
         renderPart2FilterSection();
         window.onPaperFilterChange('keyword', window.PaperStore.filters.keyword);
     };
@@ -797,6 +798,9 @@
         if (f.difficulty) {
             params.append('difficulty', f.difficulty);
         }
+        if (f.relation_code) {
+            params.append('relation_code', f.relation_code);
+        }
         if (f.keyword) {
             params.append('q', f.keyword);
             params.append('search', f.keyword);
@@ -862,9 +866,46 @@
         window.renderPaperCanvas();
     };
 
+    // Relation-type options for the paper bank filter. Loaded once per session.
+    let paperRelationTypesCache = null;   // null = not loaded, [] = failed/empty
+    let paperRelationTypesLoading = false;
+
+    function paperRelationTypeOptionsHtml(selected) {
+        let html = `<option value="">全部</option>`;
+        (paperRelationTypesCache || []).forEach(t => {
+            html += `<option value="${escapeHtml(t.code)}" ${selected === t.code ? 'selected' : ''}>${escapeHtml(t.label)}</option>`;
+        });
+        return html;
+    }
+
+    function ensurePaperRelationTypes() {
+        if (paperRelationTypesCache !== null || paperRelationTypesLoading) return;
+        paperRelationTypesLoading = true;
+        fetch('/api/relation-types')
+            .then(r => {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(payload => {
+                const items = payload && Array.isArray(payload.items) ? payload.items : [];
+                paperRelationTypesCache = items
+                    .filter(t => t && t.builtin && t.code)
+                    .map(t => ({ code: String(t.code), label: String(t.label || t.code) }));
+            })
+            .catch(err => {
+                console.error('Failed to load paper relation types:', err);
+                paperRelationTypesCache = [];
+            })
+            .finally(() => {
+                paperRelationTypesLoading = false;
+                // Refresh only the select so an in-flight render keeps its place.
+                const sel = document.getElementById('paperFilterRelation');
+                if (sel) sel.innerHTML = paperRelationTypeOptionsHtml(window.PaperStore.filters.relation_code || '');
+            });
+    }
+
     // Render Part 2: Config & 3-Level Cascade Filter Section
-    function renderPart2FilterSection() {
-        const meta = window.PaperStore.meta;
+    function renderPart2FilterSection() {        const meta = window.PaperStore.meta;
         const f = window.PaperStore.filters;
         const container = document.getElementById('paperFilterSection');
         if (!container) return;
@@ -926,6 +967,9 @@
             diffOptions += `<option value="${escapeHtml(d.value)}" ${f.difficulty === d.value ? 'selected' : ''}>${escapeHtml(d.label)}</option>`;
         });
 
+        // 6. Build Relation Type options (builtin relation types from /api/relation-types)
+        const relationOptions = paperRelationTypeOptionsHtml(f.relation_code);
+
         container.innerHTML = `
             <div class="paper-controls-stack">
                 <div class="workspace-command-bar paper-command-bar">
@@ -940,6 +984,7 @@
                     <label>小节<select id="paperFilterKnowledge" class="glass-select" onchange="onPaperFilterChange('knowledge', this.value)" ${isKnowledgeDisabled ? 'disabled' : ''}>${knowledgeOptions}</select></label>
                     <label>题型<select id="paperFilterType" class="glass-select" onchange="onPaperFilterChange('question_type', this.value)">${qTypeOptions}</select></label>
                     <label>难度<select id="paperFilterDifficulty" class="glass-select" onchange="onPaperFilterChange('difficulty', this.value)">${diffOptions}</select></label>
+                    <label>关联类型<select id="paperFilterRelation" class="glass-select" onchange="onPaperFilterChange('relation_code', this.value)">${relationOptions}</select></label>
                     <button type="button" class="glass-btn" onclick="clearPaperFilters()">清除筛选</button>
                 </div>
                 <section id="paperMetaDetails" class="paper-configuration-panel paper-meta-details" aria-labelledby="togglePaperMetaBtn" ${window.PaperStore.isMetaExpanded ? '' : 'hidden'}>
@@ -954,6 +999,7 @@
                 </section>
             </div>`;
         refreshPaperFilterSummary();
+        ensurePaperRelationTypes();
     }
 
     let filterDebounceTimer = null;
