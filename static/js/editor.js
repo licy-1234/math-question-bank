@@ -9,7 +9,7 @@ let bankQuestionsRetryTimer = null;
 // Formatting operates on one editor snapshot; delayed replies cannot replace
 // newer typing or a different question/draft, and never advance the saved state.
 async function normalizeEditorFractions(target, button) {
-    if (!['editContent', 'editAnswerMarkdown'].includes(target)) return;
+    if (!['editContent', 'editAnswerMarkdown', 'editReview'].includes(target)) return;
     const input = document.getElementById(target);
     if (!input || !button || button.disabled) return;
     const source = input.value;
@@ -54,6 +54,28 @@ async function normalizeEditorFractions(target, button) {
     }
 }
 window.normalizeEditorFractions = normalizeEditorFractions;
+
+// 功能标签展示文案始终取自受控词表（tag_schema.json），这样往词表里新增取值
+// （例如"典型题"）时列表徽标会同步出现，无需再改前端代码。
+function functionTagLabel(code) {
+    const value = String(code || '').trim();
+    if (!value) return '';
+    const state = (window.MathBankTags && window.MathBankTags.state) || {};
+    const dimensions = (state.schema && state.schema.dimensions) || [];
+    const dimension = dimensions.find((item) => item && item.key === 'function_tag');
+    const matched = ((dimension && dimension.values) || []).find((item) => item && item.code === value);
+    return matched ? matched.label : value;
+}
+window.functionTagLabel = functionTagLabel;
+
+// 列表卡片上的功能标签徽标（易错题 / 创新题 / 典型题）。无功能标签时返回空串。
+function functionTagBadge(tagCodes) {
+    const codes = (tagCodes && Array.isArray(tagCodes.function)) ? tagCodes.function : [];
+    const code = codes.filter(Boolean)[0];
+    if (!code) return '';
+    return `<span class="text-[9px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-300/60 px-1.5 py-0.5 rounded-full flex items-center space-x-0.5 cursor-default" title="功能标签"><i class="fa-solid fa-bolt text-[7px] text-indigo-500 mr-0.5"></i><span>${window.MathBankSafe.escapeText(functionTagLabel(code))}</span></span>`;
+}
+window.functionTagBadge = functionTagBadge;
 
         function initResizers() {
             const workspace = document.getElementById('bankWorkspaceSection');
@@ -591,7 +613,7 @@ window.normalizeEditorFractions = normalizeEditorFractions;
         let questionEditorRestoreFocus = null;
 
         function switchQuestionEditorPanel(panelId) {
-            const validPanels = ['classification', 'content', 'answer'];
+            const validPanels = ['classification', 'content', 'answer', 'review'];
             const targetPanel = validPanels.includes(panelId) ? panelId : 'classification';
             document.getElementById('editorSection').dataset.panel = targetPanel;
 
@@ -928,6 +950,9 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             } else {
                 document.getElementById('editReview').dispatchEvent(new Event('input'));
             }
+            if (typeof window.updateReviewPanelPreview === 'function') {
+                window.updateReviewPanelPreview();
+            }
             renderEditorPaperMeta();
             
             document.getElementById('editorTitle').textContent = `编辑草稿 - 暂存中`;
@@ -1102,6 +1127,7 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                         <span class="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 shrink-0 mt-0.5">草稿 • ${window.MathBankSafe.escapeText(typeText)}</span>
                         <div class="flex items-center gap-1.5 justify-end flex-wrap flex-1 ml-2">
                             ${tagsHtml}
+                            ${functionTagBadge(item.tag_codes)}
                             ${difficultyBadge}
                             <!-- Delete Button -->
                             <button type="button" aria-label="删除草稿" class="delete-draft-btn text-slate-400 hover:text-red-500 p-0.5 rounded hover:bg-slate-100 transition-all opacity-0 group-hover:opacity-100" title="删除草稿">
@@ -1173,6 +1199,44 @@ window.normalizeEditorFractions = normalizeEditorFractions;
             }
         }
 
+        // 统计大屏：功能标签分布。标签名统一走受控词表（functionTagLabel），
+        // 词表新增取值会自动出现；字段缺失或接口异常时显示空态，不抛错。
+        function renderStatsFunctionTagCounts(counts) {
+            const list = document.getElementById('statsFunctionTagList');
+            const emptyHint = document.getElementById('statsFunctionTagEmpty');
+            if (!list) return;
+
+            const source = (counts && typeof counts === 'object' && !Array.isArray(counts)) ? counts : {};
+            // 词表里的每个取值都要展示（含 0），这样新增的"典型题"在统计口径上
+            // 一定可见；后端已按词表全量补 0，这里不再过滤掉 0 值。
+            const items = Object.keys(source)
+                .map((code) => ({ code: String(code || '').trim(), count: Number(source[code]) || 0 }))
+                .filter((item) => item.code)
+                .sort((a, b) => b.count - a.count);
+
+            if (items.length === 0) {
+                list.innerHTML = '';
+                if (emptyHint) emptyHint.classList.remove('hidden');
+                return;
+            }
+            if (emptyHint) emptyHint.classList.add('hidden');
+
+            const escape = (window.MathBankSafe && typeof window.MathBankSafe.escapeText === 'function')
+                ? window.MathBankSafe.escapeText
+                : (value) => String(value == null ? '' : value);
+
+            list.innerHTML = items.map((item) => {
+                const label = (typeof window.functionTagLabel === 'function')
+                    ? window.functionTagLabel(item.code)
+                    : item.code;
+                return '<span class="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-1 rounded-lg flex items-center space-x-1 cursor-default" title="功能标签">'
+                    + '<i class="fa-solid fa-bolt text-[8px] text-indigo-500"></i>'
+                    + '<span>' + escape(label) + '</span>'
+                    + '<span class="font-mono text-indigo-500">' + escape(String(item.count)) + '</span>'
+                    + '</span>';
+            }).join('');
+        }
+
         function openStatsModal() {
             const modal = document.getElementById('statsModal');
             const triggerButton = document.getElementById('statsOpenBtn');
@@ -1196,6 +1260,9 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                         document.getElementById('statsEasyCount').textContent = data.easy_count;
                         document.getElementById('statsMediumCount').textContent = data.medium_count;
                         document.getElementById('statsHardCount').textContent = data.hard_count;
+
+                        // 功能标签分布（后端可能不返回该字段，内部已容错为空态）
+                        renderStatsFunctionTagCounts(data.function_tag_counts);
                         
                         // Populate compulsory stages for stats query
                         populateStatsQueryCompulsory();
@@ -1520,6 +1587,26 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                 thoughtSelect.innerHTML = options;
                 if (previous) thoughtSelect.value = previous;
             }
+
+            // 功能标签取自同一份受控词表，新增取值（如"典型题"）无需再改 HTML。
+            const functionSelect = document.getElementById('filterFunctionCode');
+            if (functionSelect) {
+                const previous = functionSelect.value;
+                let options = '<option value="">全部功能</option>';
+                const schema = tagState.schema;
+                const dimension = schema && Array.isArray(schema.dimensions)
+                    ? schema.dimensions.find(item => item.key === 'function_tag')
+                    : null;
+                const values = (dimension && dimension.values) || [];
+                // 词表尚未加载时保留 HTML 里的静态选项，避免筛选器瞬间变空。
+                if (values.length) {
+                    values.forEach(value => {
+                        options += `<option value="${safe.escapeAttribute(value.code)}">${safe.escapeText(value.label)}</option>`;
+                    });
+                    functionSelect.innerHTML = options;
+                }
+                if (previous) functionSelect.value = previous;
+            }
         }
 
         // Load and List Saved Questions
@@ -1665,6 +1752,7 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                                 <span class="bank-question-type text-[10px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-500 shrink-0 mt-0.5">${window.MathBankSafe.escapeText(typeText)}</span>
                                 <div class="bank-question-badges flex items-center gap-1.5 justify-end flex-wrap flex-1 ml-2">
                                     <div class="bank-question-tags">${tagsHtml}</div>
+                                    ${functionTagBadge(item.tag_codes)}
                                     ${difficultyBadge}
                                     ${relationBadgeHtml}
                                     <span class="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-brand-50 text-brand-600 shadow-sm">#${window.MathBankSafe.escapeText(item.seq_num)}</span>
@@ -2039,6 +2127,38 @@ window.normalizeEditorFractions = normalizeEditorFractions;
                 }
             };
             editReview.addEventListener('input', debounce(updateReviewPreview, 250));
+
+            // 第 4 步「评述与关联」面板内的实时排版预览。
+            // 与上面的 updateReviewPreview（写入 #paperReviewWrapper / #paperReviewContent，
+            // 即右侧题目详情面板）完全独立：这里只写 #reviewPreview，两者互不干扰。
+            const updateReviewPanelPreview = () => {
+                const container = document.getElementById('reviewPreview');
+                if (!container) return;
+                const text = editReview ? editReview.value : '';
+
+                if (!text.trim()) {
+                    container.innerHTML = '<p class="text-slate-400 italic">在左侧框中输入，此处将实时展示最终排版效果...</p>';
+                    return;
+                }
+
+                container.innerHTML = parseMarkdownWithMath(text);
+
+                try {
+                    renderMathInElement(container, {
+                        delimiters: [
+                            {left: '$$', right: '$$', display: true},
+                            {left: '$', right: '$', display: false},
+                            {left: '\\(', right: '\\)', display: false},
+                            {left: '\\[', right: '\\]', display: true}
+                        ],
+                        throwOnError: false
+                    });
+                } catch (e) {
+                    console.error('KaTeX review panel rendering error: ', e);
+                }
+            };
+            editReview.addEventListener('input', debounce(updateReviewPanelPreview, 250));
+            window.updateReviewPanelPreview = updateReviewPanelPreview;
 
             // Auto-grow the review textarea (min 120px, capped at 60vh with
             // internal scrolling). This listener is intentionally NOT debounced

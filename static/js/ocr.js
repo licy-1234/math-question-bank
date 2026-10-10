@@ -310,6 +310,32 @@
             } else if (reviewTextarea) {
                 setupReviewDropzone(reviewTextarea);
             }
+
+            // 评述配图 / 插图拖拽区（与题干部 #illustrationDropZone 对齐）。
+            // 上传目标固定为 'editReview'，不会写入题干的 uploadedImages 插图列表。
+            const reviewIllZone = document.getElementById('reviewIllustrationDropZone');
+            const reviewIllInput = document.getElementById('reviewIllustrationFileInput');
+            if (reviewIllZone && reviewIllInput) {
+                reviewIllZone.onclick = () => reviewIllInput.click();
+
+                reviewIllInput.onchange = () => {
+                    const files = reviewIllInput.files ? Array.from(reviewIllInput.files) : [];
+                    files.forEach((file) => uploadIllustration(file, 'editReview'));
+                    reviewIllInput.value = '';
+                };
+
+                const handleReviewIllFile = (file) => {
+                    if (file && file.type && file.type.startsWith('image/')) {
+                        uploadIllustration(file, 'editReview');
+                    }
+                };
+                setupDragDropListeners(reviewIllZone, handleReviewIllFile);
+                setupPasteListener(reviewIllZone, handleReviewIllFile);
+
+                // 该拖拽区嵌在 [data-review-dropzone="editReview"] 内部，阻止事件继续
+                // 冒泡，避免一次拖放被外层容器重复处理成两张图。
+                reviewIllZone.addEventListener('drop', (e) => e.stopPropagation(), false);
+            }
         }
 
         // Clean and strip leading question numbers and exclamation noise from OCR LaTeX results
@@ -1392,8 +1418,11 @@
         }
 
         // Quick math inserting helper
-        function insertContentHelper(code) {
-            const textarea = document.getElementById('editContent');
+        // targetId 默认为 'editContent'，题干区原有的速查按钮行为完全不变；
+        // 评述区（第 4 步）的按钮显式传入 'editReview'。
+        function insertContentHelper(code, targetId = 'editContent') {
+            const textarea = document.getElementById(targetId) || document.getElementById('editContent');
+            if (!textarea) return;
             const startPos = textarea.selectionStart;
             const endPos = textarea.selectionEnd;
             const originalVal = textarea.value;

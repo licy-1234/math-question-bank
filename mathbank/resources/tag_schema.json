@@ -49,10 +49,11 @@
       "required": false,
       "default": null,
       "storage": "question_tags(dim='function')",
-      "description": "单选、可空。标记题目在教学中的特殊用途；不填表示普通题。",
+      "description": "单选、可空。标记题目在教学中的特殊用途；不填表示普通题。取值受本词表约束，历史取值 error_prone / innovative 保持不变。",
       "values": [
         { "code": "error_prone", "label": "易错题" },
-        { "code": "innovative", "label": "创新题" }
+        { "code": "innovative", "label": "创新题" },
+        { "code": "typical", "label": "典型题" }
       ]
     },
     {

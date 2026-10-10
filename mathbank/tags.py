@@ -314,6 +314,19 @@ def _dimension_storage_key(dimension: dict) -> str:
     return match.group(1) if match else ""
 
 
+def _find_dimension(dim: str) -> dict:
+    """Return the raw definition of one dimension ({} when unknown).
+
+    ``dim`` may be either the schema ``key`` (``function_tag``) or the storage
+    short name (``function``).
+    """
+
+    for dimension in _load_tag_schema_cached().get("dimensions", []):
+        if dimension.get("key") == dim or _dimension_storage_key(dimension) == dim:
+            return dimension
+    return {}
+
+
 def allowed_codes(dim: str) -> set[str]:
     """Return the controlled vocabulary of one dimension.
 
@@ -322,10 +335,34 @@ def allowed_codes(dim: str) -> set[str]:
     ``question_tags.dim`` value without duplicating the mapping.
     """
 
-    for dimension in _load_tag_schema_cached().get("dimensions", []):
-        if dimension.get("key") == dim or _dimension_storage_key(dimension) == dim:
-            return {item["code"] for item in dimension.get("values", []) if item.get("code")}
-    return set()
+    return {
+        item["code"]
+        for item in _find_dimension(dim).get("values", [])
+        if item.get("code")
+    }
+
+
+def dimension_values(dim: str) -> list[dict]:
+    """Return the controlled vocabulary of one dimension in schema order.
+
+    Unlike :func:`allowed_codes` -- an unordered ``set`` meant for validation
+    -- this preserves the declaration order of ``tag_schema.json`` so dropdowns
+    and statistics panels can render values exactly as curated, e.g.::
+
+        [{"code": "error_prone", "label": "易错题"}, ...]
+
+    Accepts the same identifiers as :func:`allowed_codes` (schema ``key`` or
+    storage short name).  Returns ``[]`` for an unknown dimension so callers
+    can simply iterate without guarding.
+    """
+
+    values: list[dict] = []
+    for item in _find_dimension(dim).get("values", []):
+        code = str(item.get("code") or "").strip()
+        if not code:
+            continue
+        values.append({"code": code, "label": str(item.get("label") or code).strip()})
+    return values
 
 
 def normalize_tag_codes(dim: str, values: Iterable) -> list[str]:

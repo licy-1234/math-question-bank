@@ -13,6 +13,13 @@ import json
 
 from main import LOCAL_TOKEN
 
+from mathbank.tags import (
+    allowed_codes,
+    dimension_values,
+    load_tag_schema,
+    normalize_tag_codes,
+)
+
 HEADERS = {"X-Local-Token": LOCAL_TOKEN}
 
 LEGACY_TRIPLE = {
@@ -234,3 +241,149 @@ def test_tag_codes_preserve_entry_order(client):
     """补一条：返回顺序应等于录入顺序，不能被索引的字典序悄悄重排。"""
     qid = _create_tagged_question(client, "标签顺序场景")
     assert _read(client, qid)["tag_codes"]["chapter"] == MULTI_CHAPTER
+
+
+# ---------------------------------------------------------------------------
+# 新增词表取值「典型题 / typical」的覆盖
+# ---------------------------------------------------------------------------
+#
+# 功能标签是受控词表驱动的：词表在 mathbank/resources/tag_schema.json 里
+# dim='function' 那一项。词表新增 typical 后，校验（normalize_tag_codes）、
+# 详情读回、列表筛选、统计口径都必须自动跟上，这里逐个盯住。
+
+
+def _schema_function_codes():
+    """直接读 JSON，拿到词表里 function 维度的原始取值顺序。"""
+    for dimension in load_tag_schema().get("dimensions", []):
+        if dimension.get("key") == "function_tag":
+            return [item["code"] for item in dimension.get("values", [])]
+    return []
+
+
+def test_typical_is_in_the_controlled_vocabulary():
+    """词表层面：typical 必须已经是合法取值，且校验能原样通过。"""
+    assert "typical" in allowed_codes("function")
+    assert "typical" in allowed_codes("function_tag")
+    assert normalize_tag_codes("function", ["typical"]) == ["typical"]
+
+
+def test_dimension_values_returns_controlled_vocabulary_in_schema_order():
+    """dimension_values 必须保留 JSON 的原始顺序（用于下拉/统计的展示顺序）。"""
+    expected = _schema_function_codes()
+    assert expected == ["error_prone", "innovative", "typical"]
+
+    values = dimension_values("function")
+    assert values == [
+        {"code": "error_prone", "label": "易错题"},
+        {"code": "innovative", "label": "创新题"},
+        {"code": "typical", "label": "典型题"},
+    ]
+    # schema key 与存储短名等价；返回值是新建 dict，改动不污染 lru_cache 的词表
+    assert [item["code"] for item in values] == expected
+    assert dimension_values("function_tag") == values
+    assert [item["code"] for item in dimension_values("function_tag")] == expected
+    values[0]["label"] = "被改写"
+    assert dimension_values("function")[0]["label"] == "易错题"
+
+    # 未知维度返回空列表而不是抛异常
+    assert dimension_values("no_such_dim") == []
+
+
+def test_create_question_with_typical_function_tag_roundtrips(client):
+    """全链路：新建时 tag_function_code=typical，详情与列表都要读得回来。"""
+    qid = _new_question(client, "典型题往返测试", tag_function_code="typical")
+
+    detail = _read(client, qid)
+    assert detail["tag_codes"]["function"] == ["typical"]
+
+    listed = client.get("/api/questions").json()
+    matched = [item for item in listed if item["id"] == qid]
+    assert matched, f"新题没出现在列表里：{[item['id'] for item in listed]}"
+    assert matched[0]["tag_codes"]["function"] == ["typical"]
+
+
+def test_update_question_can_switch_to_typical_function_tag(client):
+    """编辑场景：把一道 error_prone 的题改成 typical，读回来只剩 typical。"""
+    qid = _create_tagged_question(client, "改成典型题的场景")
+    assert _read(client, qid)["tag_codes"]["function"] == ["error_prone"]
+
+    response = client.put(
+        f"/api/questions/{qid}",
+        data={
+            "content": "改成典型题的场景（已改标签）",
+            "question_type": "detailed_answer",
+            "difficulty": "medium",
+            "tag_function_code": "typical",
+            **LEGACY_TRIPLE,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+
+    tags = _read(client, qid)["tag_codes"]
+    assert tags["function"] == ["typical"], "功能标签被旧的 error_prone 覆盖了"
+    # 功能标签的切换不能牵连其它维度
+    assert tags["thought"] == ["T01", "T02"]
+    assert tags["chapter"] == MULTI_CHAPTER
+
+
+def test_list_endpoint_filters_by_typical_function_code(client):
+    """列表筛选：function_code=typical 只返回典型题，不能混入易错题。"""
+    typical_a = _new_question(client, "列表筛选-典型题A", tag_function_code="typical")
+    typical_b = _new_question(client, "列表筛选-典型题B", tag_function_code="typical")
+    error_prone_id = _new_question(
+        client, "列表筛选-易错题", tag_function_code="error_prone"
+    )
+    _new_question(client, "列表筛选-无功能标签")
+
+    rows = client.get("/api/questions", params={"function_code": "typical"}).json()
+    ids = [row["id"] for row in rows]
+    assert set(ids) == {typical_a, typical_b}, f"典型题筛选结果不符：{ids}"
+    assert error_prone_id not in ids
+    assert all(row["tag_codes"]["function"] == ["typical"] for row in rows)
+
+
+def test_stats_reports_function_tag_distribution(client):
+    """/api/stats 的 function_tag_counts：词表取值全出现（含 0 值），并与库对齐。"""
+    _new_question(client, "统计-易错题", tag_function_code="error_prone")
+    _new_question(client, "统计-易错题2", tag_function_code="error_prone")
+    _new_question(client, "统计-创新题", tag_function_code="innovative")
+    _new_question(client, "统计-无功能标签")
+
+    body = client.get("/api/stats").json()
+    assert body["status"] == "success", body
+
+    counts = body["function_tag_counts"]
+    # 新加入词表、库里尚无题目的 typical 也要补 0 出现
+    assert counts == {"error_prone": 2, "innovative": 1, "typical": 0}
+
+
+def test_stats_function_tag_counts_includes_typical_questions(client):
+    """统计口径要跟上 typical：建了典型题之后计数必须真实反映。"""
+    _new_question(client, "统计-典型题", tag_function_code="typical")
+
+    counts = client.get("/api/stats").json()["function_tag_counts"]
+    assert counts["typical"] == 1
+    assert counts["error_prone"] == 0
+    assert counts["innovative"] == 0
+
+
+def test_stats_function_tag_counts_keeps_unknown_legacy_codes(client, db_session):
+    """question_tags.code 没有 CHECK 约束，历史脏 code 不能被统计丢掉。"""
+    from mathbank.database import Question, QuestionTag
+
+    question = Question(
+        content="统计-历史脏数据",
+        question_type="detailed_answer",
+        difficulty="medium",
+    )
+    db_session.add(question)
+    db_session.flush()
+    db_session.add(
+        QuestionTag(question_id=question.id, dim="function", code="legacy_flag")
+    )
+    db_session.commit()
+
+    counts = client.get("/api/stats").json()["function_tag_counts"]
+    assert counts["legacy_flag"] == 1
+    assert counts["typical"] == 0

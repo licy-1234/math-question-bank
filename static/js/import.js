@@ -1008,6 +1008,9 @@
                     } else {
                         document.getElementById('editReview').dispatchEvent(new Event('input'));
                     }
+                    if (typeof window.updateReviewPanelPreview === 'function') {
+                        window.updateReviewPanelPreview();
+                    }
                     
                     // Render editor metadata through the single shared preview path.
                     renderEditorPaperMeta();

@@ -25,7 +25,7 @@ import secrets
 from typing import List, Optional
 from PIL import Image
 from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, Form, BackgroundTasks, Request, Response, Header
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -125,6 +125,7 @@ from mathbank.ai_providers import (
 from mathbank.tags import (
     chapter_prefixes,
     curriculum_index,
+    dimension_values,
     load_curriculum_tree,
     load_tag_schema,
     normalize_codes,
@@ -4519,6 +4520,24 @@ def get_db_stats(db: Session = Depends(get_db)):
         # 册/章/节 统计：从多值标签系统（question_tags）读取，旧字段仅作兜底
         compulsory_chapter_counts, chapter_stats, book_catalog = _chapter_statistics(db)
 
+        # 功能标签分布：词表取值先全部补 0，再用一次 group_by 覆盖真实计数。
+        # 这样刚加入词表、库里还没人用的取值（如"典型题"）也会出现在统计里，
+        # 而词表之外的历史 code（无 CHECK 约束，可能存在）同样不会丢。
+        function_tag_counts: dict[str, int] = {
+            item["code"]: 0 for item in dimension_values("function")
+        }
+        for code, count in (
+            db.query(QuestionTag.code, func.count(QuestionTag.question_id))
+            .filter(QuestionTag.dim == "function")
+            .group_by(QuestionTag.code)
+            .all()
+        ):
+            key = str(code or "").strip()
+            if not key:
+                continue
+            function_tag_counts.setdefault(key, 0)
+            function_tag_counts[key] += int(count or 0)
+
         # Daily additions in local time (UTC+8)
         date_rows = db.query(Question.created_at).all()
         daily_adds = {}
@@ -4538,6 +4557,7 @@ def get_db_stats(db: Session = Depends(get_db)):
             "compulsory_chapter_counts": compulsory_chapter_counts,
             "chapter_stats": chapter_stats,
             "book_catalog": book_catalog,
+            "function_tag_counts": function_tag_counts,
             "daily_adds": daily_adds
         }
     except Exception as e:

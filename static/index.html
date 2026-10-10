@@ -414,6 +414,7 @@
                     <option value="">全部功能</option>
                     <option value="error_prone">易错题</option>
                     <option value="innovative">创新题</option>
+                    <option value="typical">典型题</option>
                 </select>
 
                 <div class="bank-filter-row relative" id="filterSourceContainer">
@@ -514,7 +515,10 @@
                     <span>2</span><strong>题干编辑</strong><small>OCR、正文与插图</small>
                 </button>
                 <button type="button" class="question-editor-step" data-editor-panel-target="answer" onclick="switchQuestionEditorPanel('answer')">
-                    <span>3</span><strong>解析编辑</strong><small>答案、解析与关联</small>
+                    <span>3</span><strong>解析编辑</strong><small>答案与解析</small>
+                </button>
+                <button type="button" class="question-editor-step" data-editor-panel-target="review" onclick="switchQuestionEditorPanel('review')">
+                    <span>4</span><strong>评述与关联</strong><small>评注、配图与关联</small>
                 </button>
             </nav>
 
@@ -985,19 +989,49 @@
                         </div>
                     </div>
 
-                    <!-- 5. Review & Question Association - Apple Glass Style -->
-                    <div class="apple-divider my-5"></div>
+                </div>
+
+                <!-- 4. Review & Question Association - Apple Glass Style -->
+                <div id="reviewAssociationPanel" class="bank-editor-panel glass-panel p-5 rounded-2xl space-y-4 hidden" data-editor-panel="review">
+                    <h3 class="text-sm font-semibold text-slate-500 flex items-center space-x-2">
+                        <i class="fa-solid fa-comment-dots text-slate-400"></i>
+                        <span>评述与关联</span>
+                    </h3>
+
+                    <!-- 4.1 评述编辑区（编辑能力与题干部对齐：规范分式 / 公式速查 / 配图 / 实时预览） -->
                     <div class="space-y-3">
                         <div class="flex justify-between items-center">
-                            <label class="block text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center space-x-1">
+                            <span class="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center space-x-1">
                                 <span class="bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-md px-2 py-0.5 text-[11px] mr-1.5 font-medium">附加信息</span>
-                                <span>评述与关联题目 (可选填)</span>
-                            </label>
+                                <span>评述（批注）</span>
+                            </span>
+                            <button type="button" id="normalizeReviewFractionsBtn" onclick="normalizeEditorFractions('editReview', this)" class="inline-flex min-h-[44px] cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-500/30 disabled:opacity-50" data-tooltip="规范完整数学环境中的分式：主体放大，上下标与内层保持紧凑；核对预览后保存">
+                                <i class="fa-solid fa-divide" aria-hidden="true"></i><span>规范分式</span>
+                            </button>
                         </div>
 
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <details class="space-y-3"><summary>公式输入速查（可选）</summary>
+                            <p class="text-xs text-slate-400"><i class="fa-solid fa-circle-info"></i> 点击后插入到下方评述框的光标位置，支持 LaTeX / Markdown 混排。</p>
+                            <div class="flex flex-wrap gap-1.5">
+                                <button type="button" class="text-[10px] bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md cursor-pointer hover:bg-slate-200 font-mono" onclick="insertContentHelper('$x^2$', 'editReview')">$x^2$ (行内公式)</button>
+                                <button type="button" class="text-[10px] bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md cursor-pointer hover:bg-slate-200 font-mono" onclick="insertContentHelper('\\dfrac{a}{b}', 'editReview')">$\dfrac{a}{b}$ (分数)</button>
+                                <button type="button" class="text-[10px] bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md cursor-pointer hover:bg-slate-200 font-mono" onclick="insertContentHelper('\\sqrt{x}', 'editReview')">$\sqrt{x}$ (开根)</button>
+                                <button type="button" class="text-[10px] bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md cursor-pointer hover:bg-slate-200 font-mono" onclick="insertContentHelper('\\triangle ABC', 'editReview')">$\triangle ABC$ (三角形)</button>
+                                <button type="button" class="text-[10px] bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md cursor-pointer hover:bg-slate-200 font-mono" onclick="insertContentHelper('\\parallelogram ABCD', 'editReview')">$\parallelogram ABCD$ (平行四边形)</button>
+                                <button type="button" class="text-[10px] bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md cursor-pointer hover:bg-slate-200 font-mono" onclick="insertContentHelper('\\wideparen{AB}', 'editReview')">$\wideparen{AB}$ (圆弧)</button>
+                                <button type="button" class="text-[10px] bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md cursor-pointer hover:bg-slate-200 font-mono" onclick="insertContentHelper('\\angle ABC', 'editReview')">$\angle ABC$ (角)</button>
+                                <button type="button" class="text-[10px] bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md cursor-pointer hover:bg-slate-200 font-mono" onclick="insertContentHelper('\\ang{30;15;20}', 'editReview')">30°15′20″ (度分秒)</button>
+                                <button type="button" class="text-[10px] bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md cursor-pointer hover:bg-slate-200 font-mono" onclick="insertContentHelper('\\perthousand', 'editReview')">‰ (千分号)</button>
+                                <button type="button" class="text-[10px] bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md cursor-pointer hover:bg-slate-200 font-mono" onclick="insertContentHelper('\\celsius', 'editReview')">℃ (摄氏度)</button>
+                                <button type="button" class="text-[10px] bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md cursor-pointer hover:bg-slate-200 font-mono" onclick="insertContentHelper('\\vec{a}', 'editReview')">$\vec{a}$ (向量)</button>
+                                <button type="button" class="text-[10px] bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md cursor-pointer hover:bg-slate-200 font-mono" onclick="insertContentHelper('\\fillin', 'editReview')">\fillin (填空)</button>
+                                <button type="button" class="text-[10px] bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md cursor-pointer hover:bg-slate-200 font-mono" onclick="insertContentHelper('$\\begin{cases} x, & x \\ge 0 \\ -x, & x < 0 \\end{cases}$', 'editReview')">\cases (分段)</button>
+                            </div>
+                        </details>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
                             <!-- Left: Review Input - Apple Glass Style -->
-                            <div class="space-y-1.5" data-review-dropzone="editReview">
+                            <div class="space-y-1.5 flex flex-col" data-review-dropzone="editReview">
                                 <label for="editReview" class="block text-[11px] font-semibold text-slate-500 flex items-center space-x-1">
                                     <i class="fa-solid fa-comment-dots text-indigo-500 mr-1"></i>批注
                                 </label>
@@ -1011,35 +1045,66 @@
                                 <textarea id="editReview" rows="8" placeholder="在此输入本题教学思考、解析评注（允许空白，将实时在预览区展示）..."
                                           style="overflow-y:auto"
                                           class="w-full p-3.5 rounded-xl text-xs leading-relaxed resize-y review-autogrow border border-slate-200 focus:border-brand-500 focus:ring-2 focus:ring-brand-100 transition-all"></textarea>
-                            </div>
-                            
-                            <!-- Right: Association Selector - Apple Glass Style -->
-                            <div class="space-y-1.5 max-w-sm">
-                                <label class="block text-[11px] font-semibold text-slate-500 flex items-center space-x-1">
-                                    <i class="fa-solid fa-link text-brand-500 mr-1"></i>关联题库中的其他题目
-                                </label>
-                                <div class="space-y-1">
-                                    <select id="editRelationType" class="w-full max-w-sm h-9 px-2.5 rounded-xl text-xs border border-slate-200 bg-white"></select>
-                                    <input type="text" id="editRelationCustom" maxlength="40" placeholder="自定义关联主题（如：一题多解对比）"
-                                           class="hidden w-full max-w-sm h-9 px-2.5 rounded-xl text-xs border border-slate-200 bg-white mt-1">
+
+                                <!-- 评述配图 / 插图 -->
+                                <div class="space-y-2">
+                                    <label class="block text-xs font-semibold text-slate-400 flex items-center space-x-1">
+                                        <i class="fa-solid fa-image"></i>
+                                        <span>评述配图 / 插图</span>
+                                    </label>
+                                    <div id="reviewIllustrationDropZone" tabindex="0" class="border-2 border-dashed border-slate-200 hover:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 bg-white rounded-xl p-4 text-center cursor-pointer transition-all duration-300">
+                                        <input type="file" id="reviewIllustrationFileInput" accept="image/*" class="hidden">
+                                        <i class="fa-solid fa-cloud-arrow-up text-slate-300 text-2xl mb-1"></i>
+                                        <p class="text-xs text-slate-500 font-medium">拖拽插图到此，或点击上传 (支持粘贴剪贴板截图)</p>
+                                        <p class="text-[10px] text-slate-400 mt-0.5">上传后仅插入到评述中，不影响题干插图列表</p>
+                                    </div>
                                 </div>
-                                <div class="flex space-x-2 items-center">
-                                    <input type="number" id="editRelatedQuestionNum" placeholder="编号" class="w-16 h-10 px-2 rounded-xl text-xs text-center border border-slate-200 focus:border-brand-500 focus:ring-2 focus:ring-brand-100 transition-all" min="1" title="输入要关联题目的显示编号数字">
-                                    <select id="editRelatedQuestion" class="flex-1 min-w-0 h-10 px-2.5 rounded-xl text-xs truncate border border-slate-200 focus:border-brand-500 focus:ring-2 focus:ring-brand-100 transition-all">
-                                        <option value="">-- 选择要关联的题目 (可选) --</option>
-                                    </select>
-                                    <button type="button" onclick="associateRelatedQuestion()" class="h-10 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shrink-0 bg-brand-50 hover:bg-brand-100 text-brand-700 font-bold border border-brand-200 shadow-sm hover:shadow-sm transition-all active:scale-95" title="按所选关联类型建立关联">
-                                        <i class="fa-solid fa-link text-brand-600"></i>
-                                        <span>关联</span>
-                                    </button>
-                                    <button type="button" onclick="clearRelatedQuestion()" class="h-10 px-2.5 rounded-xl text-xs flex items-center justify-center shrink-0 text-rose-500 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 transition-all active:scale-95" title="删除本题的全部关联关系">
-                                        <i class="fa-solid fa-link-slash"></i>
-                                    </button>
+                            </div>
+
+                            <!-- Right: Live Realtime Preview (KaTeX) -->
+                            <div class="flex flex-col border border-slate-200 rounded-xl bg-white overflow-hidden">
+                                <div class="px-3.5 py-2 bg-indigo-50/60 border-b flex justify-between items-center text-xs font-medium text-slate-500">
+                                    <span><i class="fa-solid fa-eye text-slate-400 mr-1"></i>评述实时排版预览</span>
+                                    <span class="text-[10px] text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-md">实时同步</span>
+                                </div>
+                                <div id="reviewPreview" class="flex-1 p-4 overflow-y-auto text-sm leading-relaxed min-h-[200px] preview-box select-text">
+                                    <p class="text-slate-400 italic">在左侧框中输入，此处将实时展示最终排版效果...</p>
                                 </div>
                             </div>
                         </div>
                     </div>
 
+                    <!-- 4.2 关联题目 -->
+                    <div class="apple-divider my-5"></div>
+                    <div class="space-y-3">
+                        <label class="block text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center space-x-1">
+                            <span>关联题目 (可选填)</span>
+                        </label>
+
+                        <div class="space-y-1.5 max-w-sm">
+                            <label class="block text-[11px] font-semibold text-slate-500 flex items-center space-x-1">
+                                <i class="fa-solid fa-link text-brand-500 mr-1"></i>关联题库中的其他题目
+                            </label>
+                            <div class="space-y-1">
+                                <select id="editRelationType" class="w-full max-w-sm h-9 px-2.5 rounded-xl text-xs border border-slate-200 bg-white"></select>
+                                <input type="text" id="editRelationCustom" maxlength="40" placeholder="自定义关联主题（如：一题多解对比）"
+                                       class="hidden w-full max-w-sm h-9 px-2.5 rounded-xl text-xs border border-slate-200 bg-white mt-1">
+                            </div>
+                            <div class="flex space-x-2 items-center">
+                                <input type="number" id="editRelatedQuestionNum" placeholder="编号" class="w-16 h-10 px-2 rounded-xl text-xs text-center border border-slate-200 focus:border-brand-500 focus:ring-2 focus:ring-brand-100 transition-all" min="1" title="输入要关联题目的显示编号数字">
+                                <select id="editRelatedQuestion" class="flex-1 min-w-0 h-10 px-2.5 rounded-xl text-xs truncate border border-slate-200 focus:border-brand-500 focus:ring-2 focus:ring-brand-100 transition-all">
+                                    <option value="">-- 选择要关联的题目 (可选) --</option>
+                                </select>
+                                <button type="button" onclick="associateRelatedQuestion()" class="h-10 px-3 rounded-xl text-xs flex items-center justify-center space-x-1 shrink-0 bg-brand-50 hover:bg-brand-100 text-brand-700 font-bold border border-brand-200 shadow-sm hover:shadow-sm transition-all active:scale-95" title="按所选关联类型建立关联">
+                                    <i class="fa-solid fa-link text-brand-600"></i>
+                                    <span>关联</span>
+                                </button>
+                                <button type="button" onclick="clearRelatedQuestion()" class="h-10 px-2.5 rounded-xl text-xs flex items-center justify-center shrink-0 text-rose-500 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 transition-all active:scale-95" title="删除本题的全部关联关系">
+                                    <i class="fa-solid fa-link-slash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
             </div>
@@ -1828,6 +1893,16 @@
                         </div>
                         <i class="fa-solid fa-fire text-3xl text-rose-500/20 dark:text-rose-400/30 absolute right-3 group-hover:scale-110 transition-transform duration-300 z-0"></i>
                     </div>
+                </div>
+
+                <!-- 1.1 功能标签分布 -->
+                <div class="glass-card rounded-xl p-4 flex flex-col space-y-3">
+                    <h4 class="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center space-x-1 border-b border-slate-100 dark:border-slate-800 pb-2">
+                        <i class="fa-solid fa-bolt text-slate-400"></i>
+                        <span>功能标签分布</span>
+                    </h4>
+                    <div id="statsFunctionTagList" class="flex flex-wrap gap-2"></div>
+                    <p id="statsFunctionTagEmpty" class="text-[11px] text-slate-400">暂无功能标签数据。</p>
                 </div>
 
                 <!-- 2. Main Analytics Panels Split -->
