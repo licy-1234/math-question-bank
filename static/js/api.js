@@ -663,6 +663,11 @@
                 }));
                 return unique(paths);
             }
+            function withoutReviewOnly(paths, content, answer, review) {
+                const ordinary = new Set([...collect(content), ...collect(answer)]);
+                const reviewOnly = new Set(collect(review).filter(path => !ordinary.has(path)));
+                return unique(paths).filter(path => !reviewOnly.has(path));
+            }
             function normalizeMap(raw) {
                 const result = Object.create(null);
                 if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
@@ -721,7 +726,7 @@
                     }
                     return Array.isArray(value) ? transformArray(value) : value;
                 };
-                ['content', 'answer_markdown'].forEach(key => {
+                ['content', 'answer_markdown', 'review'].forEach(key => {
                     if (key in mapped) mapped[key] = mapText(mapped[key], mapping);
                 });
                 if ('image_paths' in mapped) mapped.image_paths = mapArray(mapped.image_paths, path, true);
@@ -742,7 +747,7 @@
                 }
                 return mapped;
             }
-            return Object.freeze({ collect, all, normalizeMap, mapText, mapInput, mapRecord });
+            return Object.freeze({ collect, all, withoutReviewOnly, normalizeMap, mapText, mapInput, mapRecord });
         })();
         // Image references remain at their authored anchors; only the final cluster detaches.
         window.ImageLayoutTools = {
@@ -1617,20 +1622,22 @@
                     }
                     return r.json();
                 })
-                .then(data => {
+                .then(async data => {
                     categoryTree = data;
                     window.categoryTree = data;
                     window.systemMetadata = systemMetadata;
                     if (window.MathBankTags && typeof window.MathBankTags.init === 'function') {
-                        return window.MathBankTags.init();
+                        await window.MathBankTags.init();
                     }
-                    return null;
-                })
-                .then(() => {
-                    if (typeof populateFilterDropdowns === 'function') {
-                        populateFilterDropdowns();
+                    const subdivisions = typeof window.loadSubKnowledgeCatalog === 'function'
+                        ? await window.loadSubKnowledgeCatalog() : null;
+                    populateCategoryDropdowns();
+                    populateFilterDropdowns();
+                    if (subdivisions && subdivisions.version_changed) {
+                        if (activeSidebarTab === 'bank') loadQuestions(); else loadDrafts();
+                        if (typeof window.onPaperCurriculumChanged === 'function') window.onPaperCurriculumChanged();
                     }
-                    
+
                     // Most callers only need fresh dropdown data. Reloading the
                     // editor is an explicit settings/curriculum operation because
                     // it can replace text typed after a save or batch import.

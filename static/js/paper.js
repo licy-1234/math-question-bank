@@ -29,6 +29,8 @@
             compulsory: '',
             chapter: '',
             knowledge: '',
+            sub_knowledge: [],
+            sub_knowledge_mode: 'any',
             question_type: '',
             difficulty: '',
             relation_code: '',
@@ -453,7 +455,8 @@
 
     // Toggle Part 2 Filter Bar Collapsing
     function refreshPaperFilterSummary() {
-        const count = ['compulsory', 'chapter', 'knowledge', 'question_type', 'difficulty', 'relation_code'].filter(key => window.PaperStore.filters[key]).length;
+        const count = ['compulsory', 'chapter', 'knowledge', 'question_type', 'difficulty', 'relation_code'].filter(key => window.PaperStore.filters[key]).length
+            + (window.PaperStore.filters.sub_knowledge?.length ? 1 : 0);
         const label = document.getElementById('paperFilterToggleTxt');
         const button = document.getElementById('togglePaperFilterBtn');
         if (label) label.textContent = count ? `筛选 (${count})` : '筛选';
@@ -480,9 +483,20 @@
         document.getElementById(meta ? 'togglePaperMetaBtn' : 'togglePaperAiBtn')?.setAttribute('aria-expanded', String(open));
     };
     window.clearPaperFilters = function () {
-        Object.assign(window.PaperStore.filters, {compulsory:'', chapter:'', knowledge:'', question_type:'', difficulty:'', relation_code:''});
+        Object.assign(window.PaperStore.filters, {compulsory:'', chapter:'', knowledge:'', sub_knowledge:[], sub_knowledge_mode:'any', question_type:'', difficulty:'', relation_code:''});
         renderPart2FilterSection();
         window.onPaperFilterChange('keyword', window.PaperStore.filters.keyword);
+    };
+    window.onPaperCurriculumChanged = function () {
+        clearTimeout(filterDebounceTimer);
+        cancelBankQuestionsFetch();
+        const f = window.PaperStore.filters;
+        Object.assign(f, {compulsory:'', chapter:'', knowledge:'', sub_knowledge:[], sub_knowledge_mode:'any'});
+        const pagination = window.PaperStore.streamPagination.all;
+        Object.assign(pagination, {page:1, total:null, totalPages:1, loading:false, error:'', retryPage:1});
+        window.PaperStore.bankQuestions = [];
+        renderPart2FilterSection();
+        fetchBankQuestions(1).then(shouldRender => { if (shouldRender) renderPart3QuestionStream(); });
     };
 
     // Move Question Order
@@ -1000,6 +1014,7 @@
             </div>`;
         refreshPaperFilterSummary();
         ensurePaperRelationTypes();
+        if (typeof window.renderSubKnowledgeOptions === 'function') window.renderSubKnowledgeOptions('paper', f.sub_knowledge || []);
     }
 
     let filterDebounceTimer = null;
@@ -1020,11 +1035,17 @@
         if (key === 'compulsory') {
             window.PaperStore.filters.chapter = '';
             window.PaperStore.filters.knowledge = '';
+            window.PaperStore.filters.sub_knowledge = [];
             renderPart2FilterSection();
         } else if (key === 'chapter') {
             window.PaperStore.filters.knowledge = '';
+            window.PaperStore.filters.sub_knowledge = [];
             renderPart2FilterSection();
+        } else if (key === 'knowledge') {
+            window.PaperStore.filters.sub_knowledge = [];
+            if (typeof window.renderSubKnowledgeOptions === 'function') window.renderSubKnowledgeOptions('paper', []);
         }
+        refreshPaperFilterSummary();
 
         if (key === 'keyword') {
             allPagination.loading = true;
@@ -1124,6 +1145,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     prompt: promptText,
+                    expected_version_code: window.activeCurriculumVersion || null,
                     limit: 5,
                     compulsory: f.compulsory,
                     chapter: f.chapter,

@@ -267,6 +267,7 @@ def test_ai_classify_returns_four_value_type_and_coarse_form():
             "下列结论正确的是\\begin{choices}\\item A\\item B\\end{choices}"
         )
 
+<<<<<<< HEAD
     # 粗粒度契约保持不变。
     # 注：旧的 compulsory / chapter（册次名 + 章名字符串）已被 chapter_code /
     # chapter_path（教材树编码 + 完整路径）取代，前端自 1305 行起读的是新字段。
@@ -276,6 +277,16 @@ def test_ai_classify_returns_four_value_type_and_coarse_form():
     # 题干既无选项也无填空位、模型却判选择题 → 纠正为解答题（旧行为是采信模型返回 choice）
     assert ai_result["question_form"] == "detailed_answer"
     assert ai_result["question_form_source"] == "corrected"
+=======
+    assert ai_result == {
+        "status": "success",
+        "compulsory": "必修一",
+        "chapter": "1. 集合",
+        "knowledge": "",
+        "question_form": "choice",
+        "question_form_source": "ai",
+    }
+>>>>>>> 3252b72
     assert fillin_result["question_form"] == "fill_in_blank"
     assert fillin_result["question_form_source"] == "structure"
     assert choices_result["question_form"] == "choice"

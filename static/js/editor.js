@@ -6,6 +6,229 @@ let bankQuestionsLoadController = null;
 let bankQuestionsLoadSequence = 0;
 let bankQuestionsRetryTimer = null;
 
+// A subdivision always carries its complete curriculum path. Legacy category
+// fields and free-form tags remain separate, and selections belong to a version.
+let subKnowledgeCatalog = [];
+let subKnowledgeCatalogRequest = 0;
+let editorSubKnowledgeByVersion = {};
+let editorClassificationByVersion = {};
+function normalizeSubKnowledge(value) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    return value.filter(item => item && typeof item === 'object' && !Array.isArray(item))
+        .map(item => ({ compulsory: String(item.compulsory || '').trim(),
+            chapter: String(item.chapter || '').trim(), knowledge: String(item.knowledge || '').trim() }))
+        .filter(item => item.compulsory && item.chapter && item.knowledge)
+        .filter(item => { const key = JSON.stringify(item); if (seen.has(key)) return false; seen.add(key); return true; });
+}
+function subKnowledgeSignature(value) {
+    return JSON.stringify(normalizeSubKnowledge(value).map(item => JSON.stringify(item)).sort());
+}
+function subKnowledgeVersionsSignature(value) {
+    return JSON.stringify(Object.entries(value || {}).map(([version, paths]) => [version, subKnowledgeSignature(paths)])
+        .filter(([, signature]) => signature !== '[]').sort((left, right) => left[0].localeCompare(right[0])));
+}
+function subKnowledgePathLabel(path) {
+    return [path.compulsory, path.chapter, path.knowledge].join(' / ');
+}
+function getSubKnowledgeSelection(kind) {
+    const container = document.getElementById(`${kind}SubKnowledgeOptions`);
+    if (!container) return [];
+    const paths = Array.from(container.querySelectorAll('input[type="checkbox"]:checked')).map(input => {
+        try { return JSON.parse(input.value); } catch (_) { return null; }
+    });
+    return normalizeSubKnowledge(paths);
+}
+function getEditorSubKnowledge() { return getSubKnowledgeSelection('edit'); }
+function getFilterSubKnowledge() { return getSubKnowledgeSelection('filter'); }
+function directorySubKnowledgePaths() {
+    const result = [];
+    Object.entries(categoryTree || {}).forEach(([compulsory, chapters]) => {
+        Object.entries(chapters || {}).forEach(([chapter, values]) => {
+            if (Array.isArray(values)) values.forEach(knowledge => result.push({compulsory, chapter, knowledge}));
+        });
+    });
+    return normalizeSubKnowledge(result);
+}
+function refreshSubKnowledgeSummary(kind) {
+    const summary = document.getElementById(`${kind}SubKnowledgeSummary`);
+    if (!summary) return;
+    const count = getSubKnowledgeSelection(kind).length;
+    summary.textContent = count ? `细分知识点（已选 ${count} 项）` : '细分知识点（可多选）';
+}
+function searchSubKnowledgeOptions(kind, value) {
+    const container = document.getElementById(`${kind}SubKnowledgeOptions`);
+    const query = String(value || '').trim().toLowerCase();
+    if (container) Array.from(container.querySelectorAll('label')).forEach(label => {
+        label.hidden = Boolean(query) && !label.textContent.toLowerCase().includes(query);
+    });
+}
+function renderSubKnowledgeOptions(kind, selected = null) {
+    const container = document.getElementById(`${kind}SubKnowledgeOptions`);
+    if (!container) return;
+    const paths = normalizeSubKnowledge(selected === null ? getSubKnowledgeSelection(kind) : selected);
+    const checked = new Set(paths.map(path => JSON.stringify(path)));
+    const candidates = normalizeSubKnowledge([...paths, ...directorySubKnowledgePaths(), ...subKnowledgeCatalog]);
+    container.replaceChildren();
+    candidates.forEach(path => {
+        const label = document.createElement('label');
+        label.className = 'sub-knowledge-option';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.value = JSON.stringify(path);
+        input.checked = checked.has(input.value);
+        input.addEventListener('change', () => {
+            refreshSubKnowledgeSummary(kind);
+            if (kind === 'edit') {
+                if (window.activeCurriculumVersion) editorSubKnowledgeByVersion[window.activeCurriculumVersion] = getEditorSubKnowledge();
+                renderEditorPaperMeta();
+                refreshEditorFeedback();
+            } else if (kind === 'filter') {
+                currentBankPage = currentDraftPage = 1;
+                updateBankFilterSummary();
+                if (activeSidebarTab === 'bank') loadQuestions(); else loadDrafts();
+            } else if (kind === 'paper' && typeof window.onPaperFilterChange === 'function') {
+                window.onPaperFilterChange('sub_knowledge', getSubKnowledgeSelection(kind));
+            }
+        });
+        const text = document.createElement('span');
+        text.textContent = subKnowledgePathLabel(path);
+        label.append(input, text);
+        container.appendChild(label);
+    });
+    if (!candidates.length) {
+        const empty = document.createElement('p');
+        empty.className = 'sub-knowledge-empty';
+        empty.textContent = '当前目录暂无候选，可填写完整路径添加。';
+        container.appendChild(empty);
+    }
+    refreshSubKnowledgeSummary(kind);
+    searchSubKnowledgeOptions(kind, document.getElementById(`${kind}SubKnowledgeSearch`)?.value);
+}
+function setEditorSubKnowledge(value) {
+    const paths = normalizeSubKnowledge(value);
+    const version = window.activeCurriculumVersion || window.editorCurriculumVersion;
+    if (version) editorSubKnowledgeByVersion[version] = paths;
+    renderSubKnowledgeOptions('edit', paths);
+}
+function resetEditorSubKnowledge() {
+    editorSubKnowledgeByVersion = {};
+    editorClassificationByVersion = {};
+    window.editorCurriculumVersion = window.activeCurriculumVersion || '';
+    setEditorSubKnowledge([]);
+}
+function hydrateEditorSubKnowledge(record, isDraft = false) {
+    editorSubKnowledgeByVersion = {};
+    editorClassificationByVersion = isDraft && record?.classification_by_version ? {...record.classification_by_version} : {};
+    if (isDraft && record && record.sub_knowledge_by_version) {
+        Object.entries(record.sub_knowledge_by_version).forEach(([version, paths]) => {
+            editorSubKnowledgeByVersion[version] = normalizeSubKnowledge(paths);
+        });
+    }
+    window.editorCurriculumVersion = isDraft ? (window.activeCurriculumVersion || '')
+        : (record?.active_version_code || window.activeCurriculumVersion || '');
+    if (window.editorCurriculumVersion) editorClassificationByVersion[window.editorCurriculumVersion] = {
+        category_compulsory: document.getElementById('editCompulsory')?.value || '',
+        category_chapter: document.getElementById('editChapter')?.value || '',
+        category_knowledge: document.getElementById('editKnowledge')?.value || ''
+    };
+    setEditorSubKnowledge(isDraft ? subKnowledgeForDraft(record) : record?.sub_knowledge || []);
+}
+function editorSubKnowledgeVersionSnapshot() {
+    const result = {};
+    Object.entries(editorSubKnowledgeByVersion).forEach(([version, paths]) => { result[version] = normalizeSubKnowledge(paths); });
+    const version = window.activeCurriculumVersion || window.editorCurriculumVersion;
+    if (version) result[version] = getEditorSubKnowledge();
+    return result;
+}
+function editorClassificationVersionSnapshot() {
+    const result = JSON.parse(JSON.stringify(editorClassificationByVersion));
+    const version = window.editorCurriculumVersion || window.activeCurriculumVersion;
+    if (version) result[version] = {
+        category_compulsory: document.getElementById('editCompulsory')?.value || '',
+        category_chapter: document.getElementById('editChapter')?.value || '',
+        category_knowledge: document.getElementById('editKnowledge')?.value || ''
+    };
+    return result;
+}
+function draftClassification(draft) {
+    const version = window.activeCurriculumVersion || '';
+    return draft?.classification_by_version?.[version]
+        || (!draft?.version_code || draft.version_code === version ? draft : {});
+}
+function addEditorSubKnowledge() {
+    const fields = ['Compulsory', 'Chapter', 'Knowledge'].map(key => document.getElementById(`editSubKnowledgeCustom${key}`));
+    if (fields.some(field => !field || !field.value.trim())) {
+        showToast('请填写细分知识点的学段、章节和小节完整路径。', 'info');
+        fields.find(field => field && !field.value.trim())?.focus();
+        return;
+    }
+    const path = {compulsory: fields[0].value, chapter: fields[1].value, knowledge: fields[2].value};
+    setEditorSubKnowledge([...getEditorSubKnowledge(), path]);
+    fields.forEach(field => { field.value = ''; });
+    const picker = document.getElementById('editSubKnowledgePicker');
+    if (picker) picker.open = true;
+    renderEditorPaperMeta();
+    refreshEditorFeedback();
+}
+function subKnowledgeForDraft(draft) {
+    const version = window.activeCurriculumVersion || '';
+    const stored = draft && draft.sub_knowledge_by_version;
+    if (stored && typeof stored === 'object' && version) return normalizeSubKnowledge(stored[version]);
+    return draft && draft.version_code && draft.version_code === version ? normalizeSubKnowledge(draft.sub_knowledge) : [];
+}
+function matchesQuestionCurriculumFilters(item, filters) {
+    const path = {compulsory: item.category_compulsory || '', chapter: item.category_chapter || '', knowledge: item.category_knowledge || ''};
+    return ['compulsory', 'chapter', 'knowledge'].every(key => !filters[key] || path[key] === filters[key]);
+}
+function renderSubKnowledgeBadges(value, compact = false) {
+    const paths = normalizeSubKnowledge(value);
+    if (!paths.length) return '';
+    const shown = compact ? paths.slice(0, 2) : paths;
+    const badges = shown.map(path => `<span class="sub-knowledge-badge" title="${window.MathBankSafe.escapeAttribute(subKnowledgePathLabel(path))}">细分：${window.MathBankSafe.escapeText(subKnowledgePathLabel(path))}</span>`).join('');
+    const more = compact && paths.length > shown.length ? `<span class="sub-knowledge-badge" title="${window.MathBankSafe.escapeAttribute(paths.map(subKnowledgePathLabel).join('；'))}">+${paths.length - shown.length}</span>` : '';
+    return `<div class="sub-knowledge-badges">${badges}${more}</div>`;
+}
+async function loadSubKnowledgeCatalog() {
+    const request = ++subKnowledgeCatalogRequest;
+    const response = await fetch('/api/config/sub-knowledge');
+    if (!response.ok) throw new Error('细分知识点目录加载失败');
+    const data = await response.json();
+    if (request !== subKnowledgeCatalogRequest) return null;
+    const previousVersion = window.activeCurriculumVersion || window.editorCurriculumVersion;
+    const nextVersion = typeof data.version_code === 'string' ? data.version_code : '';
+    if (!nextVersion) throw new Error('教材版本信息缺失');
+    const versionChanged = Boolean(previousVersion && previousVersion !== nextVersion);
+    const editorWasModified = typeof isEditorModified === 'function' && isEditorModified();
+    if (previousVersion) editorSubKnowledgeByVersion[previousVersion] = getEditorSubKnowledge();
+    window.activeCurriculumVersion = nextVersion;
+    subKnowledgeCatalog = normalizeSubKnowledge(data.sub_knowledge);
+    if (versionChanged) {
+        setEditorSubKnowledge(editorSubKnowledgeByVersion[nextVersion] || []);
+        // A clean question may now reload its new-version mirror. Preserve a
+        // dirty session and require its original version before saving it.
+        if (!editorWasModified && originalQuestionState) {
+            originalQuestionState.sub_knowledge = getEditorSubKnowledge();
+            originalQuestionState.sub_knowledge_by_version = editorSubKnowledgeVersionSnapshot();
+        }
+        renderSubKnowledgeOptions('filter', []);
+        currentBankPage = currentDraftPage = 1;
+        if (window.PaperStore) window.PaperStore.filters.sub_knowledge = [];
+    } else {
+        renderSubKnowledgeOptions('edit');
+        renderSubKnowledgeOptions('filter');
+    }
+    if (!window.editorCurriculumVersion) window.editorCurriculumVersion = nextVersion;
+    if (window.PaperStore) renderSubKnowledgeOptions('paper', window.PaperStore.filters.sub_knowledge || []);
+    return {...data, version_changed: versionChanged};
+}
+Object.assign(window, {normalizeSubKnowledge, subKnowledgeSignature, subKnowledgeVersionsSignature, subKnowledgePathLabel, getEditorSubKnowledge,
+    getFilterSubKnowledge, getSubKnowledgeSelection, renderSubKnowledgeOptions, setEditorSubKnowledge,
+    resetEditorSubKnowledge, hydrateEditorSubKnowledge, editorSubKnowledgeVersionSnapshot,
+    editorClassificationVersionSnapshot, draftClassification,
+    searchSubKnowledgeOptions, addEditorSubKnowledge, loadSubKnowledgeCatalog, subKnowledgeForDraft,
+    matchesQuestionCurriculumFilters, renderSubKnowledgeBadges});
+
 // Formatting operates on one editor snapshot; delayed replies cannot replace
 // newer typing or a different question/draft, and never advance the saved state.
 async function normalizeEditorFractions(target, button) {
@@ -876,7 +1099,7 @@ window.functionTagBadge = functionTagBadge;
             EditorState.setDraftId(draft.id);
             
             // Backup the new draft state as the "original state" so the editor is no longer modified
-            backupEditorState(null, draft.id);
+            backupEditorState(EditorState.questionId, draft.id);
             
             updateDraftCountBadge();
             showToast('已暂存至草稿箱！');
@@ -894,7 +1117,10 @@ window.functionTagBadge = functionTagBadge;
             if (typeof window.invalidatePendingQuestionDetailLoad === 'function') {
                 window.invalidatePendingQuestionDetailLoad();
             }
-            EditorState.useDraft(draft);
+            if (draft.saved_question_id) {
+                EditorState.useQuestion({id: draft.saved_question_id});
+                EditorState.setDraftId(draft.id);
+            } else EditorState.useDraft(draft);
             
             // Populate form fields
             document.getElementById('editContent').value = draft.content || '';
@@ -910,6 +1136,7 @@ window.functionTagBadge = functionTagBadge;
             if (window.MathBankTags && typeof window.MathBankTags.setSelection === 'function') {
                 window.MathBankTags.setSelection(draft.tag_codes || null);
             }
+            hydrateEditorSubKnowledge(draft, true);
             
             // Load images
             const allDraftImages = Array.isArray(draft.image_paths)
@@ -918,7 +1145,9 @@ window.functionTagBadge = functionTagBadge;
             uploadedAnswerImages = typeof window.collectAnswerImagePaths === 'function'
                 ? window.collectAnswerImagePaths(draft.answer_markdown || '')
                 : [];
-            uploadedImages = allDraftImages.filter(path => !uploadedAnswerImages.includes(path));
+            uploadedImages = window.MathBankImageAssets.withoutReviewOnly(
+                allDraftImages, draft.content, draft.answer_markdown, draft.review
+            ).filter(path => !uploadedAnswerImages.includes(path));
             window.hydrateTikzState(draft);
             FigureLayoutState.hydrate(draft);
             const hiddenTikzReferencePaths = new Set(TikzState.referencePaths());
@@ -958,7 +1187,7 @@ window.functionTagBadge = functionTagBadge;
             document.getElementById('editorTitle').textContent = `编辑草稿 - 暂存中`;
             
             // Backup draft state
-            backupEditorState(null, draft.id);
+            backupEditorState(EditorState.questionId, draft.id);
             setQuestionDetailEditAvailability(true);
             
             // Active highlighting in sidebar drafts list
@@ -1135,7 +1364,7 @@ window.functionTagBadge = functionTagBadge;
                             </button>
                         </div>
                     </div>
-                    <div class="text-xs text-slate-700 leading-relaxed font-medium line-clamp-2 card-formula-render">${cleanContent || '[未填题干]'}</div>
+                    <div class="text-xs text-slate-700 leading-relaxed font-medium ${cleanContent.includes('choices-grid') ? 'question-choice-preview' : 'line-clamp-2'} card-formula-render">${cleanContent || '[未填题干]'}</div>
                     <div class="flex justify-between items-center text-[9px] text-slate-400 border-t pt-1.5">
                         <span class="truncate max-w-[120px] font-semibold text-emerald-600" title="${window.MathBankSafe.escapeAttribute(item.chapter_label || item.category_knowledge || item.category_chapter || '未分类')}"><i class="fa-solid fa-box mr-0.5"></i>${window.MathBankSafe.escapeText(item.chapter_label || item.category_knowledge || item.category_chapter || '未分类')}</span>
                         <span class="font-mono text-slate-400">${window.MathBankSafe.escapeText(item.source ? item.source.substring(0, 12) : '草稿暂存')}</span>
@@ -1170,6 +1399,7 @@ window.functionTagBadge = functionTagBadge;
                 };
                 
                 qListContainer.appendChild(itemCard);
+                adaptChoicesGridLayout(itemCard);
             });
             
             renderSidebarPagination(totalItems, currentDraftPage, 'drafts');
@@ -1545,6 +1775,75 @@ window.functionTagBadge = functionTagBadge;
         }
 
         // Populate the new tag-based filter dropdowns (章节 / 数学思想 / 功能).
+        function populateCategoryDropdowns() {
+            const compSelect = document.getElementById('editCompulsory');
+            const chapSelect = document.getElementById('editChapter');
+            const knowSelect = document.getElementById('editKnowledge');
+            
+            if (!compSelect || !chapSelect || !knowSelect) return;
+            if (!categoryTree || typeof categoryTree !== 'object') {
+                console.warn('[Security Shield] 分类数据未准备完毕，跳过编辑区分类级联填充');
+                return;
+            }
+            
+            // Backup selection values to prevent losing them during async reloads
+            const selectedComp = compSelect.value;
+            const selectedChap = chapSelect.value;
+            const selectedKnow = knowSelect.value;
+            
+            // 1. Compulsory
+            compSelect.innerHTML = '<option value="">-- 选择学段 --</option>';
+            Object.keys(categoryTree).forEach(c => {
+                compSelect.innerHTML += `<option value="${window.MathBankSafe.escapeAttribute(c)}">${window.MathBankSafe.escapeText(c)}</option>`;
+            });
+            
+            compSelect.onchange = () => {
+                const comp = compSelect.value;
+                chapSelect.innerHTML = '<option value="">-- 选择章节 --</option>';
+                knowSelect.innerHTML = '<option value="">-- 先选择章节 --</option>';
+                knowSelect.disabled = true;
+                
+                if (comp && categoryTree[comp]) {
+                    chapSelect.disabled = false;
+                    Object.keys(categoryTree[comp]).forEach(ch => {
+                        chapSelect.innerHTML += `<option value="${window.MathBankSafe.escapeAttribute(ch)}">${window.MathBankSafe.escapeText(ch)}</option>`;
+                    });
+                } else {
+                    chapSelect.disabled = true;
+                }
+            };
+            
+            chapSelect.onchange = () => {
+                const comp = compSelect.value;
+                const chap = chapSelect.value;
+                knowSelect.innerHTML = '<option value="">-- 选择小节 (可不选，默认整章) --</option>';
+                
+                if (comp && chap && Array.isArray(categoryTree[comp]?.[chap])) {
+                    knowSelect.disabled = false;
+                    categoryTree[comp][chap].forEach(k => {
+                        knowSelect.innerHTML += `<option value="${window.MathBankSafe.escapeAttribute(k)}">${window.MathBankSafe.escapeText(k)}</option>`;
+                    });
+                } else {
+                    knowSelect.disabled = !(comp && chap);
+                }
+            };
+
+            // Retain historical classifications exactly, including a chapter
+            // name stored as knowledge, even when absent from today's directory.
+            if (selectedComp) {
+                setEditorMetadataValue(compSelect, selectedComp);
+                compSelect.onchange();
+                if (selectedChap) {
+                    setEditorMetadataValue(chapSelect, selectedChap);
+                    chapSelect.disabled = false;
+                    chapSelect.onchange();
+                    if (selectedKnow) setEditorMetadataValue(knowSelect, selectedKnow);
+                }
+            }
+            renderSubKnowledgeOptions('edit');
+        }
+
+        // Populate Categories in Filters
         function populateFilterDropdowns() {
             const chapterSelect = document.getElementById('filterChapterCode');
             const thoughtSelect = document.getElementById('filterThought');
@@ -1758,7 +2057,7 @@ window.functionTagBadge = functionTagBadge;
                                     </button>
                                 </div>
                             </div>
-                            <div class="bank-question-excerpt text-xs text-slate-700 leading-relaxed font-medium line-clamp-2 card-formula-render">${cleanContent || '[空白题干]'}</div>
+                            <div class="bank-question-excerpt text-xs text-slate-700 leading-relaxed font-medium ${cleanContent.includes('choices-grid') ? 'question-choice-preview' : 'line-clamp-2'} card-formula-render">${cleanContent || '[空白题干]'}</div>
                             <div class="bank-question-meta flex justify-between items-center text-[9px] text-slate-400 border-t pt-1.5">
                                 <span class="truncate max-w-[120px] font-semibold" title="${window.MathBankSafe.escapeAttribute(item.chapter_label || item.category_knowledge || item.category_chapter || '未分类')}"><i class="fa-solid fa-folder-open mr-0.5"></i>${window.MathBankSafe.escapeText(item.chapter_label || item.category_knowledge || item.category_chapter || '未分类')}</span>
                                 <span class="font-mono text-slate-400">${window.MathBankSafe.escapeText(item.source ? item.source.substring(0, 12) : '本地录入')}</span>
@@ -1786,6 +2085,7 @@ window.functionTagBadge = functionTagBadge;
                         };
                         
                         qListContainer.appendChild(itemCard);
+                        adaptChoicesGridLayout(itemCard);
                     });
 
                     if (shouldAutoSelectFirstQuestion) {
@@ -1968,6 +2268,10 @@ window.functionTagBadge = functionTagBadge;
 
         function adaptSingleChoicesGrid(grid) {
             if (!grid || !grid.isConnected || grid.clientWidth <= 0) return;
+            // Measure the complete options before allowing prose to wrap. Only
+            // an indivisible formula wider than one column needs its own scroll.
+            grid.querySelectorAll('.choices-math-scroll').forEach(math => math.classList.remove('choices-math-scroll'));
+            grid.dataset.choicesMeasuring = 'true';
             const preferred = getPreferredChoicesColumns(grid);
             const candidates = [4, 2, 1].filter(cols => cols <= preferred);
             let selected = 1;
@@ -1985,6 +2289,13 @@ window.functionTagBadge = functionTagBadge;
 
             grid.style.setProperty('--choices-columns', String(selected));
             grid.dataset.choiceColumns = String(selected);
+            delete grid.dataset.choicesMeasuring;
+            grid.querySelectorAll('.choices-content .katex').forEach(math => {
+                const content = math.closest('.choices-content');
+                if (!math.closest('.katex-display') && math.getBoundingClientRect().width > content.clientWidth + 1) {
+                    math.classList.add('choices-math-scroll');
+                }
+            });
         }
 
         function adaptChoicesGridLayout(root) {
@@ -2084,6 +2395,8 @@ window.functionTagBadge = functionTagBadge;
                 } catch(e) {
                     console.error(e);
                 }
+                adaptChoicesGridLayout(previewContainer);
+                adaptChoicesGridLayout(paperContainer);
             };
             
             // Attach inputs
@@ -2121,6 +2434,7 @@ window.functionTagBadge = functionTagBadge;
                 } catch(e) {
                     console.error('KaTeX review rendering error: ', e);
                 }
+                if (content) adaptChoicesGridLayout(content);
             };
             editReview.addEventListener('input', debounce(updateReviewPreview, 250));
 
@@ -2343,6 +2657,11 @@ window.functionTagBadge = functionTagBadge;
         }
         function registerSchoolMathSymbols(renderer) {
             const { Span, SvgNode, PathNode } = renderer.__domTree;
+            // exam-zh-symbols defines these zero-argument upright constants.
+            // Register macros in the shared renderer so every preview keeps
+            // the original TeX and ordinary variable i/e remain italic.
+            ['iu', 'upi'].forEach(name => renderer.__defineMacro('\\' + name, '\\mathrm{i}'));
+            ['eu', 'upe'].forEach(name => renderer.__defineMacro('\\' + name, '\\mathrm{e}'));
             renderer.__defineMacro('\\ensuremath', context =>
                 context.mode === 'text' ? '\\({#1}\\)' : '{#1}');
             renderer.__defineFunction({
@@ -2893,7 +3212,8 @@ window.functionTagBadge = functionTagBadge;
                     if (/\\(dfrac|frac|sqrt|cdot|times|pm|le|ge|ne|in|vec|mathbf|boldsymbol|mathrm|text|alpha|beta|gamma|delta|theta|pi|varphi|omega)\b/.test(cleanItem) && !/\$/.test(cleanItem)) {
                         cleanItem = '$' + cleanItem + '$';
                     }
-                    html += `<div class="choices-item flex items-baseline"><span class="choices-label font-bold mr-1.5 text-slate-800 shrink-0">${label}.</span><div class="choices-content flex-1 [&>p]:m-0 [&>p]:inline">${cleanItem}</div></div>`;
+                    const imageOnly = /^!\[[^\]]*\]\([^)]+\)$/.test(item.trim());
+                    html += `<div class="choices-item ${imageOnly ? 'choices-image-item' : ''} flex items-baseline"><span class="choices-label font-bold mr-1.5 text-slate-800 shrink-0">${label}.</span><div class="choices-content flex-1 [&>p]:m-0 [&>p]:inline">${cleanItem}</div></div>`;
                 });
                 html += '</div>';
                 return html;

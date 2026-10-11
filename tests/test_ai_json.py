@@ -154,8 +154,9 @@ def test_classification_prompts_prefer_later_curriculum_module():
 
     for prompt in prompts:
         assert "选择位置最靠后的模块作为最终分类" in prompt
-        assert "先比较学段从上到下的顺序" in prompt
-        assert "若属于同一学段，再比较章节从前到后的顺序" in prompt
+        assert "教材册次在目录中的排列" in prompt
+        assert "章节在目录中的排列" in prompt
+        assert "不得按字符串排序、裸章节编号或跨教材版本" in prompt
         assert "必修二的“平面向量及其应用”" in prompt
         assert "仅作为背景条件被提及" in prompt
 
