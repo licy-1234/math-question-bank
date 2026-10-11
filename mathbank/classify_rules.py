@@ -1091,6 +1091,69 @@ def classify_with_rules(content: str, ai_payload: dict | None = None) -> dict:
     }
 
 
+# 方法类标签的兜底线索。AI 常常只给题型/难度/章节而漏掉方法类标签，
+# 于是这两种补打就有价值：模型完全没给时，用题干里的方法关键词给出候选，
+# 老师仍可在界面上勾选取消。命中即算， intentionally 保守——宁可漏，不可乱贴。
+_STRATEGY_CLUES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("S01", ("换元", "米元", "令t=", "令 t=", "设t=", "设 t=")),
+    ("S02", ("整体代入", "整体代换", "整体替换", "设而不求")),
+    ("S03", ("待定系数",)),
+    ("S04", ("配方", "配成完全平")),
+    ("S05", ("构造法", "构造函数", "构造数列", "构造不等式", "构造图形", "构造辅助")),
+    ("S06", ("特殊值", "取特殊", "特殊位置", "必要性探路")),
+    ("S07", ("放缩", "放大缩", "适度放大", "适度缩小")),
+    ("S08", ("正难则反", "间接法", "补集思想", "反面入手", "考虑对立")),
+    ("S09", ("算两次", "等体积法", "两种方式表示", "两种途径")),
+    ("S10", ("主元",)),
+    ("S11", ("对称性", "轮换对称", "轴对称", "中心对称", "奇偶对称")),
+    ("S12", ("反证法", "同一法")),
+    ("S13", ("数学归纳法", "归纳假设", "归纳法证明")),
+)
+
+_THOUGHT_CLUES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("T04", ("转化思想", "化归", "等价转化", "正难则反")),
+    ("T01", ("函数思想", "方程思想", "构造方程", "解方程求出")),
+    ("T02", ("数形结合", "借图", "数形", "几何意义", "图象可知", "图像可知")),
+    ("T03", ("分类讨论", "分情况讨论", "分三种情况", "分类如下", "逐一讨论")),
+    ("T05", ("特殊到一般", "一般到特殊", "取特例", "特殊与一般")),
+    ("T08", ("整体考虑", "整体思想", "从整体", "整体把握")),
+    ("T09", ("类比",)),
+    ("T10", ("由特殊到一般归纳", "归纳猜想", "归纳推理")),
+    ("T11", ("数学模型", "建模", "模型思想")),
+    ("T06", ("无限逼近", "极限思想", "无穷项", "有限个与无限个")),
+    ("T13", ("用样本估计", "统计分析", "频率估计概率", "抽样调查")),
+    ("T07", ("必然事件", "随机现象中寻找规律", "概率统计思想")),
+    ("T12", ("程序化求解", "算法步骤", "框图执行")),
+    ("T14", ("集合语言", "一一对应", "映射关系")),
+    ("T15", ("符号表示", "符号化语言中")),
+)
+
+
+def suggest_method_tags(content: str) -> dict:
+    """Return ``{"thought_codes", "strategy_codes"}`` guessed from surface clues.
+
+    Used only to *fill in* method tags when the model left them empty -- the
+    result is always rendered as an editable suggestion, never written
+    silently.  Very conservative by design: at most three thoughts and two
+    strategies, and only explicit textbook wording counts as a clue.
+    """
+
+    raw = str(content or "")
+    thoughts: list[str] = []
+    strategies: list[str] = []
+    for code, clues in _THOUGHT_CLUES:
+        if len(thoughts) >= 3:
+            break
+        if any(clue in raw for clue in clues):
+            thoughts.append(code)
+    for code, clues in _STRATEGY_CLUES:
+        if len(strategies) >= 2:
+            break
+        if any(clue in raw for clue in clues):
+            strategies.append(code)
+    return {"thought_codes": thoughts, "strategy_codes": strategies}
+
+
 def _rank_type_candidates(
     decided: str, has_options: bool, blanks: bool, multi: bool
 ) -> list[str]:

@@ -35,6 +35,8 @@
             difficulty: '',
             strategy: '',
             micro_method: '',
+            source: '',
+            tag: '',
             relation_code: '',
             keyword: '',
             tab: 'all' // 'all' or 'selected'
@@ -457,7 +459,7 @@
 
     // Toggle Part 2 Filter Bar Collapsing
     function refreshPaperFilterSummary() {
-        const count = ['compulsory', 'chapter', 'knowledge', 'question_type', 'difficulty', 'strategy', 'micro_method', 'relation_code'].filter(key => window.PaperStore.filters[key]).length
+        const count = ['compulsory', 'chapter', 'knowledge', 'question_type', 'difficulty', 'strategy', 'micro_method', 'source', 'tag', 'relation_code'].filter(key => window.PaperStore.filters[key]).length
             + (window.PaperStore.filters.sub_knowledge?.length ? 1 : 0);
         const label = document.getElementById('paperFilterToggleTxt');
         const button = document.getElementById('togglePaperFilterBtn');
@@ -485,7 +487,7 @@
         document.getElementById(meta ? 'togglePaperMetaBtn' : 'togglePaperAiBtn')?.setAttribute('aria-expanded', String(open));
     };
     window.clearPaperFilters = function () {
-        Object.assign(window.PaperStore.filters, {compulsory:'', chapter:'', knowledge:'', sub_knowledge:[], sub_knowledge_mode:'any', question_type:'', difficulty:'', strategy:'', micro_method:'', relation_code:''});
+        Object.assign(window.PaperStore.filters, {compulsory:'', chapter:'', knowledge:'', sub_knowledge:[], sub_knowledge_mode:'any', question_type:'', difficulty:'', strategy:'', micro_method:'', source:'', tag:'', relation_code:''});
         renderPart2FilterSection();
         window.onPaperFilterChange('keyword', window.PaperStore.filters.keyword);
     };
@@ -820,6 +822,12 @@
         if (f.micro_method) {
             params.append('micro_method', f.micro_method);
         }
+        if (f.source) {
+            params.append('source', f.source);
+        }
+        if (f.tag) {
+            params.append('tag', f.tag);
+        }
         if (f.relation_code) {
             params.append('relation_code', f.relation_code);
         }
@@ -927,9 +935,8 @@
     }
 
     // Render Part 2: Config & 3-Level Cascade Filter Section
-    // 解题策略选项（受控词表）与微观方法选项（库内已用取值），各加载一次。
+    // 解题策略选项（受控词表）加载一次。微观方法已改为填空搜索，不再需要选项列表。
     let paperStrategyOptionsCache = null;
-    let paperMicroOptionsCache = null;
 
     function ensurePaperStrategyOptions() {
         if (paperStrategyOptionsCache !== null) return;
@@ -955,29 +962,42 @@
         return html;
     }
 
-    function ensurePaperMicroOptions() {
-        if (paperMicroOptionsCache !== null) return;
-        fetch('/api/tag-values?dim=micro')
-            .then(r => (r.ok ? r.json() : { items: [] }))
-            .then(payload => {
-                paperMicroOptionsCache = ((payload && payload.items) || [])
-                    .filter(item => item && item.value)
-                    .map(item => ({ value: String(item.value), count: item.count || 0 }));
-            })
-            .catch(() => { paperMicroOptionsCache = []; })
-            .finally(() => {
-                const sel = document.getElementById('paperFilterMicro');
-                if (sel) sel.innerHTML = paperMicroOptionsHtml(window.PaperStore.filters.micro_method || '');
-            });
+    const PAPER_TEXT_FILTERS = [
+        { key: 'micro_method', id: 'paperFilterMicro', label: '微观方法', placeholder: '搜索微观解题方法…', history: 'paper_micro' },
+        { key: 'source', id: 'paperFilterSource', label: '来源', placeholder: '搜索题目来源…', history: 'paper_source' },
+        { key: 'tag', id: 'paperFilterTag', label: '标签', placeholder: '搜索自定义标签…', history: 'paper_tag' }
+    ];
+
+    function paperTextFilterHtml(item) {
+        const value = escapeHtml(window.PaperStore.filters[item.key] || '');
+        return `<label class="relative">${item.label}<input type="text" id="${item.id}" class="glass-input" autocomplete="off"
+            value="${value}" placeholder="${escapeHtml(item.placeholder)}"
+            data-filter-history="${escapeHtml(item.history)}" data-filter-on-select="onPaperTextFilterPick"
+            aria-label="${escapeHtml(item.label)}"></label>`;
     }
 
-    function paperMicroOptionsHtml(selected) {
-        let html = `<option value="">全部</option>`;
-        (paperMicroOptionsCache || []).forEach(item => {
-            const suffix = item.count > 0 ? `（${item.count}）` : '';
-            html += `<option value="${escapeHtml(item.value)}" ${selected === item.value ? 'selected' : ''}>${escapeHtml(item.value)}${suffix}</option>`;
+    // 组卷的三个填空式筛选（微观方法 / 来源 / 标签）：历史记忆 + 防抖拉取。
+    let paperTextFilterTimer = null;
+
+    function bindPaperTextFilters() {
+        PAPER_TEXT_FILTERS.forEach((item) => {
+            const el = document.getElementById(item.id);
+            if (!el) return;
+            if (window.MathBankFilterHistory) {
+                window.MathBankFilterHistory.attach(el, {
+                    historyKey: item.history,
+                    onSelect: (value) => window.onPaperFilterChange(item.key, value)
+                });
+            }
+            if (el.dataset.paperTextBound === '1') return;
+            el.dataset.paperTextBound = '1';
+            el.addEventListener('input', () => {
+                clearTimeout(paperTextFilterTimer);
+                paperTextFilterTimer = setTimeout(() => {
+                    window.onPaperFilterChange(item.key, el.value);
+                }, 350);
+            });
         });
-        return html;
     }
 
     function renderPart2FilterSection() {        const meta = window.PaperStore.meta;
@@ -1045,12 +1065,12 @@
         // 6. Build Relation Type options (builtin relation types from /api/relation-types)
         const relationOptions = paperRelationTypeOptionsHtml(f.relation_code);
         const strategyOptions = paperStrategyOptionsHtml(f.strategy);
-        const microOptions = paperMicroOptionsHtml(f.micro_method);
+        const textFilterHtml = PAPER_TEXT_FILTERS.map(paperTextFilterHtml).join('');
 
         container.innerHTML = `
             <div class="paper-controls-stack">
                 <div class="workspace-command-bar paper-command-bar">
-                    <label class="workspace-search"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input id="paperFilterKeyword" type="search" aria-label="搜索组卷题库" value="${escapeHtml(f.keyword)}" oninput="onPaperFilterChange('keyword', this.value)" placeholder="搜索题干、来源或标签..." class="glass-input"></label>
+                    <label class="workspace-search"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input id="paperFilterKeyword" type="search" aria-label="搜索组卷题库" value="${escapeHtml(f.keyword)}" oninput="onPaperFilterChange('keyword', this.value)" placeholder="搜索题干、来源、标签、方法、关联..." class="glass-input"></label>
                     <button type="button" id="togglePaperFilterBtn" class="glass-btn" onclick="togglePaperFilterBar()" aria-controls="paperAdvancedFilters" aria-expanded="${!window.PaperStore.isFilterCollapsed}"><i id="paperFilterToggleIcon" class="fa-solid fa-filter" aria-hidden="true"></i><span id="paperFilterToggleTxt">筛选</span></button>
                     <button type="button" id="togglePaperMetaBtn" class="glass-btn" onclick="togglePaperConfiguration('meta')" aria-controls="paperMetaDetails" aria-expanded="${Boolean(window.PaperStore.isMetaExpanded)}">试卷信息</button>
                     <button type="button" id="togglePaperAiBtn" class="glass-btn" onclick="togglePaperConfiguration('ai')" aria-controls="paperAiDetails" aria-expanded="${Boolean(window.PaperStore.isAiExpanded)}"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> AI 选题</button>
@@ -1061,8 +1081,8 @@
                     <label>小节<select id="paperFilterKnowledge" class="glass-select" onchange="onPaperFilterChange('knowledge', this.value)" ${isKnowledgeDisabled ? 'disabled' : ''}>${knowledgeOptions}</select></label>
                     <label>题型<select id="paperFilterType" class="glass-select" onchange="onPaperFilterChange('question_type', this.value)">${qTypeOptions}</select></label>
                     <label>难度<select id="paperFilterDifficulty" class="glass-select" onchange="onPaperFilterChange('difficulty', this.value)">${diffOptions}</select></label>
-                    <label>解题策略<select id="paperFilterStrategy" class="glass-select" onchange="onPaperFilterChange('strategy', this.value)">${strategyOptions}</select></label>
-                    <label>微观方法<select id="paperFilterMicro" class="glass-select" onchange="onPaperFilterChange('micro_method', this.value)">${microOptions}</select></label>
+                    <label>中观解题策略<select id="paperFilterStrategy" class="glass-select" onchange="onPaperFilterChange('strategy', this.value)">${strategyOptions}</select></label>
+                    ${textFilterHtml}
                     <label>关联类型<select id="paperFilterRelation" class="glass-select" onchange="onPaperFilterChange('relation_code', this.value)">${relationOptions}</select></label>
                     <button type="button" class="glass-btn" onclick="clearPaperFilters()">清除筛选</button>
                 </div>
@@ -1080,7 +1100,7 @@
         refreshPaperFilterSummary();
         ensurePaperRelationTypes();
         ensurePaperStrategyOptions();
-        ensurePaperMicroOptions();
+        bindPaperTextFilters();
         if (typeof window.renderSubKnowledgeOptions === 'function') window.renderSubKnowledgeOptions('paper', f.sub_knowledge || []);
     }
 

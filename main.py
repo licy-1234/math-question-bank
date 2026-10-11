@@ -128,6 +128,7 @@ from mathbank.ai_providers import (
 )
 from mathbank.tags import (
     chapter_prefixes,
+    codes_matching_text,
     curriculum_index,
     dimension_values,
     load_curriculum_tree,
@@ -170,6 +171,7 @@ from mathbank.classify_rules import (
     classify_with_rules,
     estimate_difficulty_prior,
     suggest_chapter_candidates,
+    suggest_method_tags,
 )
 from mathbank import tag_memory
 import shutil
@@ -2418,23 +2420,49 @@ def list_questions(
 
     if search_q:
         escaped_q = _escape_like(search_q)
+        # 顶部全局搜索要覆盖全部维度：题干 / 解析 / 评注 / 来源 / 标签（自定义+功能）
+        # / 方法（宏观思想、中观策略、微观技法，含中文名→机器码）/ 关联（关联类型与其说明）。
+        like_q = f"%{escaped_q}%"
+        method_codes: list[str] = []
+        for dim in ("thought", "strategy", "function"):
+            method_codes.extend(codes_matching_text(dim, search_q))
+        tag_conditions = [QuestionTag.code.like(like_q, escape="\\")]
+        if method_codes:
+            tag_conditions.append(QuestionTag.code.in_(method_codes))
+        tag_match = (
+            db.query(QuestionTag.question_id)
+            .filter(
+                QuestionTag.dim.in_(("custom", "thought", "strategy", "micro", "function")),
+                or_(*tag_conditions),
+            )
+        )
+        relation_match = (
+            db.query(QuestionRelation.id)
+            .filter(
+                or_(
+                    QuestionRelation.relation_code.like(like_q, escape="\\"),
+                    QuestionRelation.relation_label.like(like_q, escape="\\"),
+                ),
+                or_(
+                    QuestionRelation.question_id == Question.id,
+                    QuestionRelation.related_id == Question.id,
+                ),
+            )
+            .exists()
+        )
+        search_conditions = [
+            (Question.content.like(like_q, escape="\\")),
+            (Question.source.like(like_q, escape="\\")),
+            (Question.answer_markdown.like(like_q, escape="\\")),
+            (Question.review.like(like_q, escape="\\")),
+            (Question.tags.like(like_q, escape="\\")),
+            Question.id.in_(tag_match),
+            relation_match,
+        ]
         if target_id_by_seq is not None:
-            query = query.filter(
-                (Question.id == target_id_by_seq) |
-                (Question.content.like(f"%{escaped_q}%", escape="\\")) | 
-                (Question.source.like(f"%{escaped_q}%", escape="\\")) |
-                (Question.answer_markdown.like(f"%{escaped_q}%", escape="\\")) |
-                (Question.review.like(f"%{escaped_q}%", escape="\\")) |
-                (Question.tags.like(f"%{escaped_q}%", escape="\\"))
-            )
+            query = query.filter(or_(Question.id == target_id_by_seq, *search_conditions))
         else:
-            query = query.filter(
-                (Question.content.like(f"%{escaped_q}%", escape="\\")) | 
-                (Question.source.like(f"%{escaped_q}%", escape="\\")) |
-                (Question.answer_markdown.like(f"%{escaped_q}%", escape="\\")) |
-                (Question.review.like(f"%{escaped_q}%", escape="\\")) |
-                (Question.tags.like(f"%{escaped_q}%", escape="\\"))
-            )
+            query = query.filter(or_(*search_conditions))
     try:
         paths = [json.loads(path) for path in (sub_knowledge or [])]
         query = apply_curriculum_filters(
@@ -4932,6 +4960,26 @@ def list_categories(db: Session = Depends(get_db)):
 
 # ----------------- AI Auto-Classification API -----------------
 
+def _merge_method_tag_hints(payload: dict, content: str) -> dict:
+    """模型漏给方法类标签时，用规则线索补齐。
+
+    AI 常常只答题型 / 难度 / 章节，把「宏观思想」「中观策略」留空。此时用
+    题干里的方法关键词给出 1~3 条候选，让自动打标不至于整片空白。返回的内容
+    仍只是**建议**：前端是 chips 勾选态，老师点一下就能取消，不会静默入库。
+    """
+
+    if not isinstance(payload, dict):
+        return payload
+    if payload.get("thought_codes") or payload.get("strategy_codes"):
+        return payload
+    hints = suggest_method_tags(content)
+    if hints.get("thought_codes"):
+        payload["thought_codes"] = hints["thought_codes"]
+    if hints.get("strategy_codes"):
+        payload["strategy_codes"] = hints["strategy_codes"]
+    return payload
+
+
 @app.post("/api/ai/classify")
 def ai_classify(content: str = Form(...)):
     classify_model = (
@@ -5047,11 +5095,12 @@ def ai_classify(content: str = Form(...)):
             return {
                 "status": "partial",
                 "message": f"AI 智能分类失败（{exc}），已回退到规则层结果，请人工核对。",
-                **fallback,
+                **_merge_method_tag_hints(fallback, content),
             }
 
         # 题型 / 难度 / 章节统一由规则层与模型输出融合
         fused = classify_with_rules(content, result)
+        _merge_method_tag_hints(fused, content)
         return {"status": "success", **fused}
 
     except Exception as e:
@@ -5059,6 +5108,7 @@ def ai_classify(content: str = Form(...)):
             degraded = classify_with_rules(content, {})
         except Exception:
             degraded = {}
+        _merge_method_tag_hints(degraded, content)
         return JSONResponse(
             content={
                 "status": "partial",

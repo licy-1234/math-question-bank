@@ -1788,9 +1788,9 @@
             setClassifyText('recFunctionTag',
                 functionLabel ? '功能标签：' + functionLabel : '', !!functionLabel);
             setClassifyText('recThoughtTags',
-                thoughtCodes.length ? '数学思想方法：' + thoughtCodes.map(c => labelOf('thought_method', c)).join('、') : '', thoughtCodes.length > 0);
+                thoughtCodes.length ? '宏观数学思想：' + thoughtCodes.map(c => labelOf('thought_method', c)).join('、') : '', thoughtCodes.length > 0);
             setClassifyText('recStrategyTags',
-                strategyCodes.length ? '解题策略：' + strategyCodes.map(c => labelOf('solve_strategy', c)).join('、') : '', strategyCodes.length > 0);
+                strategyCodes.length ? '中观解题策略：' + strategyCodes.map(c => labelOf('solve_strategy', c)).join('、') : '', strategyCodes.length > 0);
             setClassifyText('recMicroTags',
                 micros.length ? '微观解题方法：' + micros.join('、') : '', micros.length > 0);
 
@@ -2041,8 +2041,8 @@
                 });
                 tagsApplied = thoughtChanged || strategyChanged || microChanged || functionChanged;
                 if (functionChanged) appliedFields.push('功能标签');
-                if (thoughtChanged) appliedFields.push('思想方法');
-                if (strategyChanged) appliedFields.push('解题策略');
+                if (thoughtChanged) appliedFields.push('宏观思想');
+                if (strategyChanged) appliedFields.push('中观策略');
                 if (microChanged) appliedFields.push('微观方法');
                 if (tagsApplied) {
                     if (window.MathBankTagMemory && typeof window.MathBankTagMemory.notifySaved === 'function') {
@@ -6319,10 +6319,58 @@
                     });
             }
             
+            function rememberSource(value) {
+                if (window.MathBankFilterHistory) {
+                    window.MathBankFilterHistory.record('bank_source', value);
+                }
+            }
+
+            // 历史输入区块：来源既有 /api/sources 的库内取值，也要记住自己敲过的来源。
+            function renderHistorySection(container, list) {
+                const history = window.MathBankFilterHistory
+                    ? window.MathBankFilterHistory.list('bank_source').filter(
+                        item => !list.some(src => src === item))
+                    : [];
+                if (!history.length) return;
+                const title = document.createElement('div');
+                title.className = 'px-3 pt-1.5 pb-1 text-[10px] font-semibold text-slate-400 border-b border-slate-100/50';
+                title.textContent = '历史输入';
+                container.appendChild(title);
+                history.slice(0, 8).forEach(item => {
+                    const row = document.createElement('div');
+                    row.className = 'px-3 py-2 hover:bg-slate-50 text-xs text-slate-700 cursor-pointer select-none truncate font-medium transition-colors border-b border-slate-100/50';
+                    row.innerHTML = '<i class="fa-solid fa-clock-rotate-left text-[10px] text-slate-400 mr-1.5"></i>';
+                    row.appendChild(document.createTextNode(item));
+                    row.addEventListener('click', () => {
+                        sourceInput.value = item;
+                        suggestionsDiv.classList.add('hidden');
+                        chevronIcon.classList.remove('rotate-180');
+                        updateClearButtonVisibility();
+                        rememberSource(item);
+                        triggerFilterReload();
+                    });
+                    container.appendChild(row);
+                });
+            }
+
+            function triggerFilterReload() {
+                currentBankPage = 1;
+                currentDraftPage = 1;
+                if (activeSidebarTab === 'bank') {
+                    loadQuestions();
+                } else {
+                    loadDrafts();
+                }
+            }
+
             function renderSuggestions(list) {
                 suggestionsDiv.innerHTML = '';
+                renderHistorySection(suggestionsDiv, list);
                 if (list.length === 0) {
-                    suggestionsDiv.innerHTML = '<div class="px-3 py-2 text-[10px] text-slate-400 italic text-center select-none">无匹配来源</div>';
+                    const emptyRow = document.createElement('div');
+                    emptyRow.className = 'px-3 py-2 text-[10px] text-slate-400 italic text-center select-none';
+                    emptyRow.textContent = '无匹配来源';
+                    suggestionsDiv.appendChild(emptyRow);
                     suggestionsDiv.classList.remove('hidden');
                     chevronIcon.classList.add('rotate-180');
                     return;
@@ -6337,13 +6385,8 @@
                         suggestionsDiv.classList.add('hidden');
                         chevronIcon.classList.remove('rotate-180');
                         updateClearButtonVisibility();
-                        currentBankPage = 1;
-                        currentDraftPage = 1;
-                        if (activeSidebarTab === 'bank') {
-                            loadQuestions();
-                        } else {
-                            loadDrafts();
-                        }
+                        rememberSource(src);
+                        triggerFilterReload();
                     });
                     suggestionsDiv.appendChild(item);
                 });
@@ -6383,26 +6426,16 @@
             });
             
             sourceInput.addEventListener('change', () => {
-                currentBankPage = 1;
-                currentDraftPage = 1;
-                if (activeSidebarTab === 'bank') {
-                    loadQuestions();
-                } else {
-                    loadDrafts();
-                }
+                rememberSource(sourceInput.value);
+                triggerFilterReload();
             });
             
             sourceInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
+                    rememberSource(sourceInput.value);
                     suggestionsDiv.classList.add('hidden');
                     chevronIcon.classList.remove('rotate-180');
-                    currentBankPage = 1;
-                    currentDraftPage = 1;
-                    if (activeSidebarTab === 'bank') {
-                        loadQuestions();
-                    } else {
-                        loadDrafts();
-                    }
+                    triggerFilterReload();
                 }
             });
             
@@ -6584,8 +6617,8 @@
                 }
             });
 
-            // Bind new tag-based filter selects (章节 / 数学思想 / 功能)
-            ['filterChapterCode', 'filterThought', 'filterFunctionCode'].forEach(id => {
+            // Bind new tag-based filter selects (章节 / 宏观数学思想 / 中观解题策略 / 功能)
+            ['filterChapterCode', 'filterThought', 'filterStrategy', 'filterFunctionCode'].forEach(id => {
                 const filterEl = document.getElementById(id);
                 if (filterEl) {
                     filterEl.addEventListener('change', () => {
@@ -6598,6 +6631,42 @@
                         }
                     });
                 }
+            });
+
+            // 从「历史输入」面板里选中某一项后回调：立即按该值筛选。
+            window.reloadQuestionsFromHistory = function () {
+                currentBankPage = 1;
+                currentDraftPage = 1;
+                if (typeof updateBankFilterSummary === 'function') updateBankFilterSummary();
+                if (activeSidebarTab === 'bank') {
+                    loadQuestions();
+                } else {
+                    loadDrafts();
+                }
+            };
+
+            // 填空式筛选（微观方法 / 标签）：历史记忆 + 防抖拉取。
+            // 来源框走它自己的 /api/sources 下拉，历史记忆已在该下拉里插入「历史输入」区块。
+            let textFilterTimer = null;
+            ['filterMicroMethod', 'filterTagText'].forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                if (window.MathBankFilterHistory) {
+                    window.MathBankFilterHistory.attach(el);
+                }
+                el.addEventListener('input', () => {
+                    clearTimeout(textFilterTimer);
+                    textFilterTimer = setTimeout(() => {
+                        currentBankPage = 1;
+                        currentDraftPage = 1;
+                        if (typeof updateBankFilterSummary === 'function') updateBankFilterSummary();
+                        if (activeSidebarTab === 'bank') {
+                            loadQuestions();
+                        } else {
+                            loadDrafts();
+                        }
+                    }, 400);
+                });
             });
 
             // Bind filterSort change event

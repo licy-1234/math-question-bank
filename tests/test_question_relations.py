@@ -305,11 +305,9 @@ def test_get_relations_is_bidirectional_and_delete_removes_one_row(
 
 
 def test_relation_types_lists_builtins_then_custom(client, seeded):
+    # 内置关联类型已收敛为两类（多题归一 / 一题多变），其余由自定义类型承接。
     expected = [
-        "same_topic",
-        "multi_q_one_solution",
-        "one_method_multi_use",
-        "multi_method_one",
+        "multi_q_unify",
         "one_q_variants",
     ]
     builtin = client.get("/api/relation-types").json()["items"]
@@ -326,7 +324,7 @@ def test_relation_types_lists_builtins_then_custom(client, seeded):
         headers=_token(),
     )
     items = client.get("/api/relation-types").json()["items"]
-    assert [item["code"] for item in items[:5]] == expected
+    assert [item["code"] for item in items[:2]] == expected
     custom = next(item for item in items if item["code"] == "custom:拓展")
     assert custom["builtin"] is False
     assert custom["label"] == "拓展延伸"

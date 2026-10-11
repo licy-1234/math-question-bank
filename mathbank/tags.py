@@ -22,8 +22,8 @@ from mathbank.paths import CURRICULUMS_DIR
 RESOURCES_DIR = CURRICULUMS_DIR.parent
 
 TAG_DIMENSIONS = {
-    "thought": "数学思想方法",
-    "strategy": "解题策略",
+    "thought": "宏观数学思想",
+    "strategy": "中观解题策略",
     "micro": "微观解题方法",
     "chapter": "教材章节",
     "function": "功能",
@@ -402,6 +402,26 @@ def dimension_values(dim: str) -> list[dict]:
             continue
         values.append({"code": code, "label": str(item.get("label") or code).strip()})
     return values
+
+
+def codes_matching_text(dim: str, text: str) -> list[str]:
+    """Return the codes whose code / label contains ``text``.
+
+    Used by the global keyword box so that searching ``数形结合`` also matches
+    questions stored with the machine code ``T02``.  Matching is
+    case-insensitive substring matching against both the code and the Chinese
+    label.  Returns ``[]`` for an empty query or an unknown dimension.
+    """
+
+    keyword = str(text or "").strip().lower()
+    if not keyword:
+        return []
+    result: list[str] = []
+    for item in dimension_values(dim):
+        haystack = f"{item['code']} {item['label']}".lower()
+        if keyword in haystack:
+            result.append(item["code"])
+    return result
 
 
 def normalize_tag_codes(dim: str, values: Iterable) -> list[str]:

@@ -88,7 +88,7 @@
     },
     {
       "key": "thought_method",
-      "name": "数学思想方法",
+      "name": "宏观数学思想",
       "mode": "multi",
       "required": false,
       "default": [],
@@ -174,12 +174,12 @@
     },
     {
       "key": "solve_strategy",
-      "name": "解题策略",
+      "name": "中观解题策略",
       "mode": "multi",
       "required": false,
       "default": [],
       "storage": "question_tags(dim='strategy')",
-      "description": "中观解题策略，多选、可空；按通性通法族群划分，与数学思想方法（宏观）、微观技法（micro）互补。",
+      "description": "中观解题策略，多选、可空；按通性通法族群划分，与宏观数学思想（thought）、微观技法（micro）互补。",
       "values": [
         {
           "code": "S01",

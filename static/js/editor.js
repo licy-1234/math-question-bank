@@ -792,14 +792,16 @@ window.functionTagBadge = functionTagBadge;
             const button = document.querySelector('.bank-filter-toggle');
             const clear = document.getElementById('clearBankFiltersBtn');
             if (!button || !clear) return;
-            const selected = ['filterType', 'filterDifficulty', 'filterChapterCode', 'filterThought', 'filterFunctionCode', 'filterSource']
+            const selected = ['filterType', 'filterDifficulty', 'filterChapterCode', 'filterThought', 'filterStrategy', 'filterFunctionCode',
+                'filterSource', 'filterMicroMethod', 'filterTagText']
                 .map(id => document.getElementById(id)).filter(element => element && element.value);
             button.textContent = selected.length ? `筛选 (${selected.length})` : '筛选';
-            button.setAttribute('data-tooltip', selected.map(element => element.tagName === 'SELECT' ? element.selectedOptions[0]?.textContent : element.value).join(' / ') || '按题型、难度、章节、思想方法等条件筛选');
+            button.setAttribute('data-tooltip', selected.map(element => element.tagName === 'SELECT' ? element.selectedOptions[0]?.textContent : element.value).join(' / ') || '按题型、难度、章节、宏观数学思想、中观解题策略、来源、标签、微观方法等条件筛选');
             clear.hidden = selected.length === 0;
         }
         function clearBankFilters() {
-            ['filterType', 'filterDifficulty', 'filterChapterCode', 'filterThought', 'filterFunctionCode', 'filterSource'].forEach(id => {
+            ['filterType', 'filterDifficulty', 'filterChapterCode', 'filterThought', 'filterStrategy', 'filterFunctionCode',
+                'filterSource', 'filterMicroMethod', 'filterTagText'].forEach(id => {
                 const element = document.getElementById(id);
                 if (element) element.value = '';
             });
@@ -1221,6 +1223,8 @@ window.functionTagBadge = functionTagBadge;
             const microMethod = document.getElementById('filterMicroMethod') ? document.getElementById('filterMicroMethod').value : '';
             const functionCode = document.getElementById('filterFunctionCode') ? document.getElementById('filterFunctionCode').value : '';
             const source = document.getElementById('filterSource') ? document.getElementById('filterSource').value.trim().toLowerCase() : '';
+            const tagText = document.getElementById('filterTagText')
+                ? document.getElementById('filterTagText').value.trim().toLowerCase() : '';
             
             let drafts = getLocalStorageDrafts();
             
@@ -1267,15 +1271,26 @@ window.functionTagBadge = functionTagBadge;
             if (source) {
                 drafts = drafts.filter(item => (item.source || '').toLowerCase().includes(source));
             }
-            
-            // Search filter for drafts
+
+            // Filter by custom tag (填空搜索，模糊匹配自定义标签)
+            if (tagText) {
+                drafts = drafts.filter(item => {
+                    const codes = item.tag_codes && Array.isArray(item.tag_codes.custom) ? item.tag_codes.custom : [];
+                    const legacy = String(item.tags || '').split(/[,，]/).map(part => part.trim()).filter(Boolean);
+                    return [...codes, ...legacy].some(code => code.toLowerCase().includes(tagText));
+                });
+            }
+
+            // Search filter for drafts —— 与顶部搜索框同一套覆盖维度
             if (q) {
                 drafts = drafts.filter(item => {
-                    return (item.content || '').toLowerCase().includes(q) ||
-                           (item.source || '').toLowerCase().includes(q) ||
-                           (item.category_chapter || '').toLowerCase().includes(q) ||
-                           (item.review || '').toLowerCase().includes(q) ||
-                           (item.tags || '').toLowerCase().includes(q);
+                    const codes = item.tag_codes ? Object.values(item.tag_codes).flat() : [];
+                    const haystack = [
+                        item.content, item.source, item.category_chapter, item.review,
+                        item.tags, item.answer_markdown,
+                        Array.isArray(codes) ? codes.join(' ') : ''
+                    ].map(part => String(part || '').toLowerCase());
+                    return haystack.some(part => part.includes(q));
                 });
             }
             
@@ -1947,11 +1962,10 @@ window.functionTagBadge = functionTagBadge;
             }
         }
 
-        // 微观方法筛选下拉：库内已用取值 ∪ 个人记忆，去重后按使用频次展示。
-        // 独立成全局函数，便于筛选区初始化与保存后刷新两处复用。
+        // 微观方法已改为「填空搜索 + 历史记忆」，仅在 DOM 仍是 <select> 时才回填选项。
         window.refreshMicroMethodFilterOptions = function () {
             const select = document.getElementById('filterMicroMethod');
-            if (!select) return Promise.resolve(false);
+            if (!select || select.tagName !== 'SELECT') return Promise.resolve(false);
             const previous = select.value;
             return Promise.all([
                 fetch('/api/tag-values?dim=micro').then(r => (r.ok ? r.json() : { items: [] })).catch(() => ({ items: [] })),
@@ -2003,6 +2017,7 @@ window.functionTagBadge = functionTagBadge;
             const microMethod = document.getElementById('filterMicroMethod') ? document.getElementById('filterMicroMethod').value : '';
             const functionCode = document.getElementById('filterFunctionCode') ? document.getElementById('filterFunctionCode').value : '';
             const source = document.getElementById('filterSource') ? document.getElementById('filterSource').value : '';
+            const tagText = document.getElementById('filterTagText') ? document.getElementById('filterTagText').value : '';
             const sortOrder = document.getElementById('filterSort') ? document.getElementById('filterSort').value : 'desc';
             const requestedPage = Math.max(1, currentBankPage);
             
@@ -2016,6 +2031,7 @@ window.functionTagBadge = functionTagBadge;
             if (microMethod) params.append('micro_method', microMethod);
             if (functionCode) params.append('function_code', functionCode);
             if (source) params.append('source', source);
+            if (tagText) params.append('tag', tagText);
             params.append('page', String(requestedPage));
             params.append('page_size', String(PAGE_LIMIT));
             params.append('sort', sortOrder === 'asc' ? 'asc' : 'desc');

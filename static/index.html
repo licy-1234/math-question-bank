@@ -375,7 +375,7 @@
                     <span class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                         <i class="fa-solid fa-magnifying-glass text-slate-400 text-xs"></i>
                     </span>
-                    <input type="text" id="searchInput" aria-label="搜索题库" placeholder="搜索题干、知识点或来源..."
+                    <input type="text" id="searchInput" aria-label="搜索题库" placeholder="搜索题干、来源、标签、方法、关联..."
                            class="glass-input w-full pl-8 pr-4 py-1.5 text-xs rounded-xl">
                 </div>
                 <button type="button" class="bank-filter-toggle" aria-expanded="false" aria-controls="bankFilterFields" onclick="toggleBankFilters(this)">筛选条件</button>
@@ -407,14 +407,11 @@
                 <select id="filterChapterCode" aria-label="章节" class="glass-select text-xs px-2.5 py-2.5 rounded-xl">
                     <option value="">所有章节</option>
                 </select>
-                <select id="filterThought" aria-label="数学思想" class="glass-select text-xs px-2.5 py-2.5 rounded-xl">
+                <select id="filterThought" aria-label="宏观数学思想" class="glass-select text-xs px-2.5 py-2.5 rounded-xl">
                     <option value="">所有思想</option>
                 </select>
-                <select id="filterStrategy" aria-label="解题策略" class="glass-select text-xs px-2.5 py-2.5 rounded-xl">
+                <select id="filterStrategy" aria-label="中观解题策略" class="glass-select text-xs px-2.5 py-2.5 rounded-xl">
                     <option value="">所有策略</option>
-                </select>
-                <select id="filterMicroMethod" aria-label="微观方法" class="glass-select text-xs px-2.5 py-2.5 rounded-xl">
-                    <option value="">所有微观方法</option>
                 </select>
                 <select id="filterFunctionCode" aria-label="功能标签" class="glass-select text-xs px-2.5 py-2.5 rounded-xl">
                     <option value="">全部功能</option>
@@ -423,12 +420,28 @@
                     <option value="typical">典型题</option>
                 </select>
 
+                <div class="bank-filter-row relative">
+                    <span class="bank-filter-label">微观方法</span>
+                    <div class="relative flex-1">
+                        <input type="text" id="filterMicroMethod" aria-label="微观方法" placeholder="搜索微观解题方法..."
+                               class="glass-input w-full pl-3 pr-7 py-1.5 text-xs rounded-xl bg-white/40"
+                               autocomplete="off" data-filter-history="bank_micro" data-filter-on-select="reloadQuestionsFromHistory">
+                    </div>
+                </div>
+                <div class="bank-filter-row relative">
+                    <span class="bank-filter-label">标签</span>
+                    <div class="relative flex-1">
+                        <input type="text" id="filterTagText" aria-label="自定义标签" placeholder="搜索自定义标签..."
+                               class="glass-input w-full pl-3 pr-7 py-1.5 text-xs rounded-xl bg-white/40"
+                               autocomplete="off" data-filter-history="bank_tag" data-filter-on-select="reloadQuestionsFromHistory">
+                    </div>
+                </div>
                 <div class="bank-filter-row relative" id="filterSourceContainer">
                     <span class="bank-filter-label">来源</span>
                     <div class="relative flex-1">
                         <input type="text" id="filterSource" aria-label="来源" placeholder="输入题目来源..."
                                class="glass-input w-full pl-3 pr-7 py-1.5 text-xs rounded-xl bg-white/40"
-                               autocomplete="off">
+                               autocomplete="off" data-filter-history="bank_source" data-filter-on-select="reloadQuestionsFromHistory">
                         <span class="absolute inset-y-0 right-0 pr-2.5 flex items-center cursor-pointer text-slate-400 hover:text-slate-600" id="toggleFilterSourceBtn">
                             <i class="fa-solid fa-chevron-down text-[9px] transition-transform duration-200" id="chevronFilterSourceIcon"></i>
                         </span>
@@ -626,26 +639,40 @@
                             <div id="tagChapterChips" class="flex flex-wrap gap-1.5 mt-2"></div>
                         </div>
 
-                        <!-- 数学思想方法：多选 -->
+                        <!-- 宏观数学思想：多选 -->
                         <div>
-                            <label class="block text-[11px] font-medium text-slate-500 mb-1">数学思想方法（多选，建议不超过 3 个）</label>
+                            <label class="block text-[11px] font-medium text-slate-500 mb-1">宏观数学思想（多选，建议不超过 3 个）</label>
                             <div id="tagThoughtChips" class="flex flex-wrap gap-1.5"></div>
                         </div>
 
-                        <!-- 解题策略（中观）+ 微观解题方法（自由文本，记忆复用） -->
+                        <!-- 中观解题策略 + 微观解题方法（自由文本，记忆复用 + 目录卡片） -->
                         <div>
-                            <label class="block text-[11px] font-medium text-slate-500 mb-1">解题策略（中观，多选，可空）</label>
+                            <label class="block text-[11px] font-medium text-slate-500 mb-1">中观解题策略（多选，可空）</label>
                             <div id="tagStrategyChips" class="flex flex-wrap gap-1.5"></div>
                         </div>
                         <div class="grid grid-cols-3 gap-2 items-end">
                             <div class="col-span-2">
                                 <label for="tagMicroInput" class="block text-[11px] font-medium text-slate-500 mb-1">微观解题方法（选填，支持记忆复用；回车或点「添加」）</label>
-                                <input type="text" id="tagMicroInput" placeholder="如：同构法·乘除同构（可从记忆或目录建议中选）"
+                                <input type="text" id="tagMicroInput" placeholder="如：同构法·乘除同构（可从记忆或目录卡片中选）"
                                        class="glass-input w-full px-2.5 text-xs rounded-xl relative">
                             </div>
                             <button type="button" id="tagMicroAddBtn" class="h-9 px-3 rounded-xl text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors">添加</button>
                         </div>
                         <div id="tagMicroChips" class="flex flex-wrap gap-1.5"></div>
+                        <div>
+                            <button type="button" id="tagMicroCatalogBtn"
+                                    class="text-[11px] px-2.5 py-1 rounded-lg bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors">
+                                <i class="fa-solid fa-list-tree mr-1"></i>微观方法目录卡片
+                            </button>
+                            <div id="tagMicroCatalogCard" class="hidden mt-2 rounded-xl border border-amber-200 bg-amber-50/40">
+                                <div class="px-2.5 pt-2 pb-1.5 flex items-center gap-2">
+                                    <i class="fa-solid fa-magnifying-glass text-amber-500 text-[10px]"></i>
+                                    <input type="text" id="tagMicroCatalogSearch" placeholder="在目录中检索技法…"
+                                           class="glass-input flex-1 px-2 py-1 text-[11px] rounded-lg bg-white/70" autocomplete="off">
+                                </div>
+                                <div id="tagMicroCatalogBody" class="max-h-56 overflow-y-auto px-2.5 pb-2 custom-scrollbar"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -2443,6 +2470,7 @@
 
     <!-- MAIN APP JAVASCRIPT -->
     <script src="/static/js/api.js"></script>
+    <script src="/static/js/filter-history.js"></script>
     <script src="/static/js/tag-memory.js"></script>
     <script src="/static/js/tags.js"></script>
     <script src="/static/js/editor.js"></script>

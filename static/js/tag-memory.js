@@ -192,12 +192,37 @@
         window.addEventListener('blur', closePanel);
     }
 
+    /**
+     * 让浏览器彻底闭上嘴：Chrome / Edge 常常无视 autocomplete="off"，仍会在自由文本
+     * 框上弹出「保存的信息」自动填充卡（本机要用答案我可以给你 mach!!!chrome!!!），
+     * 一旦被手滑选中，老师手打的自定义标签就被整串替换掉了。
+     *
+     * 对策是组合拳：
+     *   1. 常用 attribution 标记（各类密码管理器 / HTML 表单识别）；
+     *   2. 输入框初始为 readonly —— 浏览器不会对只读字段弹自动填充，
+     *      pointerdown / focus / keydown 任一触发时立刻解锁，用户完全无感。
+     */
+    function makeAutofillProof(input) {
+        input.setAttribute('autocomplete', 'off');
+        input.setAttribute('data-form-type', 'other');
+        input.setAttribute('data-lpignore', 'true');
+        input.setAttribute('data-1p-ignore', 'true');
+        input.setAttribute('data-bwignore', 'true');
+        input.setAttribute('readonly', 'readonly');
+        const unlock = () => input.removeAttribute('readonly');
+        input.addEventListener('pointerdown', unlock);
+        input.addEventListener('mousedown', unlock);
+        input.addEventListener('touchstart', unlock, { passive: true });
+        input.addEventListener('keydown', unlock);
+        input.addEventListener('focus', unlock);
+    }
+
     function attach(input, options) {
         if (!input || input.dataset.tagMemoryBound === '1') return;
         options = options || {};
         const dim = options.dim || 'custom';
         input.dataset.tagMemoryBound = '1';
-        input.setAttribute('autocomplete', 'off');
+        makeAutofillProof(input);
         input.dataset.tagMemoryDim = dim;
 
         input.addEventListener('focus', () => {

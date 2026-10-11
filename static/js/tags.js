@@ -3,8 +3,10 @@
  *
  * 提供三类多值标签的录入与回显：
  *   1. 教材章节：册 → 章 → 节 → 小节 四级级联，可添加多个节点（chips）
- *   2. 数学思想方法：受控词表多选（chips 点选切换）
- *   3. 功能：单选（易错题 / 创新题 / 典型题，可空）
+ *   2. 宏观数学思想：受控词表多选（chips 点选切换）
+ *   3. 中观解题策略：受控词表多选（chips 点选切换），顺序同思想
+ *   4. 微观解题方法：自由文本 + 记忆复用 + 参考目录卡片
+ *   5. 功能：单选（易错题 / 创新题 / 典型题，可空）
  *
  * 对外接口：window.MathBankTags.init() / getSelection() / setSelection() / clear()
  */
@@ -149,7 +151,7 @@
                 const index = State.thoughts.indexOf(value.code);
                 if (index === -1) {
                     if (State.thoughts.length >= 3) {
-                        if (typeof showToast === 'function') showToast('数学思想方法建议不超过 3 个，请先取消一个再选择。', 'info');
+                        if (typeof showToast === 'function') showToast('宏观数学思想建议不超过 3 个，请先取消一个再选择。', 'info');
                         return;
                     }
                     State.thoughts.push(value.code);
@@ -195,7 +197,7 @@
         if (!State.micros.length) {
             const hint = document.createElement('span');
             hint.className = 'text-[10px] text-slate-400';
-            hint.textContent = '暂无微观方法；在右侧输入后回车添加（可从记忆或目录建议中选）。';
+            hint.textContent = '暂无微观方法；在上方输入后回车添加（可从记忆或目录卡片中选）。';
             container.appendChild(hint);
             return;
         }
@@ -217,16 +219,139 @@
         });
     }
 
-    function addMicroFromInput() {
-        const input = $('tagMicroInput');
-        if (!input) return;
-        const parts = String(input.value || '').split(/[,，]/).map((item) => item.trim()).filter(Boolean);
+    function addMicroFromInputValue(raw) {
+        const parts = String(raw || '').split(/[,，]/).map((item) => item.trim()).filter(Boolean);
+        if (!parts.length) return;
         parts.forEach((label) => {
             if (State.micros.indexOf(label) === -1) State.micros.push(label);
         });
-        input.value = '';
         State.dirty = true;
         renderMicroChips();
+    }
+
+    function addMicroFromInput() {
+        const input = $('tagMicroInput');
+        if (!input) return;
+        addMicroFromInputValue(input.value);
+        input.value = '';
+    }
+
+    /**
+     * 目录卡片：把 micro_method_vocab.json 的 L1 模块 / L2 方法族 / L3 技法
+     * 渲染成一棵可折叠的目录，点任意一项即加入「微观解题方法」，支持按关键字检索。
+     * 与记忆面板互补：记忆是「我用过什么」，目录是「参考有什么」。
+     */
+    let microCatalogData = null;
+    let microCatalogQuery = '';
+
+    function loadMicroCatalog() {
+        if (microCatalogData) return Promise.resolve(microCatalogData);
+        return fetch('/api/config/micro-method-vocab')
+            .then((res) => (res.ok ? res.json() : null))
+            .then((vocab) => {
+                microCatalogData = vocab && Array.isArray(vocab.modules) ? vocab.modules : [];
+                microVocabSuggestions = null;   // 让记忆面板的建议列表同步复用最新数据
+                loadMicroSuggestions();
+                return microCatalogData;
+            })
+            .catch(() => []);
+    }
+
+    function addMicroLabel(label) {
+        const clean = String(label || '').trim();
+        if (!clean || State.micros.indexOf(clean) !== -1) return;
+        State.micros.push(clean);
+        State.dirty = true;
+        renderMicroChips();
+    }
+
+    function microCatalogMatches(haystack) {
+        const query = String(microCatalogQuery || '').trim().toLowerCase();
+        if (!query) return true;
+        return String(haystack || '').toLowerCase().indexOf(query) !== -1;
+    }
+
+    function renderMicroCatalog() {
+        const body = $('tagMicroCatalogBody');
+        if (!body) return;
+        body.innerHTML = '';
+        const modules = microCatalogData || [];
+        let hitCount = 0;
+
+        modules.forEach((module) => {
+            const families = (module.families || []).filter((family) => {
+                const techniques = family.techniques || [];
+                return microCatalogMatches(module.name) || microCatalogMatches(family.name)
+                    || techniques.some((technique) => microCatalogMatches(technique));
+            });
+            if (!families.length) return;
+            hitCount += families.length;
+
+            const details = document.createElement('details');
+            details.className = 'mb-1 rounded-lg border border-amber-100 bg-white/70';
+            details.open = Boolean(microCatalogQuery);
+            const moduleName = escapeText(module.name || '未命名模块');
+            details.innerHTML = `<summary class="cursor-pointer list-none px-2 py-1.5 text-[11px] font-semibold text-amber-800 flex items-center gap-1.5">
+                <i class="fa-solid fa-folder-open text-amber-400 text-[10px]"></i><span>${moduleName}</span>
+                <span class="text-[9px] text-slate-400">（${families.length}）</span></summary>`;
+
+            families.forEach((family) => {
+                const familyBox = document.createElement('div');
+                familyBox.className = 'px-2 pb-1.5';
+                const familyName = String(family.name || '').trim();
+                const techniques = (family.techniques || []).filter(
+                    (technique) => microCatalogMatches(technique) || microCatalogMatches(familyName)
+                );
+                if (familyName) {
+                    const header = document.createElement('div');
+                    header.className = 'mt-1 mb-1 flex items-center gap-1.5';
+                    header.innerHTML = `<span class="text-[10px] font-semibold text-slate-600">${escapeText(familyName)}</span>`;
+                    const pickFamily = document.createElement('button');
+                    pickFamily.type = 'button';
+                    pickFamily.className = 'text-[9px] px-1.5 py-0.5 rounded border border-amber-200 text-amber-700 hover:bg-amber-50';
+                    pickFamily.textContent = '选方法族';
+                    pickFamily.addEventListener('click', () => addMicroLabel(familyName));
+                    header.appendChild(pickFamily);
+                    familyBox.appendChild(header);
+                }
+                if (techniques.length) {
+                    const list = document.createElement('div');
+                    list.className = 'flex flex-wrap gap-1';
+                    techniques.forEach((technique) => {
+                        const label = familyName ? familyName + '·' + technique : technique;
+                        const chip = document.createElement('button');
+                        chip.type = 'button';
+                        chip.className = 'text-[10px] px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600 hover:border-amber-300 hover:text-amber-700';
+                        chip.textContent = technique;
+                        chip.title = '点击加入：' + label;
+                        chip.addEventListener('click', () => addMicroLabel(label));
+                        list.appendChild(chip);
+                    });
+                    familyBox.appendChild(list);
+                }
+                details.appendChild(familyBox);
+            });
+            body.appendChild(details);
+        });
+
+        if (!hitCount) {
+            const empty = document.createElement('p');
+            empty.className = 'px-1 py-3 text-[11px] text-slate-400';
+            empty.textContent = '目录中没有匹配项，可在上方输入框自行输入技法名称后回车添加。';
+            body.appendChild(empty);
+        }
+    }
+
+    function toggleMicroCatalog() {
+        const card = $('tagMicroCatalogCard');
+        if (!card) return;
+        const willShow = card.classList.contains('hidden');
+        if (willShow) {
+            card.classList.remove('hidden');
+            loadMicroCatalog().then(() => renderMicroCatalog());
+        } else {
+            card.classList.add('hidden');
+        }
     }
 
     function buildFunctionSelect() {
@@ -352,6 +477,24 @@
             }
             const microAddBtn = $('tagMicroAddBtn');
             if (microAddBtn) microAddBtn.addEventListener('click', addMicroFromInput);
+            const catalogBtn = $('tagMicroCatalogBtn');
+            if (catalogBtn) catalogBtn.addEventListener('click', toggleMicroCatalog);
+            const catalogSearch = $('tagMicroCatalogSearch');
+            if (catalogSearch) {
+                catalogSearch.addEventListener('input', () => {
+                    microCatalogQuery = catalogSearch.value || '';
+                    if (microCatalogData) renderMicroCatalog();
+                });
+                catalogSearch.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        addMicroFromInputValue(catalogSearch.value);
+                        catalogSearch.value = '';
+                        microCatalogQuery = '';
+                        if (microCatalogData) renderMicroCatalog();
+                    }
+                });
+            }
             // 记忆复用：自定义标签与微观方法共用同一个记忆面板组件。
             if (window.MathBankTagMemory && typeof window.MathBankTagMemory.attach === 'function') {
                 const editTags = document.getElementById('editTags');
