@@ -17,6 +17,8 @@
         schema: null,
         chapters: [],   // 已选章节节点编码
         thoughts: [],   // 已选思想方法编码
+        strategies: [], // 已选解题策略编码（中观）
+        micros: [],     // 已选微观解题方法（自由文本）
         functionCode: '',
         dirty: false    // 用户是否主动改动过标签（用于区分"回显"与"编辑"）
     };
@@ -133,17 +135,23 @@
         if (!container || !State.schema) return;
         const dimension = (State.schema.dimensions || []).find((item) => item.key === 'thought_method');
         container.innerHTML = '';
+        // 展示顺序 = 词表声明顺序（课程标准：转化与化归 → … → 符号化）。
         (dimension && dimension.values || []).forEach((value) => {
             const active = State.thoughts.indexOf(value.code) !== -1;
             const chip = document.createElement('button');
             chip.type = 'button';
             chip.textContent = value.label;
+            chip.title = value.hint || value.label;
             chip.className = active
                 ? 'text-[11px] px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-300'
                 : 'text-[11px] px-2 py-1 rounded-full bg-white text-slate-500 border border-slate-200 hover:border-emerald-300';
             chip.addEventListener('click', () => {
                 const index = State.thoughts.indexOf(value.code);
                 if (index === -1) {
+                    if (State.thoughts.length >= 3) {
+                        if (typeof showToast === 'function') showToast('数学思想方法建议不超过 3 个，请先取消一个再选择。', 'info');
+                        return;
+                    }
                     State.thoughts.push(value.code);
                 } else {
                     State.thoughts.splice(index, 1);
@@ -153,6 +161,72 @@
             });
             container.appendChild(chip);
         });
+    }
+
+    function renderStrategyChips() {
+        const container = $('tagStrategyChips');
+        if (!container || !State.schema) return;
+        const dimension = (State.schema.dimensions || []).find((item) => item.key === 'solve_strategy');
+        container.innerHTML = '';
+        (dimension && dimension.values || []).forEach((value) => {
+            const active = State.strategies.indexOf(value.code) !== -1;
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.textContent = value.label;
+            chip.title = value.hint || value.label;
+            chip.className = active
+                ? 'text-[11px] px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-300'
+                : 'text-[11px] px-2 py-1 rounded-full bg-white text-slate-500 border border-slate-200 hover:border-indigo-300';
+            chip.addEventListener('click', () => {
+                const index = State.strategies.indexOf(value.code);
+                if (index === -1) State.strategies.push(value.code);
+                else State.strategies.splice(index, 1);
+                State.dirty = true;
+                renderStrategyChips();
+            });
+            container.appendChild(chip);
+        });
+    }
+
+    function renderMicroChips() {
+        const container = $('tagMicroChips');
+        if (!container) return;
+        container.innerHTML = '';
+        if (!State.micros.length) {
+            const hint = document.createElement('span');
+            hint.className = 'text-[10px] text-slate-400';
+            hint.textContent = '暂无微观方法；在右侧输入后回车添加（可从记忆或目录建议中选）。';
+            container.appendChild(hint);
+            return;
+        }
+        State.micros.forEach((label) => {
+            const chip = document.createElement('span');
+            chip.className = 'inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200';
+            chip.innerHTML = '<i class="fa-solid fa-microchip text-[9px]"></i><span>' + escapeText(label) + '</span>';
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'ml-0.5 text-amber-400 hover:text-amber-700';
+            remove.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+            remove.addEventListener('click', () => {
+                State.micros = State.micros.filter((item) => item !== label);
+                State.dirty = true;
+                renderMicroChips();
+            });
+            chip.appendChild(remove);
+            container.appendChild(chip);
+        });
+    }
+
+    function addMicroFromInput() {
+        const input = $('tagMicroInput');
+        if (!input) return;
+        const parts = String(input.value || '').split(/[,，]/).map((item) => item.trim()).filter(Boolean);
+        parts.forEach((label) => {
+            if (State.micros.indexOf(label) === -1) State.micros.push(label);
+        });
+        input.value = '';
+        State.dirty = true;
+        renderMicroChips();
     }
 
     function buildFunctionSelect() {
@@ -224,6 +298,33 @@
         }
     }
 
+    // 微观解题方法参考目录（/api/config/micro-method-vocab）缓存。
+    let microVocabSuggestions = null;
+
+    function loadMicroSuggestions() {
+        if (microVocabSuggestions) return Promise.resolve(microVocabSuggestions);
+        return fetch('/api/config/micro-method-vocab')
+            .then((res) => (res.ok ? res.json() : null))
+            .then((vocab) => {
+                const suggestions = [];
+                (vocab && vocab.modules || []).forEach((module) => {
+                    (module.families || []).forEach((family) => {
+                        const familyName = family.name || '';
+                        if (familyName) suggestions.push({ label: familyName, hint: module.name });
+                        (family.techniques || []).forEach((technique) => {
+                            suggestions.push({
+                                label: familyName ? familyName + '·' + technique : technique,
+                                hint: module.name
+                            });
+                        });
+                    });
+                });
+                microVocabSuggestions = suggestions;
+                return suggestions;
+            })
+            .catch(() => []);
+    }
+
     async function init() {
         if (State.ready) return true;
         try {
@@ -236,8 +337,35 @@
             buildBookSelect();
             bindCascade();
             renderThoughtChips();
+            renderStrategyChips();
             buildFunctionSelect();
             renderChapterChips();
+            renderMicroChips();
+            const microInput = $('tagMicroInput');
+            if (microInput) {
+                microInput.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter' || event.key === ',' || event.key === '，') {
+                        event.preventDefault();
+                        addMicroFromInput();
+                    }
+                });
+            }
+            const microAddBtn = $('tagMicroAddBtn');
+            if (microAddBtn) microAddBtn.addEventListener('click', addMicroFromInput);
+            // 记忆复用：自定义标签与微观方法共用同一个记忆面板组件。
+            if (window.MathBankTagMemory && typeof window.MathBankTagMemory.attach === 'function') {
+                const editTags = document.getElementById('editTags');
+                if (editTags) window.MathBankTagMemory.attach(editTags, { dim: 'custom' });
+                const microInput = $('tagMicroInput');
+                if (microInput) {
+                    loadMicroSuggestions();
+                    window.MathBankTagMemory.attach(microInput, {
+                        dim: 'micro',
+                        suggestionTitle: '目录建议（微观解题方法）',
+                        getSuggestions: () => microVocabSuggestions || []
+                    });
+                }
+            }
             const functionSelect = $('tagFunctionSelect');
             if (functionSelect) {
                 functionSelect.addEventListener('change', () => {
@@ -257,6 +385,8 @@
         return {
             chapter_codes: State.chapters.slice(),
             thought_codes: State.thoughts.slice(),
+            strategy_codes: State.strategies.slice(),
+            micro_methods: State.micros.slice(),
             function_code: State.functionCode || '',
             custom_tags: document.getElementById('editTags')
                 ? String(document.getElementById('editTags').value || '').trim()
@@ -268,20 +398,28 @@
         if (!tagCodes || typeof tagCodes !== 'object') return;
         const chapters = Array.isArray(tagCodes.chapter) ? tagCodes.chapter : [];
         const thoughts = Array.isArray(tagCodes.thought) ? tagCodes.thought : [];
+        const strategies = Array.isArray(tagCodes.strategy) ? tagCodes.strategy : [];
+        const micros = Array.isArray(tagCodes.micro) ? tagCodes.micro : [];
         const functions = Array.isArray(tagCodes.function) ? tagCodes.function : [];
         State.chapters = chapters.filter(Boolean);
         State.thoughts = thoughts.filter(Boolean);
+        State.strategies = strategies.filter(Boolean);
+        State.micros = micros.filter(Boolean);
         State.functionCode = functions.length ? functions[0] : '';
         State.dirty = false;  // 回显现有标签不算"改动"
         if (State.ready) {
             renderChapterChips();
             renderThoughtChips();
+            renderStrategyChips();
+            renderMicroChips();
             const functionSelect = $('tagFunctionSelect');
             if (functionSelect) functionSelect.value = State.functionCode;
         } else {
             init().then(() => {
                 renderChapterChips();
                 renderThoughtChips();
+                renderStrategyChips();
+                renderMicroChips();
                 const functionSelect = $('tagFunctionSelect');
                 if (functionSelect) functionSelect.value = State.functionCode;
             });
@@ -291,16 +429,22 @@
     function clear() {
         State.chapters = [];
         State.thoughts = [];
+        State.strategies = [];
+        State.micros = [];
         State.functionCode = '';
         State.dirty = true;
         renderChapterChips();
         renderThoughtChips();
+        renderStrategyChips();
+        renderMicroChips();
         const functionSelect = $('tagFunctionSelect');
         if (functionSelect) functionSelect.value = '';
         ['tagBookSelect', 'tagChapterSelect', 'tagSectionSelect', 'tagSubsectionSelect'].forEach((id) => {
             const select = $(id);
             if (select) select.value = '';
         });
+        const microInput = $('tagMicroInput');
+        if (microInput) microInput.value = '';
     }
 
     function isDirty() {

@@ -358,8 +358,30 @@ def build_classification_system_prompt(
             "仅作参考，你可据题面修正；若你的判断与它相差两档（如 easy 与 hard），请在 reason 中说明理由。\n"
         )
 
+    # 标签维度候选（数学思想方法 / 解题策略 / 微观方法参考目录）。
+    # 全部来自受控词表与参考目录，AI 只能从中选择或按参考自主命名。
+    from mathbank.tags import dimension_values, load_micro_method_vocab
+
+    thought_block = "\n".join(
+        f"- {v['code']} {v['label']}：{v.get('hint', '')}"
+        for v in dimension_values("thought")
+    )
+    strategy_block = "\n".join(
+        f"- {v['code']} {v['label']}：{v.get('hint', '')}"
+        for v in dimension_values("strategy")
+    )
+    vocab = load_micro_method_vocab()
+    micro_lines: list[str] = []
+    for module in vocab.get("modules", []):
+        families = "；".join(
+            f"{family.get('name')}（{'、'.join(family.get('techniques', [])[:6])}）"
+            for family in module.get("families", [])
+        )
+        micro_lines.append(f"- {module.get('name')}：{families}")
+    micro_block = "\n".join(micro_lines)
+
     return (
-        "你是高中数学题目分类专家。请分析题目，识别并输出以下【必选分类信息】。\n"
+        "你是高中数学题目分类专家。请分析题目，识别并输出以下【必选分类信息】与【标签建议】。\n"
         "【教材章节候选】必须从下列列表中挑选，原样输出 code，禁止自行拼造 code：\n"
         f"{chapter_lines}\n"
         f"{section_block}"
@@ -382,15 +404,37 @@ def build_classification_system_prompt(
         "「角A、B、C的对边」「集合A、B」「已知A、B是两个互斥事件」「从A、B中各取一个」"
         "「D、E分别为…的中点」「抛物线C：y²=4x」「∁_U(A∪B)=」「P(A)=…」「在三棱柱ABC-A1B1C1中」。\n"
         "5. 判定难度 difficulty（三选一，rubric 如下）：\n"
-        "   - easy：单一步骤或直接套用公式，教材例题/练习题水平。\n"
-        "   - medium：需要 2-3 步转化，或含一个中等技巧（如换元、分类、配方、构造）。\n"
-        "   - hard：多个小问、含参讨论、证明/探究/新定义、恒成立或取值范围探究、跨模块综合。\n"
+        "   - easy（基础题）：条件与结论直接相连，读完题能立刻对应课本公式/定义/定理，步骤通常不超过三步，"
+        "读完就知道第一步写什么。\n"
+        "   - medium（中档题）：条件需要转化，先把文字/图形/情境翻译成数学语言再选方法，步骤四到六步，"
+        "知道考点但要想一下第一步先求什么。\n"
+        "   - hard（难题）：思路隐蔽，三分钟内没有明确入手方向，或尝试两步走不通；多知识模块交汇，"
+        "甚至不知道该调用哪个章节的知识。\n"
         f"{prior_line}"
-        "6. 输出必须是合法 JSON 字符串，包含且仅包含以下四个 key，不要任何 Markdown 标记、代码块或解释文字：\n"
+        "\n【标签建议（可空，宁缺毋滥，判断不了就输出空）】\n"
+        "7. 功能标签 function_tag（四选一，判定标准）：\n"
+        "   - error_prone（易错题）：有「坑」——干扰项强、条件隐蔽、易漏情况、易混概念、运算陷阱或分类遗漏；"
+        "不一定难，基础题也可能易错。\n"
+        "   - typical（典型题）：代表某知识点/方法/模型核心考法，通性通法、可迁移可变式，适合做母题/例题。\n"
+        "   - innovative（创新题）：情境、设问、知识交汇、方法迁移或题型结构新颖（新定义/新情境/开放探究），"
+        "无法直接套模板。\n"
+        "   - \"\"：无明显特征时输出空字符串。\n"
+        "8. 数学思想方法 thought_codes（多选，数组；含义如下，建议不超过 3 个）：\n"
+        f"{thought_block}\n"
+        "9. 解题策略 strategy_codes（多选，数组；中观通性通法，含义如下）：\n"
+        f"{strategy_block}\n"
+        "10. 微观解题方法 micro_methods（多选，数组；参考目录如下，从 L3 技法或 L2 方法族中选用规范名称；"
+        "目录没有合适项时可依据题解自主输入简短技法名，不超过 12 字）：\n"
+        f"{micro_block}\n"
+        "11. 输出必须是合法 JSON 字符串，包含以下 key，不要任何 Markdown 标记、代码块或解释文字：\n"
         "{\n"
         '  "chapter_code": "章节编码，只能取自上面的候选列表",\n'
         '  "question_type": "single_choice / multi_choice / fill_in_blank / detailed_answer",\n'
         '  "difficulty": "easy / medium / hard",\n'
+        '  "function_tag": "error_prone / typical / innovative / 空字符串",\n'
+        '  "thought_codes": ["T04", ...],\n'
+        '  "strategy_codes": ["S01", ...],\n'
+        '  "micro_methods": ["同构法·乘除同构", ...],\n'
         '  "reason": "一句话说明判断依据（不超过40字），便于老师核对"\n'
         "}\n"
         "不要包含 ```json ``` 标记，只输出最干净的 JSON。"

@@ -171,6 +171,7 @@ from mathbank.classify_rules import (
     estimate_difficulty_prior,
     suggest_chapter_candidates,
 )
+from mathbank import tag_memory
 import shutil
 from mathbank.pdf_inspector_helper import (
     is_pdf_inspector_available,
@@ -658,12 +659,18 @@ MAX_PDF_TASK_PAGES = 80
 # Typed question-to-question relations (schema v12).  The contract is frozen:
 # the frontend consumes these codes/labels verbatim, so do not rename them.
 BUILTIN_RELATION_TYPES = (
+    ("multi_q_unify", "多题归一"),
+    ("one_q_variants", "一题多变"),
+)
+# 旧版五类（v12 早期口径）。当前库中已无此类关系行，但保留校验兼容与展示
+# 映射：万一历史数据带出旧码，详情/列表仍能译出可读 label 而不是裸代码。
+LEGACY_RELATION_TYPES = (
     ("same_topic", "同知识点掌握"),
     ("multi_q_one_solution", "多题一解"),
     ("one_method_multi_use", "一法多用"),
     ("multi_method_one", "多法归一"),
-    ("one_q_variants", "一题多变"),
 )
+LEGACY_RELATION_LABELS = dict(LEGACY_RELATION_TYPES)
 RELATION_CUSTOM_PREFIX = "custom:"
 BUILTIN_RELATION_CODES = frozenset(code for code, _ in BUILTIN_RELATION_TYPES)
 #: Slug charset the frontend mints for ``custom:<slug>`` codes.  Kept permissive
@@ -674,7 +681,8 @@ RELATION_CODE_MAX_LENGTH = 60
 def validate_relation_code(code: str) -> str:
     """Whitelist a submitted ``relation_code``.
 
-    Only the frozen built-in codes or a ``custom:`` prefixed code are accepted.
+    Only the current built-in codes, a ``custom:`` prefixed code, or a legacy
+    built-in code (kept readable for any pre-migration history) are accepted.
     The custom escape hatch is deliberate: users invent their own comparison
     topics ("一题多解对比"), and the frontend always mints those as
     ``custom:<slug>``, so they must keep flowing through.
@@ -688,7 +696,7 @@ def validate_relation_code(code: str) -> str:
             status_code=400,
             detail=f"关联类型过长（最多 {RELATION_CODE_MAX_LENGTH} 个字符）。",
         )
-    if code in BUILTIN_RELATION_CODES:
+    if code in BUILTIN_RELATION_CODES or code in LEGACY_RELATION_LABELS:
         return code
     if code.startswith(RELATION_CUSTOM_PREFIX):
         slug = code[len(RELATION_CUSTOM_PREFIX):].strip()
@@ -2368,6 +2376,8 @@ def list_questions(
     source: str = None,
     chapter_code: Optional[List[str]] = Query(None),
     thought: Optional[List[str]] = Query(None),
+    strategy: Optional[List[str]] = Query(None),
+    micro_method: Optional[str] = None,
     function_code: Optional[str] = None,
     tag: Optional[str] = None,
     relation_code: Optional[str] = None,
@@ -2461,6 +2471,24 @@ def list_questions(
                 db.query(QuestionTag.question_id).filter(
                     QuestionTag.dim == "thought",
                     QuestionTag.code == str(code).strip(),
+                )
+            )
+        )
+    for code in strategy or []:
+        query = query.filter(
+            Question.id.in_(
+                db.query(QuestionTag.question_id).filter(
+                    QuestionTag.dim == "strategy",
+                    QuestionTag.code == str(code).strip(),
+                )
+            )
+        )
+    if micro_method:
+        query = query.filter(
+            Question.id.in_(
+                db.query(QuestionTag.question_id).filter(
+                    QuestionTag.dim == "micro",
+                    QuestionTag.code.like(f"%{_escape_like(micro_method)}%", escape="\\"),
                 )
             )
         )
@@ -3250,6 +3278,8 @@ def sync_question_tags(
     thought_raw: Optional[str] = None,
     function_raw: Optional[str] = None,
     custom_raw: Optional[str] = None,
+    strategy_raw: Optional[str] = None,
+    micro_raw: Optional[str] = None,
     legacy: Optional[tuple] = None,
     legacy_prev: Optional[tuple] = None,
 ) -> dict:
@@ -3297,6 +3327,15 @@ def sync_question_tags(
     if custom_raw is not None:
         pending["custom"] = split_custom_tags(custom_raw)
 
+    strategy_codes = _parse_code_list(strategy_raw)
+    if strategy_codes is not None:
+        pending["strategy"] = normalize_tag_codes("strategy", strategy_codes)
+
+    if micro_raw is not None:
+        # 微观解题方法：自由文本多值。前端以 JSON 数组提交；也兼容纯逗号分隔
+        # 文本（与自定义标签同口径），两种格式都正确拆分为多行。
+        pending["micro"] = _parse_free_text_list(micro_raw)
+
     for dim, codes in pending.items():
         db.query(QuestionTag).filter(
             QuestionTag.question_id == question.id,
@@ -3305,6 +3344,103 @@ def sync_question_tags(
         for code in codes:
             db.add(QuestionTag(question_id=question.id, dim=dim, code=code))
     return {dim: list(codes) for dim, codes in pending.items()}
+
+
+def _record_free_text_tag_memory(custom_raw: Optional[str], micro_raw: Optional[str]) -> None:
+    """Record free-text tag usage for the reuse dropdown; never raises.
+
+    自定义标签与微观解题方法的记忆是「锦上添花」能力：任何失败都不能影响
+    题目保存主流程，因此整体吞异常只留日志。
+    """
+
+    try:
+        if custom_raw is not None:
+            tag_memory.record_usage("custom", split_custom_tags(custom_raw))
+        if micro_raw is not None:
+            tag_memory.record_usage("micro", _parse_free_text_list(micro_raw))
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[tag-memory] 记录标签使用记忆失败（已忽略）: {exc}")
+
+
+def _parse_free_text_list(raw: Optional[str]) -> list[str]:
+    """Parse a free-text multi-value field into a clean list of labels.
+
+    Accepts either a JSON array of strings (the frontend's payload shape) or
+    plain comma / Chinese-comma separated text, so both submission styles land
+    as individual rows in ``question_tags`` instead of one literal string.
+    """
+
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return split_custom_tags("，".join(
+                    str(item or "").strip() for item in parsed if str(item or "").strip()
+                ))
+        except (ValueError, TypeError):
+            pass
+    return split_custom_tags(text)
+
+
+@app.get("/api/tag-memory")
+def get_tag_memory(dim: str = "custom"):
+    """Return remembered free-text tags (自定义标签 / 微观解题方法), MRU first."""
+
+    entries = tag_memory.list_memory(dim)
+    return {"dim": dim, "items": entries}
+
+
+@app.post("/api/tag-memory/use")
+def use_tag_memory(dim: str = Form(...), tags: str = Form("")):
+    """Record a manual usage of free-text tags (e.g. picked from the dropdown)."""
+
+    updated = tag_memory.record_usage(dim, split_custom_tags(tags))
+    return {"status": "success", "dim": dim, "items": updated}
+
+
+@app.delete("/api/tag-memory")
+def delete_tag_memory(dim: str = "custom", tag: str = "", clear: bool = False):
+    """Delete one remembered tag, or every tag of the dimension with ``clear``."""
+
+    if clear:
+        removed = tag_memory.clear_memory(dim)
+        return {"status": "success", "dim": dim, "cleared": removed}
+    removed = tag_memory.delete_memory(dim, tag)
+    if not removed:
+        raise HTTPException(status_code=404, detail="未找到该条标签记忆。")
+    return {"status": "success", "dim": dim, "deleted": tag}
+
+
+@app.get("/api/config/micro-method-vocab")
+def get_micro_method_vocab():
+    """Return the three-level 微观解题方法 reference tree (L1/L2/L3)."""
+
+    from mathbank.tags import load_micro_method_vocab
+
+    return load_micro_method_vocab()
+
+
+@app.get("/api/tag-values")
+def list_tag_values(dim: str = "micro", db: Session = Depends(get_db)):
+    """Distinct in-use codes/labels of one narrow-table dimension.
+
+    用于筛选下拉：只列题库里真实存在的取值（按使用次数降序），
+    前端再与个人记忆合并展示。
+    """
+
+    if dim not in {"thought", "strategy", "micro", "custom", "function"}:
+        raise HTTPException(status_code=400, detail="不支持的标签维度。")
+    rows = (
+        db.query(QuestionTag.code, func.count(QuestionTag.id))
+        .filter(QuestionTag.dim == dim)
+        .group_by(QuestionTag.code)
+        .order_by(func.count(QuestionTag.id).desc(), QuestionTag.code.asc())
+        .all()
+    )
+    return {"dim": dim, "items": [{"value": code, "count": int(count or 0)} for code, count in rows]}
 
 
 @app.get("/api/config/tag-schema")
@@ -3355,6 +3491,8 @@ def create_question(
     tag_thought_codes: Optional[str] = Form(None),
     tag_function_code: Optional[str] = Form(None),
     tag_custom_tags: Optional[str] = Form(None),
+    tag_strategy_codes: Optional[str] = Form(None),
+    tag_micro_methods: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     require_expected_curriculum_version(expected_version_code)
@@ -3498,9 +3636,12 @@ def create_question(
             thought_raw=tag_thought_codes,
             function_raw=tag_function_code,
             custom_raw=tag_custom_tags,
+            strategy_raw=tag_strategy_codes,
+            micro_raw=tag_micro_methods,
             legacy=(category_compulsory, category_chapter, category_knowledge),
             legacy_prev=None,
         )
+        _record_free_text_tag_memory(tag_custom_tags, tag_micro_methods)
         committed_question_id = db_question.id
         db.commit()
     except Exception as e:
@@ -3561,6 +3702,8 @@ def update_question(
     tag_thought_codes: Optional[str] = Form(None),
     tag_function_code: Optional[str] = Form(None),
     tag_custom_tags: Optional[str] = Form(None),
+    tag_strategy_codes: Optional[str] = Form(None),
+    tag_micro_methods: Optional[str] = Form(None),
     db: Session = Depends(get_db)
 ):
     require_expected_curriculum_version(expected_version_code)
@@ -3739,9 +3882,12 @@ def update_question(
             thought_raw=tag_thought_codes,
             function_raw=tag_function_code,
             custom_raw=tag_custom_tags,
+            strategy_raw=tag_strategy_codes,
+            micro_raw=tag_micro_methods,
             legacy=(category_compulsory, category_chapter, category_knowledge),
             legacy_prev=legacy_category_prev,
         )
+        _record_free_text_tag_memory(tag_custom_tags, tag_micro_methods)
         db.commit()
     except Exception as e:
         db.rollback()

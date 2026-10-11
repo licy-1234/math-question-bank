@@ -23,6 +23,8 @@ RESOURCES_DIR = CURRICULUMS_DIR.parent
 
 TAG_DIMENSIONS = {
     "thought": "数学思想方法",
+    "strategy": "解题策略",
+    "micro": "微观解题方法",
     "chapter": "教材章节",
     "function": "功能",
     "custom": "自定义标签",
@@ -303,6 +305,43 @@ def load_tag_schema() -> dict:
     """Return an isolated copy of the dimension definitions."""
 
     return deepcopy(_load_tag_schema_cached())
+
+
+@lru_cache(maxsize=1)
+def _load_micro_vocab_cached() -> dict:
+    path = RESOURCES_DIR / "micro_method_vocab.json"
+    with path.open("r", encoding="utf-8") as file:
+        data = json.load(file)
+    if not isinstance(data, dict) or "modules" not in data:
+        raise ValueError(f"微观解题方法目录格式错误: {path}")
+    return data
+
+
+def load_micro_method_vocab() -> dict:
+    """Return an isolated copy of the three-level 微观解题方法 reference tree."""
+
+    return deepcopy(_load_micro_vocab_cached())
+
+
+def micro_method_labels() -> list[str]:
+    """Flatten the micro-method reference tree into L2/L3 label strings.
+
+    L3 entries are returned as ``"L2名·L3名"`` so equal techniques under
+    different families (e.g. 定义法) stay distinguishable; L2 names are also
+    included on their own for coarse matching.
+    """
+
+    labels: list[str] = []
+    for module in _load_micro_vocab_cached().get("modules", []):
+        for family in module.get("families", []):
+            family_name = str(family.get("name") or "").strip()
+            if family_name:
+                labels.append(family_name)
+            for technique in family.get("techniques", []):
+                technique = str(technique or "").strip()
+                if technique:
+                    labels.append(f"{family_name}·{technique}" if family_name else technique)
+    return labels
 
 
 def _dimension_storage_key(dimension: dict) -> str:

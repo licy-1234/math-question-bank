@@ -384,6 +384,54 @@
             return 'custom:' + slug;
         }
 
+        // 关联类型 label 映射：新口径两类 + 旧口径五类（历史数据回显兜底）。
+        const RELATION_CODE_LABELS = {
+            multi_q_unify: '多题归一',
+            one_q_variants: '一题多变',
+            same_topic: '同知识点掌握',
+            multi_q_one_solution: '多题一解',
+            one_method_multi_use: '一法多用',
+            multi_method_one: '多法归一',
+            one_q_variants_legacy: '一题多变'
+        };
+        // 内置类型选中时的补充说明占位文案。
+        const RELATION_HINT_PLACEHOLDERS = {
+            multi_q_unify: '补充说明（选填，如：同用面积桥接求点面距）',
+            one_q_variants: '补充说明（选填，如：变式方向：已知弦长求参数）'
+        };
+        // 把 relation_code 译成可读 label（优先库里的 relation_label）。
+        function resolveRelationLabel(code, fallbackLabel) {
+            const clean = String(fallbackLabel || '').trim();
+            if (clean && clean !== String(code || '')) return clean;
+            return RELATION_CODE_LABELS[String(code || '')] || clean || String(code || '');
+        }
+
+        // 关联类型切换：内置两类与自定义都允许填写补充说明/主题。
+        function bindRelationTypeToggle() {
+            const select = document.getElementById('editRelationType');
+            const customInput = document.getElementById('editRelationCustom');
+            if (!select || !customInput || select.dataset.toggleBound === '1') return;
+            select.dataset.toggleBound = '1';
+            const sync = () => {
+                const value = select.value;
+                if (!value) {
+                    customInput.classList.add('hidden');
+                    return;
+                }
+                if (value === '__custom__') {
+                    customInput.placeholder = '自定义关联主题（必填，如：一题多解对比）';
+                } else if (RELATION_HINT_PLACEHOLDERS[value]) {
+                    customInput.placeholder = RELATION_HINT_PLACEHOLDERS[value];
+                } else {
+                    customInput.classList.add('hidden');
+                    return;
+                }
+                customInput.classList.remove('hidden');
+            };
+            select.addEventListener('change', sync);
+            sync();
+        }
+
         // Fill #editRelationType with builtin relation types plus a trailing custom option.
         function renderRelationTypeOptions(select, types) {
             if (!select) return;
@@ -408,6 +456,7 @@
             const select = document.getElementById('editRelationType');
             if (relationTypesCache !== null) {
                 if (select) renderRelationTypeOptions(select, relationTypesCache);
+                bindRelationTypeToggle();
                 return Promise.resolve(true);
             }
             if (relationTypesLoading) return relationTypesLoading;
@@ -427,6 +476,7 @@
                         }));
                     const el = document.getElementById('editRelationType');
                     if (el) renderRelationTypeOptions(el, relationTypesCache);
+                    bindRelationTypeToggle();
                     return true;
                 })
                 .catch(err => {
@@ -472,7 +522,7 @@
             item.onclick = () => selectQuestionById(other.id);
 
             const code = String(relation && relation.relation_code || '');
-            const label = String(relation && relation.relation_label || '') || code;
+            const label = resolveRelationLabel(code, relation && relation.relation_label);
             const isLegacy = code === 'legacy_group';
             const badgeCls = isLegacy
                 ? 'bg-slate-100 text-slate-500 border border-slate-200'
@@ -661,12 +711,18 @@
             }
 
             // Resolve the relation type (builtin selection or custom topic).
+            // 多题归一 / 一题多变 同样支持补充说明：作为 relation_label 落库，
+            // 不填则回退为类型名，保持旧数据的展示兼容。
             const typeSelect = document.getElementById('editRelationType');
             const customInput = document.getElementById('editRelationCustom');
             let relationCode = '';
             let relationLabel = '';
             if (typeSelect) {
                 const selectedVal = typeSelect.value;
+                const typeLabelText = selectedVal
+                    ? (typeSelect.options[typeSelect.selectedIndex]
+                        ? typeSelect.options[typeSelect.selectedIndex].textContent : selectedVal)
+                    : '';
                 if (selectedVal === '__custom__') {
                     relationLabel = (customInput ? customInput.value : '').trim();
                     if (!relationLabel) {
@@ -676,9 +732,12 @@
                     }
                     relationCode = buildCustomRelationCode(relationLabel);
                 } else if (selectedVal) {
-                    const selectedTypeOpt = typeSelect.options[typeSelect.selectedIndex];
                     relationCode = selectedVal;
-                    relationLabel = selectedTypeOpt ? selectedTypeOpt.textContent : selectedVal;
+                    relationLabel = typeLabelText;
+                    if (customInput && !customInput.classList.contains('hidden')) {
+                        const hint = customInput.value.trim();
+                        if (hint) relationLabel = hint;
+                    }
                 }
             }
             if (!relationCode) {
@@ -1264,6 +1323,8 @@
                         const tagSelection = window.MathBankTags.getSelection();
                         formData.append('tag_chapter_codes', JSON.stringify(tagSelection.chapter_codes || []));
                         formData.append('tag_thought_codes', JSON.stringify(tagSelection.thought_codes || []));
+                        formData.append('tag_strategy_codes', JSON.stringify(tagSelection.strategy_codes || []));
+                        formData.append('tag_micro_methods', JSON.stringify(tagSelection.micro_methods || []));
                         formData.append('tag_function_code', tagSelection.function_code || '');
                         formData.append('tag_custom_tags', tagSelection.custom_tags || '');
                     }
@@ -1702,6 +1763,41 @@
                 temporaryClassifyQuestionType = resolvedType;
                 setClassifyApplyEnabled(true);
             }
+
+            // ⑥ 标签建议：功能标签 / 思想方法 / 解题策略 / 微观方法（全部可空）
+            renderClassifyTagSuggestions(data);
+        }
+
+        // 把 AI 的标签建议渲染进结果区：受控维度译成 label，微观原样展示。
+        function renderClassifyTagSuggestions(data) {
+            const wrap = document.getElementById('recTagSuggestions');
+            if (!wrap) return;
+            const schema = (window.MathBankTags && window.MathBankTags.state && window.MathBankTags.state.schema) || null;
+            const labelOf = (dimKey, code) => {
+                if (!schema) return code;
+                const dim = (schema.dimensions || []).find(item => item.key === dimKey);
+                const found = (dim && dim.values || []).find(v => v.code === code);
+                return found ? found.label : code;
+            };
+            const functionKey = typeof data.function_tag === 'string' ? data.function_tag.trim() : '';
+            const thoughtCodes = Array.isArray(data.thought_codes) ? data.thought_codes.filter(Boolean) : [];
+            const strategyCodes = Array.isArray(data.strategy_codes) ? data.strategy_codes.filter(Boolean) : [];
+            const micros = Array.isArray(data.micro_methods) ? data.micro_methods.map(item => String(item || '').trim()).filter(Boolean) : [];
+
+            const functionLabel = functionKey ? (labelOf('function_tag', functionKey) || functionKey) : '';
+            setClassifyText('recFunctionTag',
+                functionLabel ? '功能标签：' + functionLabel : '', !!functionLabel);
+            setClassifyText('recThoughtTags',
+                thoughtCodes.length ? '数学思想方法：' + thoughtCodes.map(c => labelOf('thought_method', c)).join('、') : '', thoughtCodes.length > 0);
+            setClassifyText('recStrategyTags',
+                strategyCodes.length ? '解题策略：' + strategyCodes.map(c => labelOf('solve_strategy', c)).join('、') : '', strategyCodes.length > 0);
+            setClassifyText('recMicroTags',
+                micros.length ? '微观解题方法：' + micros.join('、') : '', micros.length > 0);
+
+            const hasAny = !!(functionLabel || thoughtCodes.length || strategyCodes.length || micros.length);
+            wrap.classList.toggle('hidden', !hasAny);
+            const empty = document.getElementById('recTagEmpty');
+            if (empty) empty.classList.toggle('hidden', hasAny);
         }
 
         function setClassifyApplyEnabled(enabled) {
@@ -1768,7 +1864,7 @@
             document.getElementById('classifyApplyButton').classList.add('hidden');
             document.getElementById('choiceTypeConfirm').classList.add('hidden');
             document.getElementById('unknownQuestionFormNotice').classList.add('hidden');
-            ['classifyStatusNotice', 'classifyReviewBlock', 'classifyTypeCandidateWrap', 'recChapterSource', 'recQuestionTypeEvidence', 'recCorrectedNotice', 'recDifficultyEvidence', 'recDifficultyConflict']
+            ['classifyStatusNotice', 'classifyReviewBlock', 'classifyTypeCandidateWrap', 'recChapterSource', 'recQuestionTypeEvidence', 'recCorrectedNotice', 'recDifficultyEvidence', 'recDifficultyConflict', 'recTagSuggestions', 'recFunctionTag', 'recThoughtTags', 'recStrategyTags', 'recMicroTags', 'recTagEmpty']
                 .forEach(id => {
                     const node = document.getElementById(id);
                     if (node) node.classList.add('hidden');
@@ -1906,6 +2002,53 @@
                 });
                 chapterApplied = true;
                 appliedFields.push('章节');
+            }
+
+            // 标签建议合并写入：思想 / 策略追加去重（各保留 AI 顺序，思想超 3 个截断），
+            // 功能标签仅在当前为空时写入（单选字段不静默覆盖），微观追加去重。
+            let tagsApplied = false;
+            if (window.MathBankTags && typeof window.MathBankTags.setSelection === 'function') {
+                const current = window.MathBankTags.getSelection();
+                const mergedThoughts = (current.thought_codes || []).slice();
+                (Array.isArray(data.thought_codes) ? data.thought_codes : []).forEach(code => {
+                    if (code && mergedThoughts.indexOf(code) === -1 && mergedThoughts.length < 3) {
+                        mergedThoughts.push(code);
+                    }
+                });
+                const mergedStrategies = (current.strategy_codes || []).slice();
+                (Array.isArray(data.strategy_codes) ? data.strategy_codes : []).forEach(code => {
+                    if (code && mergedStrategies.indexOf(code) === -1) mergedStrategies.push(code);
+                });
+                const mergedMicros = (current.micro_methods || []).slice();
+                (Array.isArray(data.micro_methods) ? data.micro_methods : []).forEach(item => {
+                    const clean = String(item || '').trim();
+                    if (clean && mergedMicros.indexOf(clean) === -1) mergedMicros.push(clean);
+                });
+                const thoughtChanged = mergedThoughts.length !== (current.thought_codes || []).length
+                    || mergedThoughts.some((code, i) => code !== current.thought_codes[i]);
+                const strategyChanged = mergedStrategies.length !== (current.strategy_codes || []).length
+                    || mergedStrategies.some((code, i) => code !== current.strategy_codes[i]);
+                const microChanged = mergedMicros.length !== (current.micro_methods || []).length
+                    || mergedMicros.some((code, i) => code !== current.micro_methods[i]);
+                const aiFunction = typeof data.function_tag === 'string' ? data.function_tag.trim() : '';
+                const functionChanged = !!(aiFunction && !(current.function_code || '').trim());
+                window.MathBankTags.setSelection({
+                    chapter: current.chapter_codes || [],
+                    thought: mergedThoughts,
+                    strategy: mergedStrategies,
+                    micro: mergedMicros,
+                    function: functionChanged ? [aiFunction] : (current.function_code ? [current.function_code] : [])
+                });
+                tagsApplied = thoughtChanged || strategyChanged || microChanged || functionChanged;
+                if (functionChanged) appliedFields.push('功能标签');
+                if (thoughtChanged) appliedFields.push('思想方法');
+                if (strategyChanged) appliedFields.push('解题策略');
+                if (microChanged) appliedFields.push('微观方法');
+                if (tagsApplied) {
+                    if (window.MathBankTagMemory && typeof window.MathBankTagMemory.notifySaved === 'function') {
+                        window.MathBankTagMemory.notifySaved('micro', mergedMicros);
+                    }
+                }
             }
 
             closeClassifyModal();

@@ -1063,6 +1063,8 @@ window.functionTagBadge = functionTagBadge;
                 tag_codes: tagSelection ? {
                     chapter: Array.isArray(tagSelection.chapter_codes) ? tagSelection.chapter_codes : [],
                     thought: Array.isArray(tagSelection.thought_codes) ? tagSelection.thought_codes : [],
+                    strategy: Array.isArray(tagSelection.strategy_codes) ? tagSelection.strategy_codes : [],
+                    micro: Array.isArray(tagSelection.micro_methods) ? tagSelection.micro_methods : [],
                     function: tagSelection.function_code ? [tagSelection.function_code] : []
                 } : null,
                 image_paths: typeof window.editorAssetReferences === 'function'
@@ -1215,6 +1217,8 @@ window.functionTagBadge = functionTagBadge;
             const difficulty = document.getElementById('filterDifficulty').value;
             const chapterCode = document.getElementById('filterChapterCode') ? document.getElementById('filterChapterCode').value : '';
             const thought = document.getElementById('filterThought') ? document.getElementById('filterThought').value : '';
+            const strategy = document.getElementById('filterStrategy') ? document.getElementById('filterStrategy').value : '';
+            const microMethod = document.getElementById('filterMicroMethod') ? document.getElementById('filterMicroMethod').value : '';
             const functionCode = document.getElementById('filterFunctionCode') ? document.getElementById('filterFunctionCode').value : '';
             const source = document.getElementById('filterSource') ? document.getElementById('filterSource').value.trim().toLowerCase() : '';
             
@@ -1242,7 +1246,18 @@ window.functionTagBadge = functionTagBadge;
             if (thought) {
                 drafts = drafts.filter(item => item.tag_codes && Array.isArray(item.tag_codes.thought) && item.tag_codes.thought.includes(thought));
             }
-            
+
+            // Filter by strategy (中观解题策略)
+            if (strategy) {
+                drafts = drafts.filter(item => item.tag_codes && Array.isArray(item.tag_codes.strategy) && item.tag_codes.strategy.includes(strategy));
+            }
+
+            // Filter by micro method (模糊匹配)
+            if (microMethod) {
+                drafts = drafts.filter(item => item.tag_codes && Array.isArray(item.tag_codes.micro)
+                    && item.tag_codes.micro.some(code => code.includes(microMethod)));
+            }
+
             // Filter by function code
             if (functionCode) {
                 drafts = drafts.filter(item => item.tag_codes && Array.isArray(item.tag_codes.function) && item.tag_codes.function.includes(functionCode));
@@ -1906,7 +1921,62 @@ window.functionTagBadge = functionTagBadge;
                 }
                 if (previous) functionSelect.value = previous;
             }
+
+            // 解题策略（中观）：与思想方法同一套受控词表，声明顺序即展示顺序。
+            const strategySelect = document.getElementById('filterStrategy');
+            if (strategySelect) {
+                const previous = strategySelect.value;
+                let options = '<option value="">所有策略</option>';
+                const schema = tagState.schema;
+                const dimension = schema && Array.isArray(schema.dimensions)
+                    ? schema.dimensions.find(item => item.key === 'solve_strategy')
+                    : null;
+                const values = (dimension && dimension.values) || [];
+                if (values.length) {
+                    values.forEach(value => {
+                        options += `<option value="${safe.escapeAttribute(value.code)}">${safe.escapeText(value.label)}</option>`;
+                    });
+                    strategySelect.innerHTML = options;
+                }
+                if (previous) strategySelect.value = previous;
+            }
+
+            // 微观解题方法：库内已用取值（按使用次数降序）。
+            if (typeof window.refreshMicroMethodFilterOptions === 'function') {
+                window.refreshMicroMethodFilterOptions();
+            }
         }
+
+        // 微观方法筛选下拉：库内已用取值 ∪ 个人记忆，去重后按使用频次展示。
+        // 独立成全局函数，便于筛选区初始化与保存后刷新两处复用。
+        window.refreshMicroMethodFilterOptions = function () {
+            const select = document.getElementById('filterMicroMethod');
+            if (!select) return Promise.resolve(false);
+            const previous = select.value;
+            return Promise.all([
+                fetch('/api/tag-values?dim=micro').then(r => (r.ok ? r.json() : { items: [] })).catch(() => ({ items: [] })),
+                fetch('/api/tag-memory?dim=micro').then(r => (r.ok ? r.json() : { items: [] })).catch(() => ({ items: [] }))
+            ]).then(([inUse, memory]) => {
+                const merged = [];
+                const seen = new Set();
+                (inUse.items || []).forEach(item => {
+                    const value = String(item.value || '').trim();
+                    if (value && !seen.has(value)) { seen.add(value); merged.push({ value, count: item.count || 0 }); }
+                });
+                (memory.items || []).forEach(item => {
+                    const value = String(item.tag || '').trim();
+                    if (value && !seen.has(value)) { seen.add(value); merged.push({ value, count: 0 }); }
+                });
+                let options = '<option value="">所有微观方法</option>';
+                merged.forEach(item => {
+                    const suffix = item.count > 0 ? `（${item.count}）` : '';
+                    options += `<option value="${window.MathBankSafe.escapeAttribute(item.value)}">${window.MathBankSafe.escapeText(item.value)}${suffix}</option>`;
+                });
+                select.innerHTML = options;
+                if (previous) select.value = previous;
+                return true;
+            });
+        };
 
         // Load and List Saved Questions
         function loadQuestions(retryCount = 0) {
@@ -1929,6 +1999,8 @@ window.functionTagBadge = functionTagBadge;
             const difficulty = document.getElementById('filterDifficulty').value;
             const chapterCode = document.getElementById('filterChapterCode') ? document.getElementById('filterChapterCode').value : '';
             const thought = document.getElementById('filterThought') ? document.getElementById('filterThought').value : '';
+            const strategy = document.getElementById('filterStrategy') ? document.getElementById('filterStrategy').value : '';
+            const microMethod = document.getElementById('filterMicroMethod') ? document.getElementById('filterMicroMethod').value : '';
             const functionCode = document.getElementById('filterFunctionCode') ? document.getElementById('filterFunctionCode').value : '';
             const source = document.getElementById('filterSource') ? document.getElementById('filterSource').value : '';
             const sortOrder = document.getElementById('filterSort') ? document.getElementById('filterSort').value : 'desc';
@@ -1940,6 +2012,8 @@ window.functionTagBadge = functionTagBadge;
             if (difficulty) params.append('difficulty', difficulty);
             if (chapterCode) params.append('chapter_code', chapterCode);
             if (thought) params.append('thought', thought);
+            if (strategy) params.append('strategy', strategy);
+            if (microMethod) params.append('micro_method', microMethod);
             if (functionCode) params.append('function_code', functionCode);
             if (source) params.append('source', source);
             params.append('page', String(requestedPage));

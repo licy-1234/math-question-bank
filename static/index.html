@@ -410,6 +410,12 @@
                 <select id="filterThought" aria-label="数学思想" class="glass-select text-xs px-2.5 py-2.5 rounded-xl">
                     <option value="">所有思想</option>
                 </select>
+                <select id="filterStrategy" aria-label="解题策略" class="glass-select text-xs px-2.5 py-2.5 rounded-xl">
+                    <option value="">所有策略</option>
+                </select>
+                <select id="filterMicroMethod" aria-label="微观方法" class="glass-select text-xs px-2.5 py-2.5 rounded-xl">
+                    <option value="">所有微观方法</option>
+                </select>
                 <select id="filterFunctionCode" aria-label="功能标签" class="glass-select text-xs px-2.5 py-2.5 rounded-xl">
                     <option value="">全部功能</option>
                     <option value="error_prone">易错题</option>
@@ -625,6 +631,21 @@
                             <label class="block text-[11px] font-medium text-slate-500 mb-1">数学思想方法（多选，建议不超过 3 个）</label>
                             <div id="tagThoughtChips" class="flex flex-wrap gap-1.5"></div>
                         </div>
+
+                        <!-- 解题策略（中观）+ 微观解题方法（自由文本，记忆复用） -->
+                        <div>
+                            <label class="block text-[11px] font-medium text-slate-500 mb-1">解题策略（中观，多选，可空）</label>
+                            <div id="tagStrategyChips" class="flex flex-wrap gap-1.5"></div>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2 items-end">
+                            <div class="col-span-2">
+                                <label for="tagMicroInput" class="block text-[11px] font-medium text-slate-500 mb-1">微观解题方法（选填，支持记忆复用；回车或点「添加」）</label>
+                                <input type="text" id="tagMicroInput" placeholder="如：同构法·乘除同构（可从记忆或目录建议中选）"
+                                       class="glass-input w-full px-2.5 text-xs rounded-xl relative">
+                            </div>
+                            <button type="button" id="tagMicroAddBtn" class="h-9 px-3 rounded-xl text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors">添加</button>
+                        </div>
+                        <div id="tagMicroChips" class="flex flex-wrap gap-1.5"></div>
                     </div>
                 </div>
 
@@ -1145,6 +1166,11 @@
                             <label class="block text-[11px] font-semibold text-slate-500 flex items-center space-x-1">
                                 <i class="fa-solid fa-link text-brand-500 mr-1"></i>关联题库中的其他题目
                             </label>
+                            <p class="text-[10px] leading-4 text-slate-400" id="relationTypeLegend">
+                                图例：<span class="text-slate-500 font-semibold">多题归一</span> = 多道题共用同一解法 / 方法 / 模型（含原「多题一解、一法多用、多法归一」）；
+                                <span class="text-slate-500 font-semibold">一题多变</span> = 同源题的变式与引申；
+                                <span class="text-slate-500 font-semibold">自定义</span> = 自拟关联主题。选择类型后可填写补充说明，便于回看时理解关联点。
+                            </p>
                             <div class="space-y-1">
                                 <select id="editRelationType" class="w-full max-w-sm h-9 px-2.5 rounded-xl text-xs border border-slate-200 bg-white"></select>
                                 <input type="text" id="editRelationCustom" maxlength="40" placeholder="自定义关联主题（如：一题多解对比）"
@@ -1496,6 +1522,16 @@
                             <div id="classifyTypeCandidateWrap" class="hidden space-y-2" role="radiogroup" aria-label="候选题型">
                                 <p id="classifyTypeCandidateHint" class="text-[11px] text-amber-700 font-medium"><i class="fa-solid fa-circle-info mr-1"></i>可在下方点选最可能的题型（不选择则本次不写入题型）。</p>
                                 <div id="classifyTypeCandidateList" class="grid grid-cols-2 gap-2"></div>
+                            </div>
+
+                            <!-- 标签建议：功能标签 / 思想方法 / 解题策略 / 微观方法（可空，应用时合并写入） -->
+                            <div id="recTagSuggestions" class="hidden border-t border-brand-100/60 pt-3 space-y-2">
+                                <p class="text-[10px] uppercase font-bold text-brand-600 tracking-wider"><i class="fa-solid fa-splotch mr-1.5 text-emerald-500"></i>标签建议（应用时合并写入，可手动调整）</p>
+                                <p id="recFunctionTag" class="hidden text-[11px] text-slate-600"></p>
+                                <p id="recThoughtTags" class="hidden text-[11px] text-slate-600"></p>
+                                <p id="recStrategyTags" class="hidden text-[11px] text-slate-600"></p>
+                                <p id="recMicroTags" class="hidden text-[11px] text-slate-600"></p>
+                                <p id="recTagEmpty" class="hidden text-[11px] text-slate-400">本次未识别出可写入的标签建议。</p>
                             </div>
                         </div>
                     </div>
@@ -2407,6 +2443,7 @@
 
     <!-- MAIN APP JAVASCRIPT -->
     <script src="/static/js/api.js"></script>
+    <script src="/static/js/tag-memory.js"></script>
     <script src="/static/js/tags.js"></script>
     <script src="/static/js/editor.js"></script>
     <script src="/static/js/ocr.js"></script>

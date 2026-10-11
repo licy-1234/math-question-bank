@@ -1,6 +1,6 @@
 {
   "$schema_note": "高中数学题库分类（标签）体系定义。mode: single=单选, multi=多选; required: 录题时是否必须填写; default: 默认值(null/空 表示不预填)。",
-  "schema_version": "rja2019-tags-v1",
+  "schema_version": "rja2019-tags-v2",
   "textbook": "人教A版2019",
   "dimensions": [
     {
@@ -12,10 +12,22 @@
       "storage": "questions.question_type",
       "description": "单选。对应现有字段 questions.question_type 的机器码。",
       "values": [
-        { "code": "single_choice", "label": "单选题" },
-        { "code": "multi_choice", "label": "多选题" },
-        { "code": "fill_in_blank", "label": "填空题" },
-        { "code": "detailed_answer", "label": "解答题" }
+        {
+          "code": "single_choice",
+          "label": "单选题"
+        },
+        {
+          "code": "multi_choice",
+          "label": "多选题"
+        },
+        {
+          "code": "fill_in_blank",
+          "label": "填空题"
+        },
+        {
+          "code": "detailed_answer",
+          "label": "解答题"
+        }
       ]
     },
     {
@@ -37,9 +49,18 @@
       "storage": "questions.difficulty",
       "description": "三级难度，单选。机器码沿用现有 easy/medium/hard，展示名更换为教学用语。",
       "values": [
-        { "code": "easy", "label": "基础题" },
-        { "code": "medium", "label": "中档题" },
-        { "code": "hard", "label": "难题" }
+        {
+          "code": "easy",
+          "label": "基础题"
+        },
+        {
+          "code": "medium",
+          "label": "中档题"
+        },
+        {
+          "code": "hard",
+          "label": "难题"
+        }
       ]
     },
     {
@@ -51,9 +72,18 @@
       "storage": "question_tags(dim='function')",
       "description": "单选、可空。标记题目在教学中的特殊用途；不填表示普通题。取值受本词表约束，历史取值 error_prone / innovative 保持不变。",
       "values": [
-        { "code": "error_prone", "label": "易错题" },
-        { "code": "innovative", "label": "创新题" },
-        { "code": "typical", "label": "典型题" }
+        {
+          "code": "error_prone",
+          "label": "易错题"
+        },
+        {
+          "code": "innovative",
+          "label": "创新题"
+        },
+        {
+          "code": "typical",
+          "label": "典型题"
+        }
       ]
     },
     {
@@ -63,24 +93,172 @@
       "required": false,
       "default": [],
       "storage": "question_tags(dim='thought')",
-      "description": "多选、可空。一道题可同时体现多种思想方法；建议最多勾选 3 个以保持检索有效性。",
+      "description": "多选、可空，建议不超过 3 个；展示与排序一律按本词表声明顺序（转化与化归 → 函数与方程 → … → 符号化）。",
       "values": [
-        { "code": "T01", "label": "函数与方程思想" },
-        { "code": "T02", "label": "数形结合思想" },
-        { "code": "T03", "label": "分类讨论思想" },
-        { "code": "T04", "label": "转化与化归思想" },
-        { "code": "T05", "label": "特殊与一般思想" },
-        { "code": "T06", "label": "有限与无限思想" },
-        { "code": "T07", "label": "或然与必然思想" },
-        { "code": "T08", "label": "整体思想" },
-        { "code": "T09", "label": "类比思想" },
-        { "code": "T10", "label": "归纳思想" },
-        { "code": "T11", "label": "模型思想" },
-        { "code": "T12", "label": "算法思想" },
-        { "code": "T13", "label": "统计思想" },
-        { "code": "T14", "label": "集合与对应思想" },
-        { "code": "T15", "label": "符号化思想" }
+        {
+          "code": "T04",
+          "label": "转化与化归思想",
+          "hint": "将复杂/陌生问题转化为简单/熟悉问题，正难则反"
+        },
+        {
+          "code": "T01",
+          "label": "函数与方程思想",
+          "hint": "用运动变化观点建立函数关系或方程（组），利用图像与性质求解"
+        },
+        {
+          "code": "T02",
+          "label": "数形结合思想",
+          "hint": "以形助数、以数解形，抽象数量关系与直观图形互相转化"
+        },
+        {
+          "code": "T03",
+          "label": "分类讨论思想",
+          "hint": "无法统一研究时按本质属性分类，逐类讨论后综合，不重不漏"
+        },
+        {
+          "code": "T05",
+          "label": "特殊与一般思想",
+          "hint": "从特殊到一般概括规律，或把一般结论应用于具体情形"
+        },
+        {
+          "code": "T08",
+          "label": "整体思想",
+          "hint": "从整体结构出发，整体换元、整体代入、设而不求"
+        },
+        {
+          "code": "T09",
+          "label": "类比思想",
+          "hint": "依据对象间的相似推测其他方面也相似，比较为基础"
+        },
+        {
+          "code": "T10",
+          "label": "归纳思想",
+          "hint": "由特例引出普遍结论，由部分到整体的推理与发现"
+        },
+        {
+          "code": "T11",
+          "label": "模型思想",
+          "hint": "能动地运用或构造数学模型刻画现实问题并求解"
+        },
+        {
+          "code": "T06",
+          "label": "有限与无限思想",
+          "hint": "用有限步骤逼近或刻画无限过程（趋近、极限、无穷求和）"
+        },
+        {
+          "code": "T13",
+          "label": "统计思想",
+          "hint": "以数据为基础收集整理分析，对总体进行统计推断"
+        },
+        {
+          "code": "T07",
+          "label": "或然与必然思想",
+          "hint": "在偶然中寻找必然规律，再用必然规律解决偶然问题"
+        },
+        {
+          "code": "T12",
+          "label": "算法思想",
+          "hint": "把解题过程程序化、步骤化，强调有限性确定性与有效性"
+        },
+        {
+          "code": "T14",
+          "label": "集合与对应思想",
+          "hint": "把讨论对象放在一起作为集合研究，用对应关系刻画元素间联系"
+        },
+        {
+          "code": "T15",
+          "label": "符号化思想",
+          "hint": "从具体情境抽象数量关系与变化规律并用符号表示"
+        }
       ]
+    },
+    {
+      "key": "solve_strategy",
+      "name": "解题策略",
+      "mode": "multi",
+      "required": false,
+      "default": [],
+      "storage": "question_tags(dim='strategy')",
+      "description": "中观解题策略，多选、可空；按通性通法族群划分，与数学思想方法（宏观）、微观技法（micro）互补。",
+      "values": [
+        {
+          "code": "S01",
+          "label": "换元法",
+          "hint": "引入新变量替换整体或复杂结构（整体/三角/参数/均值/倒数换元），降次去根号、化超越为代数"
+        },
+        {
+          "code": "S02",
+          "label": "整体代换法",
+          "hint": "不单独解出中间量，将其作为整体参与运算或直接代入目标式（设而不求）"
+        },
+        {
+          "code": "S03",
+          "label": "待定系数法",
+          "hint": "先设含未知系数的标准形式，再由条件列方程（组）定系数"
+        },
+        {
+          "code": "S04",
+          "label": "配方法",
+          "hint": "恒等变形凑成完全平方式加常数，处理二次型最值、非负、标准方程"
+        },
+        {
+          "code": "S05",
+          "label": "构造法",
+          "hint": "创设辅助函数/数列/图形/方程/反例，把问题嵌入已知模型"
+        },
+        {
+          "code": "S06",
+          "label": "特殊值法",
+          "hint": "代入特殊值/端点/特殊图形以排除、验算或探路（含必要性探路）"
+        },
+        {
+          "code": "S07",
+          "label": "放缩法",
+          "hint": "有方向地放大缩小局部表达式，借助传递性完成证明或估计范围"
+        },
+        {
+          "code": "S08",
+          "label": "间接法",
+          "hint": "正难则反，转求对立面（补集/反面/逆否），总量减对立面"
+        },
+        {
+          "code": "S09",
+          "label": "算两次",
+          "hint": "同一量用两种方式表达并令其相等建立方程（等体积法、组合恒等式）"
+        },
+        {
+          "code": "S10",
+          "label": "主元法",
+          "hint": "多元问题反客为主，选定主元其余视常数，降为一元问题"
+        },
+        {
+          "code": "S11",
+          "label": "对称性利用",
+          "hint": "识别并利用轴对称/中心对称/轮换对称/对偶式，减少变量锁定取等"
+        },
+        {
+          "code": "S12",
+          "label": "反证法与同一法",
+          "hint": "反证否定结论导出矛盾；同一法借唯一性构造重合"
+        },
+        {
+          "code": "S13",
+          "label": "数学归纳法",
+          "hint": "奠基加递推证明与正整数相关的命题"
+        }
+      ]
+    },
+    {
+      "key": "micro_method",
+      "name": "微观解题方法",
+      "mode": "multi",
+      "required": false,
+      "default": [],
+      "storage": "question_tags(dim='micro')",
+      "description": "自由文本多值、可空。参考三级目录（L1 模块 / L2 方法族 / L3 技法，见 micro_method_vocab.json）由 AI 依据参考判定或自主输入；输入时支持记忆复用。",
+      "values": [],
+      "free_text": true,
+      "reference_vocab": "micro_method_vocab.json"
     },
     {
       "key": "curriculum_node",

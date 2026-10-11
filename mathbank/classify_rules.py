@@ -1040,6 +1040,26 @@ def classify_with_rules(content: str, ai_payload: dict | None = None) -> dict:
     structure_form = str(decision.get("structure") or "")
     form_source = "structure" if structure_form and structure_form == question_form else type_source
 
+    # AI 标签建议：受控维度按白名单过滤，自由文本维度逐条清洗限长。
+    # 规则层不越权改写这些软性判断，只做"能不能进系统"的守门。
+    from mathbank.tags import allowed_codes, normalize_tag_codes as _ntc
+
+    ai_function = str(payload.get("function_tag", "") or "").strip().lower()
+    if ai_function not in allowed_codes("function"):
+        ai_function = ""
+    ai_thoughts = [
+        code for code in _ntc("thought", payload.get("thought_codes") or [])
+    ]
+    ai_strategies = [
+        code for code in _ntc("strategy", payload.get("strategy_codes") or [])
+    ]
+    ai_micro: list[str] = []
+    for item in payload.get("micro_methods") or []:
+        clean = str(item or "").strip().replace("\u3000", " ")[:120]
+        if clean and clean not in ai_micro:
+            ai_micro.append(clean)
+    ai_micro = ai_micro[:6]
+
     return {
         "question_type": question_type,
         "question_type_source": type_source,
@@ -1053,6 +1073,10 @@ def classify_with_rules(content: str, ai_payload: dict | None = None) -> dict:
         "chapter_code": chapter_code,
         "chapter_path": chapter_path,
         "chapter_source": chapter_source,
+        "function_tag": ai_function,
+        "thought_codes": ai_thoughts,
+        "strategy_codes": ai_strategies,
+        "micro_methods": ai_micro,
         "evidence": {
             "options": options,
             "blanks": decision["blanks"],
