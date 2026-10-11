@@ -1624,8 +1624,7 @@
             const currentScore = cartItem ? cartItem.score : (q.question_type === 'detailed_answer' ? 12 : 5);
             const qTypeLabel = getQuestionTypeCn(q.question_type);
             const diffChip = getDifficultyMetaChip(q.difficulty);
-            const sectionLabel = [q.category_compulsory, q.category_chapter, q.category_knowledge]
-                .filter(Boolean).map(item => String(item).trim()).filter(Boolean).join(' · ');
+            const sectionLabel = paperSectionLabel(q);
             const usageCount = q.usage_count || 0;
             seedPaperAnswerCache(q);
             const { answerExpanded, answerLoading, hasAnswer, answerBodyHtml } = getPaperQuestionAnswerState(q);
@@ -3938,6 +3937,61 @@
         const cleanLabel = String(meta.label || '').replace(/[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD00-\uDFFF]/g, '').trim();
         const colorClass = window.MathBankSafe.safeClassList(meta.colorClass, 'text-slate-600 bg-slate-100 border border-slate-200/60');
         return `<span class="paper-meta-chip ${colorClass}" title="难度：${escapeHtml(cleanLabel)}">${escapeHtml(cleanLabel)}</span>`;
+    }
+
+    // 把章节标签码解析成「册 · 章 · (小节·子节)」完整路径。
+    // 依赖 MathBankTags.init() 已加载受控词表树；未加载或码无效时返回空串。
+    function tagChapterPathLabel(codes) {
+        const state = window.MathBankTags && window.MathBankTags.state;
+        const books = (state && state.tree && state.tree.books) || [];
+        const labels = [];
+        (codes || []).forEach(code => {
+            const key = String(code || '').trim();
+            if (!key) return;
+            for (const book of books) {
+                const bookName = String(book.name || '').trim();
+                for (const chapter of book.chapters || []) {
+                    const chapterLabel = `第${chapter.no}章 ${chapter.name}`.trim();
+                    if (chapter.code === key) {
+                        labels.push([bookName, chapterLabel]);
+                        return;
+                    }
+                    for (const section of chapter.sections || []) {
+                        if (section.code === key) {
+                            labels.push([bookName, chapterLabel,
+                                [section.label, section.name].filter(Boolean).join(' ')]);
+                            return;
+                        }
+                        for (const sub of section.subsections || []) {
+                            if (sub.code === key) {
+                                labels.push([bookName, chapterLabel,
+                                    [section.label, section.name].filter(Boolean).join(' '),
+                                    [sub.label, sub.name].filter(Boolean).join(' ')]);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        return Array.from(new Set(
+            labels.map(parts => parts.filter(Boolean).join(' · '))
+        )).join('；');
+    }
+
+    // 元数据行「教材小节」取值：优先旧分类三字段；为空则回退到多值章节标签
+    // 码（tag migration 后大量题目只有标签分类），再回退到细分知识点路径。
+    function paperSectionLabel(q) {
+        const legacy = [q.category_compulsory, q.category_chapter, q.category_knowledge]
+            .map(item => String(item || '').trim()).filter(Boolean).join(' · ');
+        if (legacy) return legacy;
+        const fromTags = tagChapterPathLabel((q.tag_codes && q.tag_codes.chapter) || []);
+        if (fromTags) return fromTags;
+        const subPaths = (Array.isArray(q.sub_knowledge) ? q.sub_knowledge : [])
+            .map(path => [path && path.compulsory, path && path.chapter, path && path.knowledge]
+                .map(item => String(item || '').trim()).filter(Boolean).join(' · '))
+            .filter(Boolean);
+        return Array.from(new Set(subPaths)).join('；');
     }
 
     function resolveDifficultyMeta(diff) {

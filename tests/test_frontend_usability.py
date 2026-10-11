@@ -2402,6 +2402,7 @@ function fetchBankQuestions() { return Promise.resolve(true); }
 function getQuestionTypeCn() { return '单选题'; }
 function getDifficultyBadge() { return ''; }
 function getDifficultyMetaChip() { return '<span class="paper-meta-chip">基础题</span>'; }
+function paperSectionLabel() { return '选修一 · 2. 直线和圆的方程'; }
 function seedPaperAnswerCache() {}
 function hasCachedPaperAnswer() { return false; }
 function escapeHtml(value) { return String(value); }
