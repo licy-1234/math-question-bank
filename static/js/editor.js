@@ -2166,7 +2166,11 @@ window.functionTagBadge = functionTagBadge;
             // semantics are left untouched.
             const autoGrowReview = () => {
                 if (!editReview) return;
-                const minHeight = 120;
+                // Keep the auto-grown floor in sync with the `min-h-[200px]`
+                // class on #editReview so the review box matches the height of
+                // the 题干 editor (the inline height below would otherwise
+                // override the utility class).
+                const minHeight = 200;
                 const maxHeight = Math.max(minHeight, Math.round(window.innerHeight * 0.6));
                 editReview.style.height = 'auto';
                 const nextHeight = Math.max(minHeight, Math.min(editReview.scrollHeight, maxHeight));

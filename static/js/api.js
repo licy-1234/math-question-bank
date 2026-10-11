@@ -825,6 +825,7 @@
         let originalQuestionState = null;
         let contentOcrAbortController = null;
         let answerOcrAbortController = null;
+        let reviewOcrAbortController = null;
         let aiSolveAbortController = null;
 
         // Global debounce utility

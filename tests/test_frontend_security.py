@@ -207,9 +207,11 @@ const window = {{}};
 const document = {{ getElementById() {{ return null; }} }};
 let contentOcrAbortController = null;
 let answerOcrAbortController = null;
+let reviewOcrAbortController = null;
 let aiSolveAbortController = null;
 function clearContentOcrPreview() {{}}
 function clearOcrPreview() {{}}
+function clearReviewOcrPreview() {{}}
 function showToast() {{}}
 {editor_source}
 {helper_source}
@@ -274,9 +276,11 @@ let idleClears = 0;
 let toasts = 0;
 let contentOcrAbortController = {{ abort: () => {{ contentAborts += 1; }} }};
 let answerOcrAbortController = {{ abort: () => {{ answerAborts += 1; }} }};
+let reviewOcrAbortController = null;
 let aiSolveAbortController = null;
 function clearContentOcrPreview() {{ idleClears += 1; }}
 function clearOcrPreview() {{ idleClears += 1; }}
+function clearReviewOcrPreview() {{ idleClears += 1; }}
 function showToast() {{ toasts += 1; }}
 {state_source}
 {cancel_source}

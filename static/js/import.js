@@ -168,6 +168,7 @@
             document.getElementById('editDifficulty').dispatchEvent(new Event('change'));
             clearContentOcrPreview();
             clearOcrPreview();
+            clearReviewOcrPreview();
             
             document.getElementById('editContent').dispatchEvent(new Event('input'));
             document.getElementById('editAnswerMarkdown').dispatchEvent(new Event('input'));
@@ -260,6 +261,7 @@
                 // Clear OCR preview
                 clearContentOcrPreview();
                 clearOcrPreview();
+                clearReviewOcrPreview();
                 
                 // Refresh previews
                 document.getElementById('editContent').dispatchEvent(new Event('input'));
@@ -324,6 +326,7 @@
             // Clear OCR preview
             clearContentOcrPreview();
             clearOcrPreview();
+            clearReviewOcrPreview();
             
             // Sync-clear all previews to avoid 250ms debounce flash
             document.getElementById('contentPreview').innerHTML = '<p class="text-slate-400 italic">在左侧框中输入，此处将实时展示最终排版效果...</p>';
@@ -940,6 +943,7 @@
                     // Clear previous OCR state only after the question switch commits.
                     clearContentOcrPreview();
                     clearOcrPreview();
+                    clearReviewOcrPreview();
 
                     // Sync the active card highlight after the matching details load.
                     const questionsList = document.getElementById('questionsList');
@@ -1319,6 +1323,7 @@
                         if (requestStillVisible) {
                             clearContentOcrPreview();
                             clearOcrPreview();
+                            clearReviewOcrPreview();
                         }
 
                         // Delete draft if it was saved from a draft

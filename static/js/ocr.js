@@ -48,6 +48,25 @@
             setupDragDropListeners(contentOcrDropZone, (file) => runContentOcr(file));
             setupPasteListener(contentOcrDropZone, (file) => runContentOcr(file));
 
+            // Setup Review (评述) OCR drag and drop - mirrors the 题干 content OCR
+            // pipeline but writes the recognised text into #editReview.
+            const reviewOcrDropZone = document.getElementById('reviewOcrDropZone');
+            const reviewOcrFileInput = document.getElementById('reviewOcrFileInput');
+
+            if (reviewOcrDropZone && reviewOcrFileInput) {
+                reviewOcrDropZone.onclick = () => reviewOcrFileInput.click();
+
+                reviewOcrFileInput.onchange = () => {
+                    if (reviewOcrFileInput.files.length > 0) {
+                        runReviewOcr(reviewOcrFileInput.files[0]);
+                        reviewOcrFileInput.value = ''; // Reset so same file can be uploaded again
+                    }
+                };
+
+                setupDragDropListeners(reviewOcrDropZone, (file) => runReviewOcr(file));
+                setupPasteListener(reviewOcrDropZone, (file) => runReviewOcr(file));
+            }
+
             // Setup Image Answer Drag and Drop
             const imageAnswerDropZone = document.getElementById('imageAnswerDropZone');
             const imageAnswerFileInput = document.getElementById('imageAnswerFileInput');
@@ -69,7 +88,7 @@
             }
 
             // Keyboard accessibility for drag & drop zones (allowing Enter or Space key to trigger file selection)
-            [illDropZone, ocrDropZone, contentOcrDropZone, imageAnswerDropZone].forEach(zone => {
+            [illDropZone, ocrDropZone, contentOcrDropZone, imageAnswerDropZone, reviewOcrDropZone].forEach(zone => {
                 if (zone) {
                     zone.addEventListener('keydown', (e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
@@ -137,6 +156,10 @@
                         {
                             element: document.getElementById('imageAnswerDropZone'),
                             handler: (file) => uploadAnswerImage(file)
+                        },
+                        {
+                            element: document.getElementById('reviewOcrDropZone'),
+                            handler: (file) => runReviewOcr(file)
                         }
                     ];
                     
@@ -451,6 +474,22 @@
                 }
             }
 
+            // Handle review (评述) OCR abort
+            if (reviewOcrAbortController) {
+                reviewOcrAbortController.abort();
+                reviewOcrAbortController = null;
+                aborted = true;
+
+                // Hide loading text and update status badge for review OCR preview
+                const reviewOcrLoadingText = document.getElementById('reviewOcrStatusLoadingText');
+                const reviewOcrStatusBadge = document.getElementById('reviewOcrStatusBadge');
+                if (reviewOcrLoadingText) reviewOcrLoadingText.classList.add('hidden');
+                if (reviewOcrStatusBadge) {
+                    reviewOcrStatusBadge.classList.remove('hidden');
+                    reviewOcrStatusBadge.textContent = '已取消识别 (点击可更换图片)';
+                }
+            }
+
             // Handle AI solve abort
             if (abortActiveAiSolve()) {
                 aborted = true;
@@ -477,6 +516,7 @@
                 // If no active OCR process is running, clear all image previews and results completely
                 clearContentOcrPreview();
                 clearOcrPreview();
+                clearReviewOcrPreview();
                 showToast('已清除当前识图状态与图片', 'info');
             }
         }
@@ -1278,6 +1318,163 @@
                 contentOcrAbortController = null;
                 showToast('题干 OCR 识别出错: ' + err, 'error');
             });
+        }
+
+        // 2.3 OCR Review (评述) screenshot handler
+        // Mirrors runContentOcr so the 评述 box has the same 题干 capability:
+        // upload / drag / paste an image -> multimodal engine -> cleaned text
+        // filled into the editor. Deliberate difference: a 评述 is prose, so we
+        // always skip TikZ drawing and we do NOT run the A/B/C/D option
+        // detection that would rewrite the question type.
+        function runReviewOcr(file) {
+            if (!file || !file.type || !file.type.startsWith('image/')) {
+                showToast('请上传有效的图片格式！', 'error');
+                return;
+            }
+
+            const reviewOcrOutput = document.getElementById('reviewOcrOutputBox');
+            const reviewOcrResult = document.getElementById('reviewOcrResultText');
+            const reviewOcrConf = document.getElementById('reviewOcrConfBadge');
+
+            const previewImg = document.getElementById('reviewOcrPreviewImg');
+            const previewContainer = document.getElementById('reviewOcrPreviewContainer');
+            const placeholder = document.getElementById('reviewOcrPlaceholder');
+            const statusBadge = document.getElementById('reviewOcrStatusBadge');
+            const loadingText = document.getElementById('reviewOcrStatusLoadingText');
+
+            // 1. Read file to show image preview in the upload area
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                if (previewImg && previewContainer && placeholder) {
+                    previewImg.src = e.target.result;
+                    placeholder.classList.add('hidden');
+                    previewContainer.classList.remove('hidden');
+
+                    if (statusBadge) statusBadge.classList.add('hidden');
+                    if (loadingText) loadingText.classList.remove('hidden');
+                }
+            };
+            reader.readAsDataURL(file);
+
+            if (reviewOcrOutput) reviewOcrOutput.classList.add('hidden');
+
+            // Abort previous running controller if any
+            if (reviewOcrAbortController) {
+                reviewOcrAbortController.abort();
+            }
+            reviewOcrAbortController = new AbortController();
+            const signal = reviewOcrAbortController.signal;
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('engine', 'default');
+            // 评述只取文本与公式，固定禁用 TikZ，避免绘图资产串到题干绘图列表。
+            formData.append('skip_tikz', 'true');
+
+            fetch('/api/ocr', {
+                method: 'POST',
+                body: formData,
+                signal: signal
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (loadingText) loadingText.classList.add('hidden');
+                if (statusBadge) {
+                    statusBadge.classList.remove('hidden');
+                    statusBadge.textContent = '已加载截图预览 (点击可更换图片)';
+                }
+
+                reviewOcrAbortController = null;
+
+                if (data.status === 'success') {
+                    showToast('评述 OCR 识别成功并已自动填入！');
+                    if (reviewOcrOutput) reviewOcrOutput.classList.remove('hidden');
+
+                    // Clean LaTeX noise, exclamation marks and leading question numbers
+                    const cleanLatex = cleanMathOcrText(data.latex);
+                    if (reviewOcrResult) reviewOcrResult.textContent = cleanLatex;
+                    if (reviewOcrConf) reviewOcrConf.textContent = `置信度: ${(data.confidence * 100).toFixed(1)}%`;
+
+                    // Automatically load results into the review editor
+                    loadToReviewEditor();
+                } else {
+                    showToast(data.message, 'error');
+                }
+            })
+            .catch(err => {
+                if (err.name === 'AbortError') {
+                    return; // Gracefully handle manual aborts without error toast
+                }
+                if (loadingText) loadingText.classList.add('hidden');
+                if (statusBadge) {
+                    statusBadge.classList.remove('hidden');
+                    statusBadge.textContent = '已加载截图预览 (点击可更换图片)';
+                }
+
+                reviewOcrAbortController = null;
+                showToast('评述 OCR 识别出错: ' + err, 'error');
+            });
+        }
+
+        // Switch Review workflow tab - Apple Glass Style
+        function switchReviewTab(tabId) {
+            const tabs = ['ocr', 'manual'];
+            tabs.forEach(t => {
+                const btn = document.getElementById(`reviewTabBtn-${t}`);
+                const content = document.getElementById(`reviewTabContent-${t}`);
+                if (!btn || !content) return;
+
+                if (t === tabId) {
+                    btn.className = "glass-tab-item active flex-1 py-2 px-3 rounded-lg font-medium text-xs flex items-center justify-center space-x-1.5 text-brand-600";
+                    content.classList.remove('hidden');
+                } else {
+                    btn.className = "glass-tab-item flex-1 py-2 px-3 rounded-lg font-medium text-xs flex items-center justify-center space-x-1.5 text-slate-600";
+                    content.classList.add('hidden');
+                }
+            });
+        }
+
+        // Load review OCR result into the review editor textarea
+        function loadToReviewEditor(isAppend = false) {
+            const textarea = document.getElementById('editReview');
+            const resultEl = document.getElementById('reviewOcrResultText');
+            if (!textarea || !resultEl) return;
+
+            const contentToImport = resultEl.textContent || '';
+            if (!contentToImport.trim()) {
+                showToast('导入内容为空！', 'error');
+                return;
+            }
+
+            if (isAppend) {
+                textarea.value = textarea.value.trim() ? textarea.value + '\n' + contentToImport : contentToImport;
+            } else if (textarea.value.trim()) {
+                const replace = confirm('评述编辑框中已有内容，点击"确定"将覆盖替换，点击"取消"将追加在后面。');
+                if (replace) {
+                    textarea.value = contentToImport;
+                } else {
+                    textarea.value += '\n' + contentToImport;
+                }
+            } else {
+                textarea.value = contentToImport;
+            }
+
+            // Refresh previews (panel preview + paper detail preview) and auto-grow
+            textarea.dispatchEvent(new Event('input'));
+            showToast('已载入至评述编辑框！');
+        }
+
+        // Clear Review OCR image preview and result box
+        function clearReviewOcrPreview() {
+            const previewContainer = document.getElementById('reviewOcrPreviewContainer');
+            const placeholder = document.getElementById('reviewOcrPlaceholder');
+            const previewImg = document.getElementById('reviewOcrPreviewImg');
+            const reviewOcrOutput = document.getElementById('reviewOcrOutputBox');
+
+            if (previewImg) previewImg.src = '';
+            if (previewContainer) previewContainer.classList.add('hidden');
+            if (placeholder) placeholder.classList.remove('hidden');
+            if (reviewOcrOutput) reviewOcrOutput.classList.add('hidden');
         }
 
         // Switch Question Content workflow tab - Apple Glass Style
