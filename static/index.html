@@ -1007,9 +1007,15 @@
                                 <span class="bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-md px-2 py-0.5 text-[11px] mr-1.5 font-medium">附加信息</span>
                                 <span>评述（批注）</span>
                             </span>
-                            <button type="button" id="normalizeReviewFractionsBtn" onclick="normalizeEditorFractions('editReview', this)" class="inline-flex min-h-[44px] cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-500/30 disabled:opacity-50" data-tooltip="规范完整数学环境中的分式：主体放大，上下标与内层保持紧凑；核对预览后保存">
-                                <i class="fa-solid fa-divide" aria-hidden="true"></i><span>规范分式</span>
-                            </button>
+                            <div class="flex items-center gap-2">
+                                <button type="button" id="normalizeReviewFractionsBtn" onclick="normalizeEditorFractions('editReview', this)" class="inline-flex min-h-[44px] cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-500/30 disabled:opacity-50" data-tooltip="规范完整数学环境中的分式：主体放大，上下标与内层保持紧凑；核对预览后保存">
+                                    <i class="fa-solid fa-divide" aria-hidden="true"></i><span>规范分式</span>
+                                </button>
+                                <button type="button" id="openReviewTikzWorkbenchBtn" onclick="openReviewTikzWorkbench()" class="answer-tikz-entry inline-flex min-h-[44px] cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/30" data-tooltip="新增一幅评述 TikZ 绘图，不会覆盖已有绘图">
+                                    <i class="fa-solid fa-compass-drafting" aria-hidden="true"></i>
+                                    <span>新增绘图</span>
+                                </button>
+                            </div>
                         </div>
 
                         <!-- Horizontal tabs for Review Content - Apple Glass Style -->

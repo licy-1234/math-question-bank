@@ -1623,7 +1623,9 @@
             const cartItem = cart.find(it => it.id === q.id);
             const currentScore = cartItem ? cartItem.score : (q.question_type === 'detailed_answer' ? 12 : 5);
             const qTypeLabel = getQuestionTypeCn(q.question_type);
-            const diffTag = getDifficultyBadge(q.difficulty);
+            const diffChip = getDifficultyMetaChip(q.difficulty);
+            const sectionLabel = [q.category_compulsory, q.category_chapter, q.category_knowledge]
+                .filter(Boolean).map(item => String(item).trim()).filter(Boolean).join(' · ');
             const usageCount = q.usage_count || 0;
             seedPaperAnswerCache(q);
             const { answerExpanded, answerLoading, hasAnswer, answerBodyHtml } = getPaperQuestionAnswerState(q);
@@ -1638,7 +1640,6 @@
                     <div class="paper-resource-header">
                         <div class="paper-resource-heading">
                             <span class="font-bold text-slate-800 dark:text-slate-100 text-sm">#${escapeHtml(q.seq_num !== undefined ? q.seq_num : q.id)}</span>
-                            <span class="px-2 py-0.5 rounded-lg text-xs font-semibold bg-brand-50 text-brand-600 border border-brand-200/50 dark:bg-brand-900/30 dark:text-brand-200 dark:border-brand-900/50">${escapeHtml(qTypeLabel)}</span>
                                 ${inCart && currentTab === 'selected' ? `
                                     <button onclick="window.movePaperQuestion(${cartIndex}, 'up')" ${cartIndex === 0 ? 'disabled' : ''}
                                         class="paper-resource-reorder" title="上移" aria-label="上移本题">
@@ -1691,9 +1692,11 @@
                         </div>
                     </div>
 
+                    <!-- 固定元数据行：题型 / 难度 / 教材小节，同行紧凑、弱化样式，小节过长省略并悬停查看 -->
                     <div class="paper-resource-meta">
-                        ${diffTag}
-                        <span class="paper-resource-category" title="${escapeHtml([q.category_compulsory, q.category_chapter].filter(Boolean).join(' · '))}">${escapeHtml([q.category_compulsory, q.category_chapter].filter(Boolean).join(' · '))}</span>
+                        <span class="paper-meta-chip paper-meta-chip-default" title="题目类型：${escapeHtml(qTypeLabel)}">${escapeHtml(qTypeLabel)}</span>
+                        ${diffChip}
+                        ${sectionLabel ? `<span class="paper-meta-chip paper-meta-chip-default paper-meta-section" title="${escapeHtml(sectionLabel)}"><i class="fa-solid fa-book-open" aria-hidden="true"></i><span class="paper-meta-section-text">${escapeHtml(sectionLabel)}</span></span>` : ''}
                         ${usageCount ? `<span class="paper-resource-usage">引用 ${escapeHtml(usageCount)} 次</span>` : ''}
                     </div>
 
@@ -3921,7 +3924,24 @@
     }
 
     function getDifficultyBadge(diff) {
-        if (!diff) return '';
+        const meta = resolveDifficultyMeta(diff);
+        if (!meta) return '';
+        const cleanLabel = String(meta.label || '').replace(/[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD00-\uDFFF]/g, '').trim();
+        const colorClass = window.MathBankSafe.safeClassList(meta.colorClass, 'text-slate-600 bg-slate-100 border border-slate-200/60');
+        return `<span class="px-2 py-0.5 rounded-lg text-xs font-semibold ${colorClass}">${escapeHtml(cleanLabel)}</span>`;
+    }
+
+    // 组卷列表元数据行专用：与 getDifficultyBadge 同一套口径，只换统一的弱化 chip 外观。
+    function getDifficultyMetaChip(diff) {
+        const meta = resolveDifficultyMeta(diff);
+        if (!meta) return '';
+        const cleanLabel = String(meta.label || '').replace(/[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD00-\uDFFF]/g, '').trim();
+        const colorClass = window.MathBankSafe.safeClassList(meta.colorClass, 'text-slate-600 bg-slate-100 border border-slate-200/60');
+        return `<span class="paper-meta-chip ${colorClass}" title="难度：${escapeHtml(cleanLabel)}">${escapeHtml(cleanLabel)}</span>`;
+    }
+
+    function resolveDifficultyMeta(diff) {
+        if (!diff) return null;
         let label = diff;
         let colorClass = '';
         if (window.systemMetadata && Array.isArray(window.systemMetadata.difficulties)) {
@@ -3954,10 +3974,7 @@
                 colorClass = 'text-slate-600 bg-slate-100 border border-slate-200/60';
             }
         }
-
-        const cleanLabel = String(label || '').replace(/[\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD00-\uDFFF]/g, '').trim();
-        colorClass = window.MathBankSafe.safeClassList(colorClass, 'text-slate-600 bg-slate-100 border border-slate-200/60');
-        return `<span class="px-2 py-0.5 rounded-lg text-xs font-semibold ${colorClass}">${escapeHtml(cleanLabel)}</span>`;
+        return { label, colorClass };
     }
 
     const figureLayoutWrites = Object.create(null);

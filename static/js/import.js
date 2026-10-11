@@ -6692,10 +6692,17 @@
                 if (tikzWorkbenchState.target === 'content') {
                     return `【题干】\n${content || '暂无'}`;
                 }
+                if (tikzWorkbenchState.target === 'review') {
+                    const review = document.getElementById('editReview').value.trim();
+                    return `【题干】\n${content || '暂无'}\n\n【当前评述】\n${review || '暂无'}`;
+                }
                 return `【题干】\n${content || '暂无'}\n\n【当前解答】\n${answer || '暂无'}`;
             }
 
             function normalizedTikzAssets(target) {
+                // 评述没有结构化绘图资产字段，绘图只以 markdown 图片形式
+                // 存在于评述文本中，因此没有可编辑的既有资产。
+                if (target === 'review') return [];
                 const assets = target === 'content'
                     ? TikzState.contentAssets
                     : TikzState.answerAssets;
@@ -6721,6 +6728,8 @@
                 const safeImagePath = window.MathBankSafe.safeImageUrl(imagePath);
                 const safeReferencePath = window.MathBankSafe.safeImageUrl(referenceImagePath);
                 if (!tikzCode || !safeImagePath) return;
+                // 评述绘图只存在于评述 markdown 文本里，无需资产登记。
+                if (target === 'review') return;
                 const assets = target === 'content'
                     ? TikzState.contentAssets
                     : TikzState.answerAssets;
@@ -6833,9 +6842,12 @@
             window.openTikzWorkbench = function(target = 'answer', assetId = null) {
                 const modal = document.getElementById('answerTikzWorkbenchModal');
                 const surface = modal && modal.querySelector('[data-modal-surface]');
-                const normalizedTarget = target === 'content' ? 'content' : 'answer';
+                const allowedTargets = ['content', 'answer', 'review'];
+                const normalizedTarget = allowedTargets.includes(target) ? target : 'answer';
                 const targetInput = document.getElementById(
-                    normalizedTarget === 'content' ? 'editContent' : 'editAnswerMarkdown'
+                    normalizedTarget === 'content' ? 'editContent'
+                        : normalizedTarget === 'review' ? 'editReview'
+                        : 'editAnswerMarkdown'
                 );
                 if (!modal || !surface || !targetInput) return;
 
@@ -6852,7 +6864,8 @@
 
                 document.getElementById('answerTikzInstruction').value = asset ? (asset.instruction || '') : '';
                 document.getElementById('answerTikzWorkbenchCode').value = asset ? asset.tikz_code : '';
-                const targetLabel = normalizedTarget === 'content' ? '题干' : '解答';
+                const targetLabel = normalizedTarget === 'content' ? '题干'
+                    : normalizedTarget === 'review' ? '评述' : '解答';
                 document.getElementById('answerTikzWorkbenchHeading').textContent = asset
                     ? `修改${targetLabel} TikZ 绘图`
                     : `新增${targetLabel} TikZ 绘图`;
@@ -6867,7 +6880,9 @@
                     : `创建一幅新的${targetLabel}绘图；不会覆盖已有绘图。`;
                 document.getElementById('tikzWorkbenchContextHint').textContent = normalizedTarget === 'content'
                     ? '向 AI 提供当前题干，用于校正点名和几何关系。'
-                    : '向 AI 提供题干与已输入解答，用于校正点名和几何关系。';
+                    : normalizedTarget === 'review'
+                        ? '向 AI 提供当前题干与已有评述，用于校正点名和几何关系。'
+                        : '向 AI 提供题干与已输入解答，用于校正点名和几何关系。';
                 document.getElementById('tikzWorkbenchInsertHint').textContent = asset
                     ? `预览通过后只更新当前${targetLabel}绘图，不会新增副本。`
                     : `预览通过后新增到${targetLabel}当前光标位置，不会覆盖已有绘图。`;
@@ -6915,6 +6930,10 @@
 
             window.openContentTikzWorkbench = function(assetId = null) {
                 window.openTikzWorkbench('content', assetId);
+            };
+
+            window.openReviewTikzWorkbench = function(assetId = null) {
+                window.openTikzWorkbench('review', assetId);
             };
 
             window.openAnswerTikzWorkbench = function(assetId = null) {
@@ -7064,6 +7083,18 @@
                 const referencePath = window.MathBankSafe.safeImageUrl(
                     tikzWorkbenchState.referencePath
                 );
+                if (tikzWorkbenchState.target === 'review') {
+                    const reviewInput = document.getElementById('editReview');
+                    if (!reviewInput) return;
+                    insertMarkdownAtSavedCursor(reviewInput, `![TikZ 几何图](${imagePath})`);
+                    reviewInput.dispatchEvent(new Event('input'));
+                    if (typeof window.updateReviewPreview === 'function') window.updateReviewPreview();
+                    window.closeTikzWorkbench();
+                    reviewInput.focus({ preventScroll: true });
+                    showToast('已新增一幅 TikZ 绘图到评述。');
+                    return;
+                }
+
                 if (tikzWorkbenchState.target === 'content') {
                     const contentInput = document.getElementById('editContent');
                     if (!contentInput) return;
@@ -7152,7 +7183,9 @@
                 if (!safePath) return;
                 const content = document.getElementById('editContent').value;
                 const answer = document.getElementById('editAnswerMarkdown').value;
-                if (content.includes(safePath) || answer.includes(safePath)) return;
+                const review = document.getElementById('editReview');
+                if (content.includes(safePath) || answer.includes(safePath)
+                    || (review && review.value.includes(safePath))) return;
                 const usedByContentAsset = normalizedContentTikzAssets().some(asset => {
                     return !(excludedAsset && excludedAsset.target === 'content' && asset.id === excludedAsset.id)
                         && (asset.image_path === safePath || asset.reference_image_path === safePath);

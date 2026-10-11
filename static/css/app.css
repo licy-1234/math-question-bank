@@ -5755,6 +5755,14 @@ button[aria-disabled="true"]:hover,
 #paperQuestionStream .paper-resource-meta { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 10px; font-size: 11px; color: #64748b; }
 #paperQuestionStream .paper-resource-category { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #paperQuestionStream .paper-resource-usage { margin-left: auto; white-space: nowrap; color: #94a3b8; }
+/* 组卷列表固定元数据行：题型/难度/教材小节，弱化 chip、间距统一、小节可省略。
+   .paper-meta-chip 只定形状；中性配色放在 -default 上，避免覆盖难度徽章的颜色类。 */
+#paperQuestionStream .paper-meta-chip { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; max-width: 50%; padding: 2px 8px; border-radius: 6px; border: 1px solid transparent; font-size: 11px; font-weight: 500; line-height: 1.5; white-space: nowrap; }
+#paperQuestionStream .paper-meta-chip-default { border-color: #e2e8f0; background: #f8fafc; color: #64748b; }
+#paperQuestionStream .paper-meta-chip i { font-size: 10px; opacity: 0.75; }
+#paperQuestionStream .paper-meta-section { flex: 1 1 auto; min-width: 0; max-width: none; border-style: dashed; }
+#paperQuestionStream .paper-meta-section .paper-meta-section-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dark #paperQuestionStream .paper-meta-chip-default { border-color: #334155; background: rgba(51, 65, 85, 0.35); color: #94a3b8; }
 #paperQuestionStream .paper-resource-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-left: auto; }
 #paperQuestionStream .paper-resource-actions button, #paperQuestionStream .paper-resource-heading button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 32px; padding: 4px 7px; border: 1px solid transparent; border-radius: 7px; font-size: 12px; font-weight: 500; white-space: nowrap; transition: color 150ms, background-color 150ms, border-color 150ms; }
 #paperQuestionStream .paper-answer-toggle { min-width: 78px; color: #475569; background: transparent; }

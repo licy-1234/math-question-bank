@@ -1844,12 +1844,15 @@ def test_add_drawing_and_edit_drawing_are_separate_actions():
     index_source = _read(INDEX_PATH)
     import_source = _read(STATIC_JS_DIR / "import.js")
 
-    assert index_source.count("<span>新增绘图</span>") == 2
+    # 题干 / 解答 / 评述三处入口，共用同一个绘图工作台。
+    assert index_source.count("<span>新增绘图</span>") == 3
     assert "<span>插入绘图</span>" not in index_source
     assert "新增一幅题干 TikZ 绘图，不会覆盖已有绘图" in index_source
     assert "新增一幅解答 TikZ 绘图，不会覆盖已有绘图" in index_source
+    assert "新增一幅评述 TikZ 绘图，不会覆盖已有绘图" in index_source
     assert "window.openContentTikzWorkbench = function(assetId = null)" in import_source
     assert "window.openAnswerTikzWorkbench = function(assetId = null)" in import_source
+    assert "window.openReviewTikzWorkbench = function(assetId = null)" in import_source
     assert "? `修改${targetLabel} TikZ 绘图`" in import_source
     assert ": `新增${targetLabel} TikZ 绘图`" in import_source
     assert "TikzState.contentAssets.push(nextAsset)" in import_source
@@ -2398,6 +2401,7 @@ function ensureCartQuestionsLoaded() { return Promise.resolve(); }
 function fetchBankQuestions() { return Promise.resolve(true); }
 function getQuestionTypeCn() { return '单选题'; }
 function getDifficultyBadge() { return ''; }
+function getDifficultyMetaChip() { return '<span class="paper-meta-chip">基础题</span>'; }
 function seedPaperAnswerCache() {}
 function hasCachedPaperAnswer() { return false; }
 function escapeHtml(value) { return String(value); }
