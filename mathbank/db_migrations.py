@@ -581,13 +581,29 @@ QUESTION_RELATION_INDEXES = {
     "idx_qrel_code": ("relation_code",),
 }
 
+#: Relation code written by the legacy ``association_group_id`` backfill.  It is
+#: the only code the backfill owns, so every probe and insert below is scoped to
+#: it instead of the whole (question_id, related_id) pair.
+LEGACY_RELATION_CODE = "legacy_group"
+LEGACY_RELATION_LABEL = "题组"
+
+#: Tables that ``_ensure_*_table`` helpers can create on demand, so a missing
+#: one must not abort startup before the repair pass has had a chance to run.
+SELF_HEALING_TABLES = frozenset({"question_relations"})
+
 
 def _ensure_question_relations_table(connection) -> dict[str, int]:
     """Create the typed question-relation table and backfill legacy groups.
 
-    Purely additive: the table/indexes are created idempotently and derived
-    ``legacy_group`` rows are inserted.  The original ``questions`` rows are
-    never modified, so a rollback only loses the derived relation index.
+    Purely additive: the table/indexes are created idempotently.  The original
+    ``questions`` rows are never modified, so a rollback only loses the derived
+    relation index.
+
+    The ``legacy_group`` rows are a *derivation* of ``association_group_id``:
+    deleting one through the relation API does not clear the underlying group,
+    so a later migration re-derives it.  That is intentional -- it keeps the
+    derived index crash-safe -- and callers that want to break a legacy group
+    for good must clear ``association_group_id`` itself.
     """
 
     table_exists = bool(
@@ -629,6 +645,11 @@ def _ensure_question_relations_table(connection) -> dict[str, int]:
                 f"({', '.join(columns)})"
             )
 
+    # The backfill is deliberately unconditional rather than gated on
+    # ``table_exists``.  It is idempotent, and running it against an
+    # already-current database is exactly what repairs a migration that was
+    # interrupted between CREATE TABLE and INSERT.  Gating it on table creation
+    # would strand those databases with a permanently empty relation index.
     seeded = _backfill_question_relations(connection)
     return {
         "added_question_relations": int(not table_exists),
@@ -677,18 +698,25 @@ def _backfill_question_relations(connection) -> int:
                 left, right = member_ids[i], member_ids[j]
                 if left == right:
                     continue
+                # The pair must be probed for the exact code we are about to
+                # insert.  The table is UNIQUE (question_id, related_id,
+                # relation_code), so a pair carrying only a typed relation
+                # would otherwise look "already present" and silently swallow
+                # the legacy row -- while a genuinely deleted legacy row would
+                # still be rejected.  Probing our own code keeps the check
+                # aligned with both the constraint and the insert below.
                 exists = connection.exec_driver_sql(
                     "SELECT 1 FROM question_relations "
-                    "WHERE question_id = ? AND related_id = ?",
-                    (left, right),
+                    "WHERE question_id = ? AND related_id = ? AND relation_code = ?",
+                    (left, right, LEGACY_RELATION_CODE),
                 ).first()
                 if exists:
                     continue
                 connection.exec_driver_sql(
                     "INSERT INTO question_relations "
                     "(question_id, related_id, relation_code, relation_label) "
-                    "VALUES (?, ?, 'legacy_group', '题组')",
-                    (left, right),
+                    "VALUES (?, ?, ?, ?)",
+                    (left, right, LEGACY_RELATION_CODE, LEGACY_RELATION_LABEL),
                 )
                 inserted += 1
     return inserted
@@ -977,11 +1005,20 @@ def migrate_database(
     table_names = set(inspect(engine).get_table_names())
     if current == LATEST_SCHEMA_VERSION:
         # A database that already reports the current version may still predate
-        # a freshly introduced derived table.  Re-run the additive ensure (and
-        # its idempotent backfill) before the completeness check so a version-12
-        # database can never silently lack question_relations.
-        with engine.begin() as connection:
-            _ensure_question_relations_table(connection)
+        # a freshly introduced derived table, so re-run the additive ensure
+        # before the completeness check.  BEGIN IMMEDIATE takes the write lock
+        # up front: the ensure pass below also seeds the derived legacy rows, and
+        # two workers racing here would otherwise duplicate that work.
+        with engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as connection:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                _ensure_question_relations_table(connection)
+                connection.exec_driver_sql("COMMIT")
+            except Exception:
+                connection.exec_driver_sql("ROLLBACK")
+                raise
         table_names = set(inspect(engine).get_table_names())
         if not REQUIRED_TABLES.issubset(table_names):
             missing = ", ".join(sorted(REQUIRED_TABLES - table_names))

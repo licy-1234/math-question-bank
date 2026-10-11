@@ -672,6 +672,7 @@ def init_db():
         LEGACY_REQUIRED_TABLES,
         LATEST_SCHEMA_VERSION,
         REQUIRED_TABLES,
+        SELF_HEALING_TABLES,
         create_pre_migration_backup,
         migrate_database,
         schema_version,
@@ -704,7 +705,11 @@ def init_db():
                 missing = ", ".join(sorted(LEGACY_REQUIRED_TABLES - core_tables))
                 raise RuntimeError(f"数据库结构不完整，缺少必要数据表: {missing}")
             if current_version >= LATEST_SCHEMA_VERSION:
-                missing = REQUIRED_TABLES - existing_tables
+                # Tables in SELF_HEALING_TABLES are (re)created downstream by
+                # create_all and by migrate_database's ensure pass.  Rejecting
+                # them here would fire before that repair can run, which would
+                # turn a recoverable gap into a hard startup failure.
+                missing = (REQUIRED_TABLES - SELF_HEALING_TABLES) - existing_tables
                 if missing:
                     raise RuntimeError(
                         "数据库结构不完整，缺少必要数据表: "

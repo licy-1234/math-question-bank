@@ -3839,9 +3839,12 @@ def create_question_relation(
     note_val = str(note or "")
 
     def _apply_update(row: QuestionRelation) -> None:
+        # Apply the same "only overwrite when supplied" rule to both fields so a
+        # partial edit cannot silently erase the note that is already stored.
         if label:
             row.relation_label = label
-        row.note = note_val
+        if note_val:
+            row.note = note_val
 
     try:
         existing = (
@@ -4655,32 +4658,6 @@ def ai_classify(content: str = Form(...)):
             difficulty_prior=difficulty_prior,
             section_candidates=section_candidates,
         )
-        data = {
-            "model": model_name,
-            "messages": [
-                {"role": "system", "content": system_instructions},
-                {"role": "user", "content": f"题目内容:\n{content}"}
-            ],
-            "response_format": {
-                "type": "json_object"
-            },
-            "temperature": 0.2,
-            "max_tokens": 1024
-        }
-        
-        data = apply_model_thinking_policy(
-            data,
-            provider=provider,
-            task="classify",
-        )
-        
-        response = post_chat_completion(
-            provider,
-            data,
-            timeout=30,
-            provider_name=provider_name,
-        )
-            
         def parse_model_json(message: str) -> dict:
             text = (message or "").strip()
             if text.startswith("```"):
