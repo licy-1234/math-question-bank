@@ -1111,6 +1111,7 @@ def migrate_database(
             connection.exec_driver_sql("BEGIN IMMEDIATE")
             try:
                 _ensure_question_relations_table(connection)
+                _ensure_sub_knowledge_columns(connection)
                 connection.exec_driver_sql("COMMIT")
             except Exception:
                 connection.exec_driver_sql("ROLLBACK")

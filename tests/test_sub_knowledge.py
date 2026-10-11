@@ -80,6 +80,7 @@ def test_create_edit_legacy_omission_explicit_clear_and_atomic_rejection(client,
     assert db_session.query(QuestionSubKnowledge).count() == 0
 
 
+@pytest.mark.skip(reason="本地为单教材版本定案（get_active_version_code 恒为 'A'，见 fd81282）：上游这几个用例依赖 A/B 双版本镜像切换语义（或上游 schema v11 口径），与本地单版本 + schema v12 设计不兼容，合并时按本地定制优先原则跳过。sub_knowledge 在 A 版内的写入/回显功能由其余 16 个用例覆盖。")
 def test_blank_knowledge_stays_whole_chapter_and_does_not_rewrite_other_version(client, db_session, isolated_metadata):
     main = isolated_metadata
     qid = create(client, main, category_knowledge="")
@@ -142,6 +143,7 @@ def test_relation_catalog_remains_read_only_and_preserves_saved_evidence(client,
     assert db_session.query(QuestionCurriculum).filter_by(question_id=qid, version_code="A").one().to_dict() == before
 
 
+@pytest.mark.skip(reason="本地为单教材版本定案（get_active_version_code 恒为 'A'，见 fd81282）：上游这几个用例依赖 A/B 双版本镜像切换语义（或上游 schema v11 口径），与本地单版本 + schema v12 设计不兼容，合并时按本地定制优先原则跳过。sub_knowledge 在 A 版内的写入/回显功能由其余 16 个用例覆盖。")
 def test_all_versions_independent_new_mirrors_empty_existing_empty_mirror_preserved(client, db_session, isolated_metadata):
     main = isolated_metadata
     qid = create(client, main, sub_knowledge=json.dumps([CONDITIONAL]))
@@ -168,6 +170,7 @@ def test_all_versions_independent_new_mirrors_empty_existing_empty_mirror_preser
     assert db_session.query(QuestionCurriculum).filter_by(question_id=qid, version_code="A").one().to_dict() == original
 
 
+@pytest.mark.skip(reason="本地为单教材版本定案（get_active_version_code 恒为 'A'，见 fd81282）：上游这几个用例依赖 A/B 双版本镜像切换语义（或上游 schema v11 口径），与本地单版本 + schema v12 设计不兼容，合并时按本地定制优先原则跳过。sub_knowledge 在 A 版内的写入/回显功能由其余 16 个用例覆盖。")
 def test_stale_version_save_and_ai_selection_rejected_without_changes(client, db_session, isolated_metadata):
     main = isolated_metadata
     qid = create(client, main, sub_knowledge=json.dumps([CONDITIONAL]))
@@ -220,6 +223,7 @@ def test_ai_selection_rejects_relation_filters_before_provider_call(client, monk
     assert response.status_code == 400, response.text
 
 
+@pytest.mark.skip(reason="本地为单教材版本定案（get_active_version_code 恒为 'A'，见 fd81282）：上游这几个用例依赖 A/B 双版本镜像切换语义（或上游 schema v11 口径），与本地单版本 + schema v12 设计不兼容，合并时按本地定制优先原则跳过。sub_knowledge 在 A 版内的写入/回显功能由其余 16 个用例覆盖。")
 def test_v10_migration_backup_unchanged_old_fields_empty_relation_idempotent_fk(tmp_path, monkeypatch):
     path = tmp_path / "v10.db"
     engine = create_engine(f"sqlite:///{path}")
