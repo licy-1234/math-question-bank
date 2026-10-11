@@ -4236,21 +4236,13 @@ def save_metadata_config(
 
     # Update the curriculum mirror and metadata as one compensated operation.
     try:
+        # 本项目仅支持人教A版（2019），源与目标版本码均固定为 A。此处曾保留
+        # 一套「按章节名关键字猜测 B/S/H 版本」的历史启发式，它会与单教材版本
+        # 定案冲突：只要元数据里出现「第一章」一类字样就误判为 B 版，进而触发
+        # 下面的全量 UPDATE questions 覆盖用户已确认的分类。定案后该启发式
+        # 已废弃（另见 get_active_version_code），故不再猜测版本。
         source_version = get_active_version_code()
-        # Detect target version
-        curriculum = payload.get("curriculum", {})
-        combined_chapters = ""
-        for book_content in curriculum.values():
-            if isinstance(book_content, dict):
-                combined_chapters += " ".join(book_content.keys())
-        if "第一章" in combined_chapters:
-            target_version = "B"
-        elif "第 1 章 集合与逻辑" in combined_chapters or "数学建模活动案例" in combined_chapters or "第 2 章 等式与不等式" in combined_chapters or "第 3 章 幂、指数与对数" in combined_chapters:
-            target_version = "H"
-        elif "第1章" in combined_chapters:
-            target_version = "S"
-        else:
-            target_version = "A"
+        target_version = get_active_version_code()
 
         # Incremental migration if curriculum version shifts
         if source_version != target_version:
