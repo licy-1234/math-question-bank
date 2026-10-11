@@ -1626,13 +1626,37 @@
                     categoryTree = data;
                     window.categoryTree = data;
                     window.systemMetadata = systemMetadata;
+                    // 这一段跑的是「可选增强」：标签体系与细分知识点目录。
+                    // 任一环节失败都只降级、绝不抛穿——否则一个可选接口 404
+                    // 就会让整条分类/大纲主链路进 catch，页面退化成无下拉可用。
                     if (window.MathBankTags && typeof window.MathBankTags.init === 'function') {
-                        await window.MathBankTags.init();
+                        try {
+                            await window.MathBankTags.init();
+                        } catch (err) {
+                            console.warn('[loadCategories] 标签体系初始化失败，已降级继续：', err);
+                        }
                     }
-                    const subdivisions = typeof window.loadSubKnowledgeCatalog === 'function'
-                        ? await window.loadSubKnowledgeCatalog() : null;
-                    populateCategoryDropdowns();
-                    populateFilterDropdowns();
+                    let subdivisions = null;
+                    if (typeof window.loadSubKnowledgeCatalog === 'function') {
+                        try {
+                            subdivisions = await window.loadSubKnowledgeCatalog();
+                        } catch (err) {
+                            // 后端未部署 /api/config/sub-knowledge（旧进程或精简包）
+                            // 时这里必然失败，属于可接受的降级而非致命错误。
+                            console.warn('[loadCategories] 细分知识点目录不可用，已跳过：', err);
+                        }
+                    }
+                    // 两个填充函数由 editor.js 提供；缺失时只告警，不影响主流程。
+                    if (typeof populateCategoryDropdowns === 'function') {
+                        populateCategoryDropdowns();
+                    } else {
+                        console.warn('[loadCategories] populateCategoryDropdowns 不可用，跳过编辑区级联填充');
+                    }
+                    if (typeof populateFilterDropdowns === 'function') {
+                        populateFilterDropdowns();
+                    } else {
+                        console.warn('[loadCategories] populateFilterDropdowns 不可用，跳过筛选下拉填充');
+                    }
                     if (subdivisions && subdivisions.version_changed) {
                         if (activeSidebarTab === 'bank') loadQuestions(); else loadDrafts();
                         if (typeof window.onPaperCurriculumChanged === 'function') window.onPaperCurriculumChanged();
@@ -1651,7 +1675,10 @@
                         console.warn(`[Auto-Retry] 正在尝试第 ${retryCount + 1} 次自适应重新加载数据...`);
                         setTimeout(() => loadCategories({ ...options, retryCount: retryCount + 1 }), 1500);
                     } else {
-                        showToast('系统正在连接或初始化后台，加载分类及大纲数据失败，请刷新重试', 'error');
+                        // 带上真实原因：旧后端进程缺接口时，用户才能一眼看出
+                        // 该彻底关闭服务重启，而不是反复刷新。
+                        const reason = (err && (err.message || err.status)) ? `（${err.message || err.status}）` : '';
+                        showToast(`系统正在连接或初始化后台，加载分类及大纲数据失败${reason}，请关闭服务后重新启动`, 'error');
                     }
                 });
         }
