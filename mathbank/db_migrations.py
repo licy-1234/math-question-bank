@@ -651,7 +651,7 @@ LEGACY_RELATION_LABEL = "题组"
 
 #: Tables that ``_ensure_*_table`` helpers can create on demand, so a missing
 #: one must not abort startup before the repair pass has had a chance to run.
-SELF_HEALING_TABLES = frozenset({"question_relations"})
+SELF_HEALING_TABLES = frozenset({"question_relations", "question_sub_knowledge"})
 
 
 def _ensure_question_relations_table(connection) -> dict[str, int]:
