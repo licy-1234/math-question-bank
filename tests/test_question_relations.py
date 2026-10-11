@@ -1,8 +1,10 @@
 """Schema v12 typed question relations: migration, API and filtering coverage.
 
-These tests pin the additive-only migration contract: the migration may create
-the ``question_relations`` table and insert derived ``legacy_group`` rows, but it
-must never UPDATE the user-confirmed ``questions`` rows.
+These tests pin the "fold" migration contract: the migration creates the
+``question_relations`` table, moves every legacy ``association_group_id`` group
+into derived ``legacy_group`` rows and then blanks the source column, so
+``question_relations`` is the single source of truth.  Nothing else in
+``questions`` may be touched, and a second run must be a no-op.
 """
 
 import sqlite3
@@ -58,11 +60,15 @@ def test_migration_backfills_legacy_groups_and_is_idempotent(tmp_path, monkeypat
     assert first["to_version"] == db_migrations.LATEST_SCHEMA_VERSION == 12
     # C(3, 2) pairs from the single legacy group.
     assert first["backfilled_question_relations"] == 3
+    # ...and the source column is folded away in the same pass.
+    assert first["cleared_association_groups"] == 3
 
     # A second run is a no-op that must not raise or duplicate rows.
     second = db_migrations.migrate_database(engine)
     assert second["from_version"] == 12
     assert second["to_version"] == 12
+    # Idempotence is proven by the row counts below: the fold already happened,
+    # so nothing new is derived and nothing is re-blanked.
 
     with _sqlite_connection(database_path) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
@@ -79,13 +85,18 @@ def test_migration_backfills_legacy_groups_and_is_idempotent(tmp_path, monkeypat
             (1, 3, "legacy_group"),
             (2, 3, "legacy_group"),
         ]
-        # Hard constraint: the migration must not mutate questions rows.
+        # Hard constraint: the legacy column is blanked once the rows are
+        # derived, so nothing can re-derive a deleted legacy relation later.
         groups = dict(
             connection.execute(
                 "SELECT id, association_group_id FROM questions"
             ).fetchall()
         )
-        assert groups == {1: "grp-A", 2: "grp-A", 3: "grp-A", 4: ""}
+        assert groups == {1: "", 2: "", 3: "", 4: ""}
+        # Every other user-confirmed question column is left alone.
+        assert dict(
+            connection.execute("SELECT id, content FROM questions").fetchall()
+        ) == {1: "题一", 2: "题二", 3: "题三", 4: "题四"}
     engine.dispose()
 
 
@@ -214,6 +225,29 @@ def test_create_relation_rejects_self_and_bad_input(client, seeded):
         headers=_token(),
     )
     assert blank.status_code == 400
+
+
+def test_create_relation_whitelists_relation_code(client, seeded):
+    a_id, b_id = seeded[0], seeded[1]
+
+    # Built-ins pass; so does the custom: escape hatch the frontend always mints.
+    for code in ["same_topic", "one_q_variants", "custom:拓展延伸"]:
+        resp = client.post(
+            f"/api/questions/{a_id}/relations",
+            data={"target_id": b_id, "relation_code": code},
+            headers=_token(),
+        )
+        assert resp.status_code == 200, code
+        client.delete(f"/api/relations/{resp.json()['relation_id']}", headers=_token())
+
+    # Anything outside the whitelist is rejected, including a bare prefix.
+    for bad in ["totally-made-up", "custom:", "  ", "custom:   ", "x" * 61]:
+        resp = client.post(
+            f"/api/questions/{a_id}/relations",
+            data={"target_id": b_id, "relation_code": bad},
+            headers=_token(),
+        )
+        assert resp.status_code == 400, bad
 
 
 def test_get_relations_is_bidirectional_and_delete_removes_one_row(

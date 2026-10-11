@@ -672,6 +672,44 @@ BUILTIN_RELATION_TYPES = (
     ("one_q_variants", "一题多变"),
 )
 RELATION_CUSTOM_PREFIX = "custom:"
+BUILTIN_RELATION_CODES = frozenset(code for code, _ in BUILTIN_RELATION_TYPES)
+#: Slug charset the frontend mints for ``custom:<slug>`` codes.  Kept permissive
+#: (any non-empty slug) so a custom topic typed today still validates tomorrow.
+RELATION_CODE_MAX_LENGTH = 60
+
+
+def validate_relation_code(code: str) -> str:
+    """Whitelist a submitted ``relation_code``.
+
+    Only the frozen built-in codes or a ``custom:`` prefixed code are accepted.
+    The custom escape hatch is deliberate: users invent their own comparison
+    topics ("一题多解对比"), and the frontend always mints those as
+    ``custom:<slug>``, so they must keep flowing through.
+    """
+
+    code = str(code or "").strip()
+    if not code:
+        raise HTTPException(status_code=400, detail="关联类型不能为空。")
+    if len(code) > RELATION_CODE_MAX_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"关联类型过长（最多 {RELATION_CODE_MAX_LENGTH} 个字符）。",
+        )
+    if code in BUILTIN_RELATION_CODES:
+        return code
+    if code.startswith(RELATION_CUSTOM_PREFIX):
+        slug = code[len(RELATION_CUSTOM_PREFIX):].strip()
+        if slug:
+            return code
+        raise HTTPException(
+            status_code=400,
+            detail="自定义关联类型的名称不能为空。",
+        )
+    raise HTTPException(
+        status_code=400,
+        detail="无效的关联类型，请从列表中选择或使用自定义类型。",
+    )
+
 
 def get_seq_mapping(db: Session, question_ids=None):
     """Map physical ID order to the user-facing contiguous sequence number."""
@@ -3102,7 +3140,6 @@ def create_question(
     figure_size: str = Form("auto"),
     image_layouts: str = Form("{}"),
     tags: str = Form(""),
-    related_question_id: str = Form(""),
     image_paths: str = Form("[]"),  # JSON array string
     duplicate_snapshot_hash: str = Form(""),
     duplicate_override: str = Form(""),
@@ -3179,20 +3216,9 @@ def create_question(
         db_question.image_paths = parsed_img_paths
         db_question.content_tikz_assets = parsed_content_tikz_assets
         db_question.answer_tikz_assets = parsed_answer_tikz_assets
-        
-        # Handle related question association (transitive relation)
-        related_id_int = int(related_question_id) if related_question_id and related_question_id.strip() else None
-        if related_id_int:
-            q_related = db.query(Question).filter(Question.id == related_id_int).first()
-            if q_related:
-                g2 = q_related.association_group_id
-                if not g2:
-                    new_grp = str(uuid.uuid4())
-                    q_related.association_group_id = new_grp
-                    db_question.association_group_id = new_grp
-                else:
-                    db_question.association_group_id = g2
-        
+
+        # 关联关系只走 question_relations 单轨：保存题目本身不再碰
+        # association_group_id，该列已由迁移折叠为 legacy_group 关系行后清空。
         db.add(db_question)
         db.flush()
 
@@ -3315,7 +3341,6 @@ def update_question(
     figure_size: Optional[str] = Form(None),
     image_layouts: Optional[str] = Form(None),
     tags: str = Form(""),
-    related_question_id: str = Form(""),
     image_paths: str = Form("[]"),
     duplicate_snapshot_hash: str = Form(""),
     duplicate_override: str = Form(""),
@@ -3416,30 +3441,10 @@ def update_question(
         db_question.image_paths = parsed_img_paths
         db_question.content_tikz_assets = parsed_content_tikz_assets
         db_question.answer_tikz_assets = parsed_answer_tikz_assets
-        
-        # Handle related question association updates (transitive relation)
-        related_id_int = int(related_question_id) if related_question_id and related_question_id.strip() else None
-        if related_id_int:
-            q_related = db.query(Question).filter(Question.id == related_id_int).first()
-            if q_related and q_related.id != db_question.id:
-                g1 = db_question.association_group_id
-                g2 = q_related.association_group_id
-                
-                if not g1 and not g2:
-                    new_grp = str(uuid.uuid4())
-                    db_question.association_group_id = new_grp
-                    q_related.association_group_id = new_grp
-                elif g1 and not g2:
-                    q_related.association_group_id = g1
-                elif not g1 and g2:
-                    db_question.association_group_id = g2
-                else:
-                    if g1 != g2:
-                        db.query(Question).filter(Question.association_group_id == g1).update(
-                            {Question.association_group_id: g2}, synchronize_session=False
-                        )
-                        db_question.association_group_id = g2
-        
+
+        # 关联关系只走 question_relations 单轨：更新题目本身不再碰
+        # association_group_id，该列已由迁移折叠为 legacy_group 关系行后清空。
+
         # Update or create active QuestionCurriculum mapping
         active_version = get_active_version_code()
         curriculum_map = db.query(QuestionCurriculum).filter(
@@ -3608,105 +3613,11 @@ def update_question_figure_layout(
         "figure_size": normalize_figure_size(db_question.figure_size),
     }
 
-@app.get("/api/questions/{question_id}/associated")
-def get_associated_questions(question_id: int, db: Session = Depends(get_db)):
-    q = db.query(Question).filter(Question.id == question_id).first()
-    if not q:
-        raise HTTPException(status_code=404, detail="未找到题目")
-        
-    grp = q.association_group_id
-    if not grp or grp.strip() == "":
-        return []
-        
-    associated = db.query(Question).filter(
-        Question.association_group_id == grp,
-        Question.id != question_id
-    ).all()
-    
-    seq_map = get_seq_mapping(db, [item.id for item in associated])
-    return [{**item.to_dict(), "seq_num": seq_map.get(item.id)} for item in associated]
-
-@app.post("/api/questions/{question_id}/associate")
-def associate_questions_endpoint(
-    background_tasks: BackgroundTasks,
-    question_id: int,
-    target_id: int = Form(...),
-    db: Session = Depends(get_db)
-):
-    q1 = db.query(Question).filter(Question.id == question_id).first()
-    q2 = db.query(Question).filter(Question.id == target_id).first()
-    if not q1 or not q2:
-        raise HTTPException(status_code=404, detail="未找到对应题目")
-        
-    if q1.id == q2.id:
-        raise HTTPException(status_code=400, detail="不能自己和自己关联")
-        
-    g1 = q1.association_group_id
-    g2 = q2.association_group_id
-    
-    try:
-        if not g1 and not g2:
-            new_grp = str(uuid.uuid4())
-            q1.association_group_id = new_grp
-            q2.association_group_id = new_grp
-        elif g1 and not g2:
-            q2.association_group_id = g1
-        elif not g1 and g2:
-            q1.association_group_id = g2
-        else:
-            if g1 != g2:
-                db.query(Question).filter(Question.association_group_id == g1).update(
-                    {Question.association_group_id: g2}, synchronize_session=False
-                )
-                q1.association_group_id = g2
-                
-        db.commit()
-        
-        # Auto export database to files for Git synchronization and AI referencing (Async Background Task)
-        schedule_database_export(background_tasks, operation="associate_questions")
-        
-        return {"status": "success", "message": "关联成功"}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=f"关联失败: {str(e)}")
-
-@app.delete("/api/questions/{question_id}/associated")
-def remove_association(
-    question_id: int,
-    background_tasks: BackgroundTasks,
-    db: Session = Depends(get_db)
-):
-    """Remove a question from its association group (bidirectional)."""
-    q = db.query(Question).filter(Question.id == question_id).first()
-    if not q:
-        raise HTTPException(status_code=404, detail="未找到题目")
-
-    grp = q.association_group_id
-    if not grp or grp.strip() == "":
-        return {"status": "success", "message": "该题目无关联关系"}
-
-    try:
-        # Clear this question's group ID
-        q.association_group_id = ""
-
-        # If only one other question remains in the group, clear its group too (no point in a group of one)
-        remaining = db.query(Question).filter(
-            Question.association_group_id == grp,
-            Question.id != question_id
-        ).all()
-
-        if len(remaining) == 1:
-            remaining[0].association_group_id = ""
-
-        db.commit()
-        
-        # Auto export database to files for Git synchronization and AI referencing (Async Background Task)
-        schedule_database_export(background_tasks, operation="remove_association")
-        
-        return {"status": "success", "message": "已成功解除所有关联"}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=f"解除关联失败: {str(e)}")
+# 历史说明：此处曾有基于 questions.association_group_id 的旧题组三件套路由
+# （GET/POST/DELETE /api/questions/{id}/associated 与 POST /associate）。
+# 旧题组已在 v12 迁移中折叠为 question_relations 的 legacy_group 行并清空源列，
+# 继续保留读写口子会导致双轨不同步，已整体删除；读写统一走
+# GET/POST /api/questions/{id}/relations 与 DELETE /api/relations/{id}。
 
 
 def _relation_type_items(db: Session) -> list[dict]:
@@ -3801,7 +3712,6 @@ def get_question_relations(question_id: int, db: Session = Depends(get_db)):
                     "seq_num": seq_map.get(other.id),
                     "question_type": other.question_type or "",
                     "content": other.content or "",
-                    "association_group_id": other.association_group_id or "",
                 },
             }
         )
@@ -3822,9 +3732,9 @@ def create_question_relation(
 
     from sqlalchemy.exc import IntegrityError
 
-    code = str(relation_code or "").strip()
-    if not code:
-        raise HTTPException(status_code=400, detail="关联类型不能为空。")
+    # Whitelist first: built-ins only, plus the custom: escape hatch that the
+    # frontend always uses for user-invented topics.
+    code = validate_relation_code(relation_code)
     if int(question_id) == int(target_id):
         raise HTTPException(status_code=400, detail="不能与自身建立关联。")
 
@@ -4504,6 +4414,37 @@ def _chapter_statistics(db: Session) -> tuple[dict, list, list]:
     return compulsory_chapter_counts, chapter_stats, book_catalog
 
 
+def _merge_case_insensitive_counts(
+    counts: dict[str, int],
+    preferred: "set[str] | frozenset[str] | None" = None,
+) -> dict[str, int]:
+    """Fold case-variant keys together, for reading/display only.
+
+    Historic rows may carry a different casing than the current vocabulary and
+    are deliberately left untouched.  Only the outgoing payload is folded, so
+    ``典型题`` written as ``Typical``/``typical`` still shows up as one bar.
+    The vocabulary spelling wins when both variants exist.
+    """
+
+    preferred = set(preferred or ())
+    merged: dict[str, int] = {}
+    canonical: dict[str, str] = {}
+    for key, value in counts.items():
+        fold = str(key).casefold()
+        amount = int(value or 0)
+        keeper = canonical.get(fold)
+        if keeper is None:
+            canonical[fold] = key
+            merged[key] = amount
+            continue
+        merged[keeper] += amount
+        if keeper not in preferred and key in preferred:
+            total = merged.pop(keeper)
+            canonical[fold] = key
+            merged[key] = total
+    return merged
+
+
 @app.get("/api/stats")
 def get_db_stats(db: Session = Depends(get_db)):
     try:
@@ -4518,7 +4459,8 @@ def get_db_stats(db: Session = Depends(get_db)):
         # 功能标签分布：词表取值先全部补 0，再用一次 group_by 覆盖真实计数。
         # 这样刚加入词表、库里还没人用的取值（如"典型题"）也会出现在统计里，
         # 而词表之外的历史 code（无 CHECK 约束，可能存在）同样不会丢。
-        function_tag_counts: dict[str, int] = {
+        # 累加阶段原样保留大小写（含历史脏数据），不在此处归并。
+        raw_function_tag_counts: dict[str, int] = {
             item["code"]: 0 for item in dimension_values("function")
         }
         for code, count in (
@@ -4530,8 +4472,14 @@ def get_db_stats(db: Session = Depends(get_db)):
             key = str(code or "").strip()
             if not key:
                 continue
-            function_tag_counts.setdefault(key, 0)
-            function_tag_counts[key] += int(count or 0)
+            raw_function_tag_counts.setdefault(key, 0)
+            raw_function_tag_counts[key] += int(count or 0)
+
+        # 仅读取/展示环节做大小写归一（忽略大小写合并），库里的取值不动。
+        function_tag_counts = _merge_case_insensitive_counts(
+            raw_function_tag_counts,
+            preferred={item["code"] for item in dimension_values("function")},
+        )
 
         # Daily additions in local time (UTC+8)
         date_rows = db.query(Question.created_at).all()

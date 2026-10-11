@@ -181,9 +181,10 @@ def test_association_switching_and_real_unsaved_changes(browser, tmp_path):
     assert browser.evaluate("document.getElementById('editRelatedQuestion').value") == str(second)
     click_association_action("associateRelatedQuestion")
     browser.settle()
+    # Relations are the single track: the old association-group endpoint is gone.
     assert browser.evaluate(
-        f"fetch('/api/questions/{first}/associated').then(r => r.json())"
-        f".then(qs => qs.some(q => q.id === {second}))"
+        f"fetch('/api/questions/{first}/relations').then(r => r.json())"
+        f".then(p => (p.items || []).some(i => i.other && i.other.id === {second}))"
     ), browser.evaluate("({selection: document.getElementById('editRelatedQuestion').value, questionId: EditorState.questionId})")
     browser.command("wait", "--fn", "!isEditorModified() && !document.getElementById('paperAssociatedWrapper').classList.contains('hidden')")
     for question_id, related_id in [(second, first), (first, second), (second, first), (first, second)]:
@@ -192,7 +193,9 @@ def test_association_switching_and_real_unsaved_changes(browser, tmp_path):
     # Real DELETE persists and leaves the editor clean.
     click_association_action("clearRelatedQuestion")
     browser.command("wait", "--fn", "document.getElementById('editRelatedQuestion').value === '' && !isEditorModified()")
-    assert browser.evaluate(f"fetch('/api/questions/{first}/associated').then(r => r.json())") == []
+    assert browser.evaluate(
+        f"fetch('/api/questions/{first}/relations').then(r => r.json()).then(p => p.items || [])"
+    ) == []
 
     # Linking must not mark a separately edited stem as saved.
     browser.command("click", '[data-editor-panel-target="content"]')

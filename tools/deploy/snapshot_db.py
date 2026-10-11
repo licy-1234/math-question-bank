@@ -5,12 +5,14 @@
 用途：在任何写操作前后对题库做指纹快照，用于证明"题目主体内容未被删除/覆盖/改变"。
 
 用法：
-    python tools/deploy/snapshot_db.py <db_path> [输出json路径]
+    python tools/deploy/snapshot_db.py <db_path> [--out 输出json路径]
 
-输出：
-    - 题目总数
-    - 每道题的 id / 题型 / 难度 / 章节 / 正文 sha256
-    - 全库指纹（所有题目正文拼接后的 sha256）
+安全护栏（都是踩过坑才加的，不要删）：
+    - 输入必须是**已存在**且带 SQLite 文件头的数据库。早先版本对不存在的路径
+      会静默建一个 0 字节的 sqlite 文件，看起来像"数据库被清空了"。
+    - 输出必须用显式的 `--out`。早先版本把第二个位置参数当输出路径，一次
+      `snapshot_db.py 主库 备份库` 就把备份库覆盖成了 JSON —— 备份当场报废。
+      现在额外拒绝写入已存在的文件、以及任何像数据库的文件名。
 """
 
 from __future__ import annotations
@@ -26,6 +28,42 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+SQLITE_HEADER = b"SQLite format 3\x00"
+#: 这些名字一律不允许作为 --out 目标：覆盖任何一个都是数据事故。
+DATABASE_LIKE_SUFFIXES = (".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3")
+
+
+def assert_existing_database(path: Path) -> None:
+    """拒绝一切"看起来像数据库、其实不是"的输入。
+
+    ``sqlite3.connect`` 会在路径不存在时**新建**一个 0 字节库，随后所有
+    查询报 "no such table" 或语法错，极易被误读成"题库被清空了"。
+    """
+    if not path.exists():
+        raise SystemExit(f"[拒绝] 数据库不存在（不会新建）：{path}")
+    if not path.is_file():
+        raise SystemExit(f"[拒绝] 不是文件：{path}")
+    with path.open("rb") as handle:
+        if handle.read(len(SQLITE_HEADER)) != SQLITE_HEADER:
+            raise SystemExit(
+                f"[拒绝] 不是 SQLite 数据库（文件头不符）：{path}\n"
+                f"       若它是 JSON 快照或其它文本，说明已被误写，请从备份恢复。"
+            )
+
+
+def assert_safe_output(path: Path) -> None:
+    if path.exists():
+        raise SystemExit(f"[拒绝] 输出文件已存在，拒绝覆盖：{path}")
+    lowered = path.name.lower()
+    if lowered.endswith(DATABASE_LIKE_SUFFIXES):
+        raise SystemExit(
+            f"[拒绝] 拒绝写入像数据库的文件名：{path}\n"
+            f"       快照是 JSON，请用 --out <名字>.json。"
+        )
+    if path.suffix.lower() not in {".json", ".txt"}:
+        raise SystemExit(f"[拒绝] 输出文件必须是 .json 或 .txt：{path}")
+
+
 def table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return [r[1] for r in rows]
@@ -33,8 +71,9 @@ def table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
 
 def snapshot(db_path: str) -> dict:
     path = Path(db_path)
+    assert_existing_database(path)
     # 注意：WAL 模式下即使只读也需要 -shm 可写，因此这里不使用 mode=ro，
-    # 仅执行 SELECT，逻辑上仍是只读操作。
+    # 仅执行 SELECT，逻辑上仍是只读操作（且已通过文件头校验，不会新建库）。
     conn = sqlite3.connect(str(path))
     try:
         conn.row_factory = sqlite3.Row
@@ -73,17 +112,30 @@ def snapshot(db_path: str) -> dict:
         conn.close()
 
 
-def main() -> int:
-    if len(sys.argv) < 2:
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # 显式 --out 而不是第二个位置参数：位置参数版本会把"第二个数据库"
+    # 当成输出目标，一次误用就能把备份库写成 JSON。
+    out = None
+    if "--out" in argv:
+        index = argv.index("--out")
+        if index + 1 >= len(argv):
+            print("[拒绝] --out 缺少路径")
+            return 2
+        out = argv[index + 1]
+        del argv[index : index + 2]
+    if len(argv) != 1:
         print(__doc__)
         return 2
-    db_path = sys.argv[1]
-    out = sys.argv[2] if len(sys.argv) > 2 else None
-    data = snapshot(db_path)
+
+    data = snapshot(argv[0])
     text = json.dumps(data, ensure_ascii=False, indent=2)
     if out:
-        Path(out).write_text(text, encoding="utf-8")
-        print(f"written: {out}")
+        out_path = Path(out)
+        assert_safe_output(out_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(text, encoding="utf-8")
+        print(f"written: {out_path}")
     print(f"count={data['count']} fingerprint={data['fingerprint']}")
     return 0
 

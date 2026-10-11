@@ -537,12 +537,32 @@
                 });
         }
 
+        // 关联请求都是异步的：用户在等待期间改选了另一道题属于"待提交的新选择"，
+        // 后台刷新直接清空会把它悄悄丢掉。
+        function relatedSelectionChangedSince(expectedValue) {
+            const dropdown = document.getElementById('editRelatedQuestion');
+            if (!dropdown) return false;
+            return dropdown.value !== String(expectedValue === undefined ? '' : expectedValue);
+        }
+
+        // 只有选择没被改动过才允许复位目标选择器与编号框。
+        function resetRelatedSelectionIfUnchanged(expectedValue) {
+            if (relatedSelectionChangedSince(expectedValue)) return false;
+            const dropdown = document.getElementById('editRelatedQuestion');
+            if (dropdown) dropdown.value = '';
+            const numInput = document.getElementById('editRelatedQuestionNum');
+            if (numInput) numInput.value = '';
+            return true;
+        }
+
         // Clear every associated-question related DOM surface.
-        function clearRelatedUi() {
+        function clearRelatedUi(options = {}) {
             const dropdown = document.getElementById('editRelatedQuestion');
             const numInput = document.getElementById('editRelatedQuestionNum');
-            if (dropdown) dropdown.value = '';
-            if (numInput) numInput.value = '';
+            if (!options.preserveSelection) {
+                if (dropdown) dropdown.value = '';
+                if (numInput) numInput.value = '';
+            }
             const container = document.getElementById('paperAssociatedList');
             if (container) container.innerHTML = '';
             updateRelatedCountBadge(0);
@@ -685,15 +705,13 @@
                     const seqNum = selectedOpt ? selectedOpt.getAttribute('data-seq-num') : '';
                     showToast(`已按「${relationLabel}」与题目 #${seqNum || targetId} 建立关联！`, 'success');
 
-                    // Reset the target selector and any custom topic input.
-                    if (targetSelect) targetSelect.value = '';
-                    const numInput = document.getElementById('editRelatedQuestionNum');
-                    if (numInput) numInput.value = '';
                     resetEditorRelationTypeControl();
 
-                    // 刷新右侧预览区的关联变式题目卡片及下拉框
+                    // 刷新右侧预览区的关联变式题目卡片及下拉框。
+                    // 传入 targetId 作为"请求发起时的选择"：下拉框会同步到已持久化的
+                    // 关联题目，而用户在请求期间改选过则原样保留，不会被后台刷新覆盖。
                     if (typeof loadAssociatedQuestionsInList === 'function') {
-                        await loadAssociatedQuestionsInList(session.questionId);
+                        await loadAssociatedQuestionsInList(session.questionId, targetId);
                     }
                 } else {
                     showToast(data.detail || data.message || '关联建立失败', 'error');
@@ -706,13 +724,11 @@
 
         // Remove every pair relation of the current question (backend + UI)
         function clearRelatedQuestion() {
+            const selectionAtRequest = document.getElementById('editRelatedQuestion')
+                ? document.getElementById('editRelatedQuestion').value : '';
             if (!EditorState.questionId) {
                 // No question loaded, just clear the UI
-                const dropdown = document.getElementById('editRelatedQuestion');
-                const numInput = document.getElementById('editRelatedQuestionNum');
-                if (dropdown) dropdown.value = '';
-                if (numInput) numInput.value = '';
-                resetEditorRelationTypeControl();
+                clearRelatedUi();
                 showToast('已清除关联选择', 'success');
                 return;
             }
@@ -733,7 +749,7 @@
                         .filter(id => Number.isSafeInteger(id) && id > 0);
                     if (ids.length === 0) {
                         commitEditorRelatedBaseline(session, '');
-                        clearRelatedUi();
+                        clearRelatedUi({ preserveSelection: relatedSelectionChangedSince(selectionAtRequest) });
                         showToast('当前没有可删除的关联关系', 'info');
                         return true;
                     }
@@ -756,7 +772,11 @@
                     }), Promise.resolve(true)).then(() => {
                         if (EditorState.questionId !== session.questionId) return false;
                         commitEditorRelatedBaseline(session, '');
-                        clearRelatedUi();
+                        // 删除是串行的，用户可能已在等待期间改选了另一道题：
+                        // 那属于待提交的新选择，不能被这次后台刷新清空。
+                        clearRelatedUi({
+                            preserveSelection: relatedSelectionChangedSince(selectionAtRequest)
+                        });
                         showToast(`已删除全部 ${ids.length} 条关联关系`, 'success');
                         return true;
                     });
@@ -1172,7 +1192,6 @@
                     question_type: qtype,
                     difficulty: difficulty,
                     source: source,
-                    related_question_id: relatedQuestionId,
                     image_paths: JSON.stringify(Array.from(uploadedImages)),
                     tikz_code: tikzCode,
                     tikz_reference_image_path: tikzReferencePath,
@@ -1197,7 +1216,8 @@
                 formData.append('source', source);
                 formData.append('answer_markdown', answerMarkdown);
                 formData.append('review', review);
-                formData.append('related_question_id', relatedQuestionId);
+                // 关联只走 /api/questions/{id}/relations 单轨：保存题目不再提交
+                // related_question_id，后端已不再写 association_group_id。
                 formData.append('tikz_code', tikzCode);
                 formData.append('tikz_reference_image_path', tikzReferencePath);
                 formData.append('content_tikz_assets', JSON.stringify(contentTikzAssets));

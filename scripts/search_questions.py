@@ -8,21 +8,30 @@ from mathbank.paths import DATABASE_FILE
 # Database Path
 DB_PATH = str(DATABASE_FILE)
 
-def get_association_group(question_id):
-    """Finds the association group ID for a specific question ID."""
+def get_related_ids(question_id):
+    """Finds every question related to ``question_id``.
+
+    Relations live in ``question_relations`` only -- the legacy
+    ``association_group_id`` column was folded into that table (as
+    ``legacy_group`` rows) and is now always empty.
+    """
     if not os.path.exists(DB_PATH):
         print(f"Error: Database not found at {DB_PATH}", file=sys.stderr)
         sys.exit(1)
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT association_group_id FROM questions WHERE id = ?", (question_id,))
-    row = cursor.fetchone()
+    cursor.execute(
+        """
+        SELECT CASE WHEN question_id = ? THEN related_id ELSE question_id END
+        FROM question_relations
+        WHERE question_id = ? OR related_id = ?
+        """,
+        (question_id, question_id, question_id),
+    )
+    ids = [row[0] for row in cursor.fetchall()]
     conn.close()
-    
-    if row and row[0] and row[0].strip():
-        return row[0].strip()
-    return None
+    return ids
 
 def search_questions(query=None, qtype=None, difficulty=None, limit=50, with_answers=False, associated_to_id=None):
     if not os.path.exists(DB_PATH):
@@ -34,20 +43,21 @@ def search_questions(query=None, qtype=None, difficulty=None, limit=50, with_ans
 
     # Build SQL dynamically
     base_query = """
-        SELECT id, content, question_type, category_compulsory, category_chapter, category_knowledge, difficulty, source, answer_markdown, review, association_group_id, tags
+        SELECT id, content, question_type, category_compulsory, category_chapter, category_knowledge, difficulty, source, answer_markdown, review, tags
         FROM questions
         WHERE 1=1
     """
     params = []
 
-    # Filter by association group if requested
+    # Filter by typed relations if requested.
     if associated_to_id:
-        group_id = get_association_group(associated_to_id)
-        if not group_id:
+        related_ids = get_related_ids(associated_to_id)
+        if not related_ids:
             conn.close()
-            return []  # No association group found for this question
-        base_query += " AND association_group_id = ? AND id != ?"
-        params.extend([group_id, associated_to_id])
+            return []  # No relation found for this question
+        placeholders = ", ".join("?" for _ in related_ids)
+        base_query += f" AND id IN ({placeholders})"
+        params.extend(related_ids)
 
     # Fuzzy search query
     if query:
@@ -130,7 +140,7 @@ def main():
 
     if not results:
         if args.related_to:
-            print(f"### No associated/related questions found for ID: #{args.related_to} (or it does not belong to any association group)")
+            print(f"### No associated/related questions found for ID: #{args.related_to} (or it has no typed relation)")
         else:
             print(f"### No questions found matching query: '{args.query or 'All'}'")
         return
@@ -139,16 +149,14 @@ def main():
     print(f"{title_msg}\n")
     
     for idx, row in enumerate(results, 1):
-        q_id, content, question_type, compulsory, chapter, knowledge, difficulty, source, answer, review, group_id, tags = row
-        
+        q_id, content, question_type, compulsory, chapter, knowledge, difficulty, source, answer, review, tags = row
+
         print(f"### 题目 {idx} (ID: #{q_id})")
         print(f"- **分类学段**: `{compulsory or '未分类'}`")
         print(f"- **章节知识点**: `{chapter or '无'}` -> `{knowledge or '无'}`")
         print(f"- **题型/难度**: {format_type(question_type)} | {format_difficulty(difficulty)}")
         if source:
             print(f"- **来源**: *{source}*")
-        if group_id:
-            print(f"- **关联组 ID**: `{group_id}`")
         if tags:
             print(f"- **自定义标签**: *{tags}*")
         

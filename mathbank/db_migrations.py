@@ -593,17 +593,17 @@ SELF_HEALING_TABLES = frozenset({"question_relations"})
 
 
 def _ensure_question_relations_table(connection) -> dict[str, int]:
-    """Create the typed question-relation table and backfill legacy groups.
+    """Create the typed question-relation table and fold legacy groups into it.
 
-    Purely additive: the table/indexes are created idempotently.  The original
-    ``questions`` rows are never modified, so a rollback only loses the derived
-    relation index.
+    The table/indexes are created idempotently.  Once the legacy groups have
+    been derived into ``question_relations`` the source column is cleared, so
+    the two tracks can never drift apart again: ``question_relations`` becomes
+    the single source of truth and ``questions.association_group_id`` is left
+    empty forever (the column itself is kept only so older builds that still
+    read it keep working).
 
-    The ``legacy_group`` rows are a *derivation* of ``association_group_id``:
-    deleting one through the relation API does not clear the underlying group,
-    so a later migration re-derives it.  That is intentional -- it keeps the
-    derived index crash-safe -- and callers that want to break a legacy group
-    for good must clear ``association_group_id`` itself.
+    The fold is a *move* rather than a copy.  A deletion made through the
+    relation API is therefore final: nothing re-derives it on the next startup.
     """
 
     table_exists = bool(
@@ -651,10 +651,39 @@ def _ensure_question_relations_table(connection) -> dict[str, int]:
     # interrupted between CREATE TABLE and INSERT.  Gating it on table creation
     # would strand those databases with a permanently empty relation index.
     seeded = _backfill_question_relations(connection)
+    # Fold (not copy): clear the source column only after the derived rows are
+    # safely inserted, inside the caller's transaction.
+    cleared = _clear_association_groups(connection)
     return {
         "added_question_relations": int(not table_exists),
         "backfilled_question_relations": seeded,
+        "cleared_association_groups": cleared,
     }
+
+
+def _clear_association_groups(connection) -> int:
+    """Blank the legacy ``association_group_id`` column (idempotent).
+
+    Called straight after :func:`_backfill_question_relations` so the legacy
+    groups have already been materialised as ``legacy_group`` relation rows.
+    Blanking the column is what makes the migration single-track: later runs
+    find nothing to derive, and the relation API stays the only writer.
+    """
+
+    columns = {
+        row[1]
+        for row in connection.exec_driver_sql(
+            'PRAGMA table_info("questions")'
+        ).fetchall()
+    }
+    if "association_group_id" not in columns:
+        return 0
+
+    cursor = connection.exec_driver_sql(
+        "UPDATE questions SET association_group_id = '' "
+        "WHERE association_group_id IS NOT NULL AND association_group_id <> ''"
+    )
+    return int(cursor.rowcount or 0)
 
 
 def _backfill_question_relations(connection) -> int:

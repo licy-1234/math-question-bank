@@ -85,10 +85,15 @@ python tools/deploy/sync_release.py --repo <仓库> --dest <副本> --since <副
 ### 4. 数据指纹：`snapshot_db.py`
 
 ```
-python tools/deploy/snapshot_db.py <db路径> [输出json]
+python tools/deploy/snapshot_db.py <db路径>
+python tools/deploy/snapshot_db.py <db路径> --out 快照.json
 ```
 
 任何动数据库的操作前后各跑一次，比对 `count` 和 `fingerprint` 就能证明题没丢没改。
+
+⚠️ 输出**必须**用显式 `--out`，且只能是 `.json` / `.txt`、不能覆盖已存在的文件。
+旧版把第二个位置参数当输出路径，一次 `snapshot_db.py 主库 备份库` 就把备份库
+覆盖成了 JSON；同时旧版对不存在的路径会静默新建 0 字节 sqlite。两种情况都已加护栏。
 
 附：`match_deployed_commit.py` 用来反查"这份副本到底等于哪个提交"，
 按文件字节逐个比对仓库历史，能给出"副本 == 提交 X"这种硬证据。

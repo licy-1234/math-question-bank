@@ -1731,17 +1731,13 @@ window.functionTagBadge = functionTagBadge;
                             }
                         }
 
-                        // Relationship badge: shown only when the list item
-                        // reports a positive relation count; older payloads
-                        // without the field fall back to a non-empty
-                        // association_group_id.
+                        // Relationship badge: driven purely by the relation count
+                        // the backend derives from question_relations (single track).
                         let relationCount = 0;
                         if (item.relation_count !== undefined && item.relation_count !== null) {
                             const parsedRelationCount = parseInt(item.relation_count, 10);
                             relationCount = Number.isFinite(parsedRelationCount) && parsedRelationCount > 0
                                 ? parsedRelationCount : 0;
-                        } else if (item.association_group_id) {
-                            relationCount = 1;
                         }
                         const relationBadgeHtml = relationCount > 0
                             ? `<span class="bank-question-relation inline-flex items-center gap-0.5 text-[9px] font-bold text-brand-600 bg-brand-50 border border-brand-200/60 px-1.5 py-0.5 rounded-full cursor-default" onclick="event.stopPropagation()" title="关联题目 ${relationCount} 道"><i class="fa-solid fa-link text-[7px]"></i>关联 ${relationCount}</span>`

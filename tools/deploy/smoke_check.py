@@ -10,6 +10,9 @@
 
 用法：
     python tools/deploy/smoke_check.py [--base http://127.0.0.1:8000] [--read-only]
+                                      [--expect-total 14]
+
+默认按 14 道题的基线题库验收；题库后来又录了新题时用 --expect-total 指定当前总数。
 
 退出码 0 = 全部通过；1 = 有失败项（含"临时题没删干净"，避免脏题静默留在题库里）。
 """
@@ -63,9 +66,15 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default=BASE_DEFAULT)
     ap.add_argument(
+        "--expect-total",
+        type=int,
+        default=14,
+        help="期望的题目总数（默认 14，即基线题库）",
+    )
+    ap.add_argument(
         "--read-only",
         action="store_true",
-        help="只跑纯 GET 检查项，跳过建题/改标签/删题（第 9-16 项），对用户题库零写入",
+        help="只跑纯 GET 检查项，跳过建题/改标签/删题等写操作项，对用户题库零写入",
     )
     args = ap.parse_args()
     global BASE
@@ -82,7 +91,12 @@ def main() -> int:
     check("能取到本地令牌", bool(token))
 
     stats = get("/api/stats")
-    check("题目总数 == 14", stats.get("total_count") == 14, f"实际 {stats.get('total_count')}")
+    expected_total = args.expect_total
+    check(
+        f"题目总数 == {expected_total}",
+        stats.get("total_count") == expected_total,
+        f"实际 {stats.get('total_count')}",
+    )
     check(
         "难度统计为三级口径",
         {"easy_count", "medium_count", "hard_count"}.issubset(stats)
@@ -105,12 +119,55 @@ def main() -> int:
     check("标签体系为 rja2019-tags-v1", schema.get("schema_version") == "rja2019-tags-v1")
     check("四个多值维度齐备", {"chapter", "thought", "function", "custom"}.issubset(dims), str(sorted(dims)))
 
+    # ---- schema v12：功能标签统计的大小写归一（读侧） ----
+    ftc = stats.get("function_tag_counts") or {}
+    folds = [str(key).casefold() for key in ftc]
+    check(
+        "function_tag_counts 无大小写重复键",
+        len(folds) == len(set(folds)),
+        str(sorted(ftc)),
+    )
+
+    # ---- schema v12：关联类型（新关联单轨）----
+    EXPECTED_BUILTIN_RELATIONS = [
+        "same_topic",
+        "multi_q_one_solution",
+        "one_method_multi_use",
+        "multi_method_one",
+        "one_q_variants",
+    ]
+    relation_payload = {}
+    try:
+        relation_payload = get("/api/relation-types")
+        relation_items = relation_payload.get("items") or []
+        check("/api/relation-types 返回 items", isinstance(relation_items, list))
+    except Exception as exc:  # noqa: BLE001
+        relation_items = []
+        check("/api/relation-types 返回 items", False, str(exc))
+    codes = [item.get("code") for item in relation_items if isinstance(item, dict)]
+    check(
+        "内置关联类型 5 项且顺序固定",
+        codes[:5] == EXPECTED_BUILTIN_RELATIONS,
+        str(codes[:5]),
+    )
+    check(
+        "内置关联类型 builtin=True",
+        all(item.get("builtin") is True for item in relation_items[:5]),
+        str([item.get("builtin") for item in relation_items[:5]]),
+    )
+    custom_codes = [c for c in codes[5:] if isinstance(c, str)]
+    check(
+        "其余关联类型均为 custom: 前缀",
+        all(c.startswith("custom:") for c in custom_codes),
+        str(custom_codes),
+    )
+
     n_easy = len(get("/api/questions?difficulty=easy&page_size=100"))
     n_medium = len(get("/api/questions?difficulty=medium&page_size=100"))
     n_hard = len(get("/api/questions?difficulty=hard&page_size=100"))
     check(
         "按 difficulty=easy/medium/hard 三档筛选合计 == 总数",
-        (n_easy + n_medium + n_hard) == 14,
+        (n_easy + n_medium + n_hard) == expected_total,
         f"easy={n_easy} medium={n_medium} hard={n_hard}",
     )
 
@@ -124,7 +181,7 @@ def main() -> int:
     cleanup_error = ""
     qid = None
     if args.read_only:
-        print("\n  [--read-only] 跳过第 9-16 项（建题/改标签/删题），本次对用户题库零写入。")
+        print("\n  [--read-only] 跳过建题/改标签/删题等写操作项，本次对用户题库零写入。")
     else:
         # 无论中途哪一项断言抛异常，都要尽量把临时题删掉，绝不让它留在用户题库里
         try:

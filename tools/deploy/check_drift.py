@@ -5,13 +5,15 @@
 这是"题库看起来回退"的直接防线。它回答一个问题：
     **用户正在跑的那份程序，和 Git 仓库里的源码，是不是同一份？**
 
-检查三件事：
+检查四件事：
     1. 部署副本的 DEPLOY-INFO.json 记录的来源提交，是否已经是仓库 HEAD；
        落后几个提交，落后者是哪几个（带时间，人对得上"我那天改的没生效"）。
     2. 部署副本磁盘上的运行时文件，是否与仓库工作区逐字节一致（忽略 CRLF/LF）。
     3. 部署副本的数据库 schema 版本，是否达到程序要求的 LATEST_SCHEMA_VERSION
        （取自 mathbank/db_migrations.py）；低于目标版本即为 FAIL，需要先跑
        tools/deploy/migrate_db.py。顺带报告题目数量，方便一眼看出"数据是不是还在"。
+    4. schema v12 结构体检：question_relations 表必须在位（新关联单轨），
+       且旧题组列 questions.association_group_id 必须已清空（无残留双轨）。
 
 数据库全程以 sqlite 只读模式（mode=ro）打开，本脚本不做任何写操作。
 
@@ -129,6 +131,7 @@ def main() -> int:
         "main.py", "mathbank/tags.py", "mathbank/database.py", "mathbank/db_migrations.py",
         "mathbank/resources/curriculums/A2019.json", "mathbank/resources/tag_schema.json",
         "static/index.html", "static/js/tags.js", "static/js/import.js", "static/js/editor.js",
+        "static/js/ocr.js",
     ]
     key_missing: list[str] = []
     key_dirty: list[str] = []
@@ -164,10 +167,33 @@ def main() -> int:
             has_tags = conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name='question_tags'"
             ).fetchone() is not None
+            # schema v12：新关联单轨（question_relations）+ 旧题组列必须已清空。
+            has_relations = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='question_relations'"
+            ).fetchone() is not None
+            relation_rows = (
+                int(conn.execute("SELECT COUNT(*) FROM question_relations").fetchone()[0])
+                if has_relations else 0
+            )
+            group_columns = {
+                row[1] for row in conn.execute('PRAGMA table_info("questions")').fetchall()
+            }
+            legacy_group_rows = 0
+            if "association_group_id" in group_columns:
+                legacy_group_rows = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM questions "
+                        "WHERE association_group_id IS NOT NULL AND association_group_id <> ''"
+                    ).fetchone()[0]
+                )
         finally:
             conn.close()
         db_info.append({
-            "db": db.name, "schema_version": uv, "questions": n, "has_question_tags": has_tags,
+            "db": db.name, "schema_version": uv, "questions": n,
+            "has_question_tags": has_tags,
+            "has_question_relations": has_relations,
+            "question_relations": relation_rows,
+            "legacy_association_group_rows": legacy_group_rows,
         })
     report["databases"] = db_info
     for info in db_info:
@@ -175,6 +201,17 @@ def main() -> int:
             problems.append(
                 f"{info['db']} 仍无 question_tags 表（schema v{info['schema_version']}），"
                 f"多值标签无处存储 —— 请跑 migrate_db.py"
+            )
+        if not info["has_question_relations"]:
+            problems.append(
+                f"{info['db']} 仍无 question_relations 表（schema v{info['schema_version']}），"
+                f"新关联无处存储 —— 请跑 migrate_db.py 升级到 v{LATEST_SCHEMA_VERSION}"
+            )
+        if info["legacy_association_group_rows"]:
+            problems.append(
+                f"{info['db']} 仍有 {info['legacy_association_group_rows']} 道题目带着旧的 "
+                f"association_group_id（旧题组未折叠），会与新关联双轨不同步 —— "
+                f"请跑 migrate_db.py 完成 v{LATEST_SCHEMA_VERSION} 迁移"
             )
         if info["schema_version"] < LATEST_SCHEMA_VERSION:
             problems.append(
@@ -219,7 +256,9 @@ def main() -> int:
     for info in db_info:
         verdict = "版本达标" if info["schema_version"] == LATEST_SCHEMA_VERSION else "版本不达标"
         print(f"      {info['db']}: schema v{info['schema_version']}（{verdict}），题目 {info['questions']} 道，"
-              f"question_tags {'有' if info['has_question_tags'] else '无'}")
+              f"question_tags {'有' if info['has_question_tags'] else '无'}，"
+              f"question_relations {'有' if info['has_question_relations'] else '无'}"
+              f"（{info['question_relations']} 条），旧题组残留 {info['legacy_association_group_rows']} 道")
     print()
     if problems:
         print("  结论：存在漂移，页面看到的就是旧版本。")

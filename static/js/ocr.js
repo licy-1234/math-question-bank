@@ -251,16 +251,16 @@
         }
 
         // ---- Review box (评述框) image pipeline --------------------------------
-        // #reviewInsertImageBtn / #reviewImageInput / [data-review-dropzone] are
-        // authored in index.html. Every lookup is null-safe so older DOM builds
-        // keep working, and the wiring runs exactly once.
+        // #reviewIllustrationDropZone / [data-review-dropzone] are authored in
+        // index.html. Every lookup is null-safe so older DOM builds keep
+        // working, and the wiring runs exactly once.
+        //
+        // 历史说明：这里曾绑定 #reviewInsertImageBtn / #reviewImageInput
+        // （按钮 + 隐藏文件选择器）。经核查其数据流（uploadIllustration ->
+        // /api/upload -> insertImageTag 光标插入）与「评述配图 / 插图」拖拽区
+        // 点击上传、textarea 粘贴导入完全重合，且拖拽本身支持多文件，
+        // 按钮无独占场景，已按冗余入口删除（保留本注释说明来源）。
         let reviewImageHandlersBound = false;
-
-        function triggerReviewImageUpload() {
-            const input = document.getElementById('reviewImageInput');
-            if (input) input.click();
-        }
-        window.triggerReviewImageUpload = triggerReviewImageUpload;
 
         function setupReviewPasteListener(element) {
             if (!element) return;
@@ -303,25 +303,8 @@
             if (reviewImageHandlersBound) return;
             reviewImageHandlersBound = true;
 
-            const insertBtn = document.getElementById('reviewInsertImageBtn');
-            const imageInput = document.getElementById('reviewImageInput');
             const reviewTextarea = document.getElementById('editReview');
             const dropzone = document.querySelector('[data-review-dropzone="editReview"]');
-
-            if (insertBtn) {
-                insertBtn.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    triggerReviewImageUpload();
-                });
-            }
-
-            if (imageInput) {
-                imageInput.addEventListener('change', () => {
-                    const files = imageInput.files ? Array.from(imageInput.files) : [];
-                    files.forEach((file) => uploadIllustration(file, 'editReview'));
-                    imageInput.value = '';
-                });
-            }
 
             if (reviewTextarea) {
                 setupReviewPasteListener(reviewTextarea);
