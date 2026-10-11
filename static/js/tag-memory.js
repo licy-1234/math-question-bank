@@ -244,13 +244,23 @@
         input.setAttribute('data-lpignore', 'true');
         input.setAttribute('data-1p-ignore', 'true');
         input.setAttribute('data-bwignore', 'true');
+        // 初始只读：浏览器不会对 readonly 字段弹「保存的信息」自动填充卡。
         input.setAttribute('readonly', 'readonly');
         const unlock = () => input.removeAttribute('readonly');
-        input.addEventListener('pointerdown', unlock);
-        input.addEventListener('mousedown', unlock);
-        input.addEventListener('touchstart', unlock, { passive: true });
+        const relock = () => {
+            // 失焦即重新上锁：浏览器只在字段「聚焦的瞬间」决定是否弹自动填充卡，
+            // 保证下一次聚焦时依旧是 readonly，卡就永远弹不出来。
+            if (document.activeElement !== input) input.setAttribute('readonly', 'readonly');
+        };
+        // 解锁时机有讲究：不能挂在 pointerdown / mousedown / focus 上——这些事件
+        // 与 focus 同时或更早，先解锁就等于没防（上一版的教训）。click / keydown /
+        // touchstart / mouseup / contextmenu 都能让用户正常开始输入与粘贴。
+        input.addEventListener('click', unlock);
         input.addEventListener('keydown', unlock);
-        input.addEventListener('focus', unlock);
+        input.addEventListener('touchstart', unlock, { passive: true });
+        input.addEventListener('mouseup', unlock);
+        input.addEventListener('contextmenu', unlock);
+        input.addEventListener('blur', relock);
     }
 
     function attach(input, options) {
@@ -288,5 +298,5 @@
         fetchMemory(dim, true);
     }
 
-    window.MathBankTagMemory = { attach, closePanel, notifySaved, invalidate, fetchMemory };
+    window.MathBankTagMemory = { attach, closePanel, notifySaved, invalidate, fetchMemory, makeAutofillProof };
 })();

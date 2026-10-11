@@ -3060,3 +3060,41 @@ def test_memory_and_history_panels_are_viewport_clamped_and_mutually_exclusive()
 
     # 首帧就有定位样式：不依赖 Tailwind Play CDN 的异步编译。
     assert "body > .tag-memory-panel" in css_source
+
+
+def test_relation_note_memory_and_autofill_proof_coverage():
+    """关联补充说明：历史建议 + 按题草稿恢复；来源等填空框接入防自动填充组合拳。
+
+    回归背景一：filter-history 只写 autocomplete="off"，Chrome 的「保存的信息」
+    卡仍会盖在「来源」框上（还会整串覆盖输入）——必须复用 tag-memory 的
+    readonly 组合拳。回归背景二：补充说明打过一半没建联就切题，回来就是空的。
+    """
+    import_source = _read(STATIC_JS_DIR / "import.js")
+    filter_source = _read(STATIC_JS_DIR / "filter-history.js")
+    tag_source = _read(STATIC_JS_DIR / "tag-memory.js")
+
+    # 组合拳已导出，并被 filter-history（来源 / 标签 / 微观 / 关联补充说明）复用。
+    assert "window.MathBankTagMemory = {" in tag_source
+    assert "makeAutofillProof" in tag_source
+    assert "window.MathBankTagMemory.makeAutofillProof" in filter_source
+
+    # 解锁时机不得早于浏览器的填充判定（pointerdown / mousedown / focus 与 focus
+    # 同时或更早，先解锁就等于没防）；blur 必须重新上锁。
+    for event_name in ("'pointerdown'", "'mousedown'", "'focus'"):
+        assert f"addEventListener({event_name}, unlock)" not in tag_source
+    assert "addEventListener('click', unlock)" in tag_source
+    assert "addEventListener('keydown', unlock)" in tag_source
+    assert "addEventListener('blur', relock)" in tag_source
+
+    # 关联补充说明：历史面板 + 按题草稿的存 / 清 / 恢复。
+    for marker in (
+        "historyKey: 'relation_note'",
+        "MathBankFilterHistory.attach(relationCustomInput",
+        "function saveRelationDraft",
+        "function restoreRelationDraft",
+        "function clearRelationDraft",
+        "restoreRelationDraft();",
+        "clearRelationDraft();",
+        "'mathbank.relationDraft.' + qid",
+    ):
+        assert marker in import_source, marker

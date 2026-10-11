@@ -501,6 +501,60 @@
             }
         }
 
+        // —— 关联补充说明：草稿记忆 + 历史建议 ——
+        // 用户打过一半没建联就切题/关页，回来时输入框是空的，很气人。
+        // 草稿按题目 id 存 localStorage；历史建议由 MathBankFilterHistory 提供。
+
+        function relationDraftKey() {
+            const qid = parseInt(EditorState.questionId, 10);
+            return (Number.isSafeInteger(qid) && qid > 0) ? 'mathbank.relationDraft.' + qid : '';
+        }
+
+        function saveRelationDraft() {
+            const key = relationDraftKey();
+            const custom = document.getElementById('editRelationCustom');
+            if (!key || !custom) return;
+            const value = String(custom.value || '').trim();
+            const typeSelect = document.getElementById('editRelationType');
+            try {
+                if (!value) {
+                    localStorage.removeItem(key);
+                } else {
+                    localStorage.setItem(key, JSON.stringify({
+                        type: typeSelect ? typeSelect.value : '',
+                        value: value,
+                        ts: Date.now()
+                    }));
+                }
+            } catch (e) { /* localStorage 不可用时静默降级为不记忆 */ }
+        }
+
+        function clearRelationDraft() {
+            const key = relationDraftKey();
+            if (!key) return;
+            try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
+        }
+
+        // 切题 / 重开页面回到某道题时，把上次没提交的补充说明恢复回来。
+        // 只在输入框为空时生效，且绝不覆盖用户已输入的内容。
+        function restoreRelationDraft() {
+            const key = relationDraftKey();
+            const custom = document.getElementById('editRelationCustom');
+            if (!key || !custom || String(custom.value || '').trim()) return;
+            let draft = null;
+            try { draft = JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { draft = null; }
+            if (!draft || typeof draft.value !== 'string' || !draft.value.trim()) return;
+            const typeSelect = document.getElementById('editRelationType');
+            if (typeSelect && draft.type
+                    && Array.from(typeSelect.options).some(o => o.value === draft.type)) {
+                typeSelect.value = draft.type;
+                // change 会联动显隐与占位文案（multi_q_unify / one_q_variants / __custom__）。
+                typeSelect.dispatchEvent(new Event('change'));
+            }
+            if (custom.classList.contains('hidden')) custom.classList.remove('hidden');
+            custom.value = draft.value;
+        }
+
         // Update the "共 N 条关联" badge and toggle the associated panel visibility.
         function updateRelatedCountBadge(count, badgeEl, wrapperEl) {
             const badge = badgeEl || document.getElementById('relatedCountBadge');
@@ -772,6 +826,8 @@
                     showToast(`已按「${relationLabel}」与题目 #${seqNum || targetId} 建立关联！`, 'success');
 
                     resetEditorRelationTypeControl();
+                    // 补充说明已随关联落库，草稿完成使命，清除。
+                    clearRelationDraft();
 
                     // 刷新右侧预览区的关联变式题目卡片及下拉框。
                     // 传入 targetId 作为"请求发起时的选择"：下拉框会同步到已持久化的
@@ -895,6 +951,8 @@
                         ? container.querySelectorAll('.glass-list-item').length
                         : 0;
                     updateRelatedCountBadge(rendered, null, wrapper);
+                    // 关联区已按本题重置完毕，恢复该题未提交的补充说明草稿。
+                    restoreRelationDraft();
                     return refreshRelatedDropdown(associatedId, {
                         session, isCurrent, expectedValue: selectionAtRequest, commitBaseline: true
                     });
@@ -6705,6 +6763,20 @@
                         custom.classList.add('hidden');
                         custom.value = '';
                     }
+                });
+            }
+
+            // 关联补充说明：聚焦/输入时弹历史建议（MRU），输入即存草稿（防抖 300ms）。
+            const relationCustomInput = document.getElementById('editRelationCustom');
+            if (relationCustomInput && relationCustomInput.dataset.relationDraftBound !== '1') {
+                relationCustomInput.dataset.relationDraftBound = '1';
+                if (window.MathBankFilterHistory && typeof window.MathBankFilterHistory.attach === 'function') {
+                    window.MathBankFilterHistory.attach(relationCustomInput, { historyKey: 'relation_note' });
+                }
+                let relationDraftTimer = 0;
+                relationCustomInput.addEventListener('input', () => {
+                    clearTimeout(relationDraftTimer);
+                    relationDraftTimer = setTimeout(saveRelationDraft, 300);
                 });
             }
 

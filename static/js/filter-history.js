@@ -334,7 +334,14 @@
         options = options || {};
         const historyKey = options.historyKey || input.dataset.filterHistory || input.id || 'default';
         input.dataset.filterHistoryBound = '1';
-        input.setAttribute('autocomplete', 'off');
+        // 与 tag-memory 同一套防自动填充组合拳（初始 readonly + click/keydown 解锁 +
+        // blur 重锁）。只写 autocomplete="off" 挡不住 Chrome 的「保存的信息」卡，
+        // 它会盖在我们的历史面板上，选中还会整串覆盖用户输入（「来源」框的老毛病）。
+        if (window.MathBankTagMemory && typeof window.MathBankTagMemory.makeAutofillProof === 'function') {
+            window.MathBankTagMemory.makeAutofillProof(input);
+        } else {
+            input.setAttribute('autocomplete', 'off');
+        }
         const bound = { historyKey, onSelect: options.onSelect, record: options.record !== false };
 
         input.addEventListener('focus', () => renderPanel(input, bound));
