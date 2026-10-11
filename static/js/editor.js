@@ -923,6 +923,13 @@ window.functionTagBadge = functionTagBadge;
                 questionEditorRestoreFocus.focus({ preventScroll: true });
             }
             questionEditorRestoreFocus = null;
+            // 关闭弹窗时收起仍在浮动的标签记忆 / 历史输入面板，避免其残留在页面上错位。
+            if (window.MathBankTagMemory && typeof window.MathBankTagMemory.closePanel === 'function') {
+                window.MathBankTagMemory.closePanel();
+            }
+            if (window.MathBankFilterHistory && typeof window.MathBankFilterHistory.closePanel === 'function') {
+                window.MathBankFilterHistory.closePanel();
+            }
         }
 
         function restoreEditorAfterDiscard() {

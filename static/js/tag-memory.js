@@ -51,6 +51,7 @@
 
     function closePanel() {
         if (activePanel) {
+            if (window.MathBankFloatingPanel) window.MathBankFloatingPanel.unmount(activePanel);
             activePanel.remove();
             activePanel = null;
             activeInput = null;
@@ -104,7 +105,11 @@
             .slice(0, 8);
 
         const panel = document.createElement('div');
-        panel.className = 'tag-memory-panel absolute z-40 mt-1 w-full max-w-md rounded-xl border border-slate-200 bg-white shadow-lg text-xs overflow-hidden';
+        // 定位/尺寸/层级已全部由 MathBankFloatingPanel 以内联样式接管，className 只留
+        // 外观类——否则 absolute / mt-1 / w-full / max-w-md / z-40 这些类在 Play CDN
+        // 异步编译生效前不存在，面板会先以普通块级元素成为 body（display:flex）的在流
+        // 子项，把整页布局挤变形。
+        panel.className = 'tag-memory-panel rounded-xl border border-slate-200 bg-white shadow-lg text-xs';
         let html = '';
 
         if (memory.length) {
@@ -152,12 +157,16 @@
 
         panel.innerHTML = html;
 
-        const inputRect = () => input.getBoundingClientRect();
-        document.body.appendChild(panel);
-        const rect = inputRect();
-        panel.style.left = Math.round(rect.left + window.scrollX) + 'px';
-        panel.style.top = Math.round(rect.bottom + window.scrollY) + 'px';
-        panel.style.width = Math.max(rect.width, 260) + 'px';
+        // 换面板前先撤掉旧面板（含滚动/resize 监听），避免 DOM 里残留多个面板。
+        if (activePanel) {
+            if (window.MathBankFloatingPanel) window.MathBankFloatingPanel.unmount(activePanel);
+            activePanel.remove();
+            activePanel = null;
+        }
+        // 与 filter-history 的面板互斥：两套面板任何时刻只留一个，避免相互叠压。
+        if (window.MathBankFilterHistory && typeof window.MathBankFilterHistory.closePanel === 'function') {
+            window.MathBankFilterHistory.closePanel();
+        }
 
         panel.addEventListener('click', (event) => {
             const button = event.target.closest('button[data-action]');
@@ -173,7 +182,10 @@
                         invalidate(dim);
                         removeTagFromInput(input, tag);
                         return fetchMemory(dim, true).then(() => renderPanel(input, options));
-                    });
+                    })
+                    // 断网 / 后端报错时不要留 unhandled rejection，同时作废缓存，
+                    // 下次聚焦会重新拉取，不会一直显示已删除的那条。
+                    .catch(() => invalidate(dim));
             } else if (action === 'clear-all') {
                 if (!window.confirm('确定清空该类型的全部标签记忆吗？（不影响已保存的题目）')) return;
                 fetch(`/api/tag-memory?dim=${encodeURIComponent(dim)}&clear=true`, { method: 'DELETE' })
@@ -181,11 +193,35 @@
                         invalidate(dim);
                         lastUsedTag[dim] = '';
                         return fetchMemory(dim, true).then(() => renderPanel(input, options));
-                    });
+                    })
+                    .catch(() => invalidate(dim));
             }
         });
 
-        if (activePanel) activePanel.remove();
+        // fixed + 视口钳制定位（详见 filter-history.js 里的 MathBankFloatingPanel）：
+        // 不再用 getBoundingClientRect()+scrollX/scrollY 一次性算坐标，
+        // 也就不会再出现「来源在最右列 → 面板越过视口右缘被裁掉 / 撑出横向滚动条」。
+        let placed = true;
+        if (window.MathBankFloatingPanel) {
+            placed = window.MathBankFloatingPanel.mount(panel, input, () => closePanel());
+        } else {
+            // 兜底：公共工具缺失时至少保持 fixed 定位，绝不退化成参与布局的块级元素。
+            const rect = input.getBoundingClientRect();
+            panel.style.position = 'fixed';
+            panel.style.zIndex = '60';
+            panel.style.margin = '0';
+            panel.style.boxSizing = 'border-box';
+            document.body.appendChild(panel);
+            panel.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - panel.offsetWidth - 8)) + 'px';
+            panel.style.top = Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - panel.offsetHeight - 8)) + 'px';
+        }
+        // 锚点不在视口内（例如所在面板刚被切走）：不留任何残留面板。
+        if (!placed) {
+            if (window.MathBankFloatingPanel) window.MathBankFloatingPanel.unmount(panel);
+            panel.remove();
+            return;
+        }
+
         activePanel = panel;
         activeInput = input;
         document.addEventListener('mousedown', onGlobalMousedown, true);
@@ -227,6 +263,10 @@
 
         input.addEventListener('focus', () => {
             fetchMemory(dim).then((items) => {
+                // 请求返回前焦点可能已经移走、输入框也可能已被重渲染销毁
+                // （例如组卷筛选行被整段重建）。此时再渲染就会把面板挂到已失效的
+                // 输入框上，还会顺手 closePanel() 掉别处刚打开的面板。
+                if (!input.isConnected || document.activeElement !== input) return;
                 if (items.length) lastUsedTag[dim] = items[0].tag;
                 closePanel();
                 renderPanel(input, options);

@@ -38,6 +38,8 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .pytest/
+# 本地跑 pytest 时 --basetemp 指向仓库内会产生上千个临时文件，忽略之
+tests/.pytest_tmp/
 scratch/
 tools/tmp_*
 

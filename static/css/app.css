@@ -5824,3 +5824,50 @@ button[aria-disabled="true"]:hover,
     padding: 0;
     border-radius: 3px;
 }
+
+/* ---------------------------------------------------------------------------
+ * 记忆 / 历史候选面板（由 static/js/tag-memory.js 与 static/js/filter-history.js
+ * 动态创建）。左/右/上/下位置与宽度由 JS 内联计算并钳制在视口内，这里只负责
+ * 「入 DOM 的第一帧就成立」的骨架样式。
+ *
+ * 原因：本项目 Tailwind 走 Play CDN（运行时异步编译），面板 className 里的
+ * absolute / z-40 / mt-1 / w-full 等工具类在节点插入 DOM 的那一刻还没有样式，
+ * 面板会先以普通块级元素参与布局——挂在筛选行里会把 .bank-filter-row 撑高，
+ * 挂到 body 上则变成 body（display:flex）的在流 flex 子项，整页被挤错位。
+ * 这里用 body > .tag-memory-panel（特异度高于单类工具类）把定位与层级钉死，
+ * 使面板从第一帧起就是脱离文档流的浮层。
+ * ------------------------------------------------------------------------- */
+body > .tag-memory-panel {
+    position: fixed;            /* 视口坐标，不受任何祖先滚动容器 / overflow 影响 */
+    z-index: 60;                /* 高于编辑弹窗 #editorSection 的 49 */
+    box-sizing: border-box;
+    margin: 0;
+    max-width: none;
+    overflow-x: hidden;
+    overflow-y: auto;
+    background: var(--apple-bg-elevated, #ffffff);
+    color: var(--text-primary, #334155);
+    /* border 也写在这里：一是「border / border-slate-200」同样要等 Play CDN 编译，
+       第一帧会没有边框；二是 border-slate-200 是亮色值，暗色模式下会留一圈亮边，
+       而本规则的特异度（0,1,1）高于单类工具类，写死后 Tailwind 也覆盖不回来，
+       所以用中性半透明色而不是 slate-200。 */
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(15, 23, 42, 0.16), 0 4px 12px rgba(15, 23, 42, 0.08);
+    font-size: 12px;
+    line-height: 1.5;
+}
+body > .tag-memory-panel * {
+    box-sizing: border-box;
+}
+/* 面板背景改随主题变量后，暗色模式下会变成深色，而面板内的文本是运行时按亮色写的
+   （text-slate-700 / text-slate-600 / hover:bg-slate-50，没有 dark: 变体）——
+   在 #161F30 上 slate-700 的对比度只有约 1.5:1，几乎看不见。这里按暗色补一版。
+   选择器带 .dark 前缀，特异度高于 Tailwind 单类工具类，无需 !important。 */
+.dark body > .tag-memory-panel .text-slate-700,
+.dark body > .tag-memory-panel .text-slate-600 {
+    color: #CBD5E1;
+}
+.dark body > .tag-memory-panel .hover\:bg-slate-50:hover {
+    background: rgba(255, 255, 255, 0.06);
+}

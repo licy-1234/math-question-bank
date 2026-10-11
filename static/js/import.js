@@ -3362,7 +3362,6 @@
             })
             .then(r => r.json())
             .then(res => {
-                console.log("[Storage Cleanup] Server cleaned temporary crops:", res);
                 window.tempCroppedPathsThisSession = [];
             })
             .catch(err => {

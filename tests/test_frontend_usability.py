@@ -1689,8 +1689,9 @@ def test_bank_browser_uses_detail_first_layout_and_card_based_editor_dialog():
         "searchInput",
         "filterType",
         "filterDifficulty",
-        "filterCompulsory",
-        "filterChapter",
+        # 「必修/选修」下拉已随分类体系重构移除（commit b847501），
+        # 章节筛选由 id="filterChapter" 更名为 id="filterChapterCode"。
+        "filterChapterCode",
         "filterSource",
         "filterSort",
         "questionsList",
@@ -3004,3 +3005,58 @@ def test_generated_tailwind_classes_use_configured_scales():
         )
     }
     assert used_standard_steps <= standard_steps
+
+
+def test_memory_and_history_panels_are_viewport_clamped_and_mutually_exclusive():
+    """记忆 / 历史候选面板：固定定位 + 视口钳制 + 滚动跟随 + 两套面板互斥。
+
+    回归背景：面板曾用 Tailwind 的 absolute / mt-1 / z-40 / w-full 工具类定位，
+    而本项目 Tailwind 走 Play CDN（运行时异步编译），节点入 DOM 的首帧这些类
+    还没有样式，面板会以普通块级元素参与布局——挂在筛选行里把行撑高，挂到
+    body 上则变成 body（display:flex）的在流 flex 子项，整页错位抖动；同时
+    坐标只在渲染时算一次，弹窗滚动 / 窗口 resize 后就残留在错位处。
+    """
+    tag_source = _read(STATIC_JS_DIR / "tag-memory.js")
+    filter_source = _read(STATIC_JS_DIR / "filter-history.js")
+    css_source = _read(CSS_PATH)
+
+    # 公共定位工具由 filter-history.js 暴露（index.html 中它先于 tag-memory.js 加载）。
+    assert "window.MathBankFloatingPanel" in filter_source
+    for marker in (
+        "function floatMount",
+        "function floatReposition",
+        "function floatUnmount",
+        "function onViewportChanged",
+        "FLOAT.SAFE",
+        "FLOAT.MAX_WIDTH",
+    ):
+        assert marker in filter_source, marker
+
+    # 两个组件都改为挂载公共工具，不再各写一套一次性坐标计算。
+    for source in (tag_source, filter_source):
+        assert "MathBankFloatingPanel.mount(" in source
+        assert "MathBankFloatingPanel.unmount(" in source
+
+    # 面板挂到 body 并写死 fixed：既不参与 body 的 flex 布局，也不受祖先 overflow 裁剪。
+    assert "document.body.appendChild(panel)" in filter_source
+    assert "panel.style.position = 'fixed'" in filter_source
+    # 层级必须高于编辑弹窗遮罩 #editorSection 的 z-index: 49。
+    assert "panel.style.zIndex = '60'" in filter_source
+    assert "z-index: 60;" in css_source
+    # 高度同样要钳制（超出则面板内部滚动）。
+    assert "panel.style.maxHeight = Math.round(height) + 'px'" in filter_source
+
+    # 旧的一次性坐标计算（会把「来源」这类最右列的面板推到视口外）必须消失。
+    assert "rect.bottom + window.scrollY" not in tag_source
+    assert "Math.max(rect.width, 260)" not in tag_source
+
+    # 滚动（capture 阶段，能收到任意祖先滚动容器）/ resize 跟随，锚点丢失即关闭。
+    assert "addEventListener('scroll', onViewportChanged, true)" in filter_source
+    assert "addEventListener('resize', onViewportChanged)" in filter_source
+
+    # 两套面板互斥，避免 tag-memory 面板与 filter-history 面板相互叠压。
+    assert "window.MathBankTagMemory.closePanel()" in filter_source
+    assert "window.MathBankFilterHistory.closePanel()" in tag_source
+
+    # 首帧就有定位样式：不依赖 Tailwind Play CDN 的异步编译。
+    assert "body > .tag-memory-panel" in css_source
