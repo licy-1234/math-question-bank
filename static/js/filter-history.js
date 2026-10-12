@@ -11,8 +11,14 @@
  *     options = {
  *       historyKey: 'bank_micro' | ...,   // 缺省取 input.dataset.filterHistory
  *       onSelect: (value) => void,        // 缺省取 input.dataset.filterOnSelect 指向的全局函数
- *       record: true                      // 是否在本输入 committed 时记录（默认 true）
+ *       record: true,                     // 是否在本输入 committed 时记录（默认 true）
+ *       getCandidates: () => ['教材', ...],  // 可选：预取的候选值（同步，非历史输入）
+ *       candidateTitle: '题库中的来源'      // 可选：候选区块标题
  *     }
+ *
+ * 面板渲染顺序固定为「历史输入 → 候选」：候选会剔除与历史输入重复的项，
+ * 候选区块为空时不渲染标题；两者都为空时不开面板（维持原行为）。
+ * 点击候选与点击历史同行为：回填 + 计入历史 + 触发 onSelect。
  *   window.MathBankFilterHistory.record(historyKey, value)
  *   window.MathBankFilterHistory.list(historyKey)
  *   window.MathBankFilterHistory.clear(historyKey)
@@ -255,33 +261,76 @@
         return null;
     }
 
+    // 候选值（如 /api/sources 预取的「题库中的来源」）是同步快照：调用方自己
+    // 负责刷新缓存，这里只做清洗（去空白 / 去重 / 丢掉长到历史也存不下的值）。
+    function candidateValues(input, options) {
+        if (!options || typeof options.getCandidates !== 'function') return [];
+        let values;
+        try {
+            values = options.getCandidates(input);
+        } catch (error) {
+            return [];
+        }
+        const seen = new Set();
+        const result = [];
+        (Array.isArray(values) ? values : []).forEach((item) => {
+            const clean = String(item == null ? '' : item).trim();
+            if (!clean || clean.length > 80 || seen.has(clean)) return;
+            seen.add(clean);
+            result.push(clean);
+        });
+        return result;
+    }
+
     function renderPanel(input, options) {
         const historyKey = options.historyKey;
         const query = String(input.value || '').trim().toLowerCase();
         const items = list(historyKey).filter(
             (item) => !query || item.toLowerCase().indexOf(query) !== -1
         );
+        // 候选排在历史输入之后，并剔除与历史重复的取值，避免同一项在面板里出现两次。
+        const knownHistory = items.map((item) => String(item || '').trim());
+        const candidates = candidateValues(input, options).filter(
+            (item) => knownHistory.indexOf(item) === -1
+                && (!query || item.toLowerCase().indexOf(query) !== -1)
+        );
 
         closePanel();
-        if (!items.length) return;
+        // 无历史也无候选：维持原行为，不开面板（不弹一个空壳）。
+        if (!items.length && !candidates.length) return;
 
         const panel = document.createElement('div');
         // 定位/尺寸/层级已全部由 MathBankFloatingPanel 以内联样式接管，className 只留
         // 外观类——否则 absolute / mt-1 / w-full / z-40 这些类在 Play CDN 异步编译生效前
         // 不存在，面板会先以普通块级元素撑坏所在行。
         panel.className = 'tag-memory-panel rounded-xl border border-slate-200 bg-white shadow-lg text-xs';
-        let html = '<div class="px-3 pt-2 pb-1 flex items-center justify-between">'
-            + '<span class="text-[10px] font-semibold text-slate-400">历史输入（最近使用优先）</span>'
-            + '<button type="button" data-action="clear-all" class="text-[10px] text-slate-400 hover:text-rose-500">清空历史</button>'
-            + '</div>'
-            + '<div class="max-h-52 overflow-y-auto pb-1">';
-        items.forEach((item) => {
-            html += '<div class="flex items-center gap-1.5 px-3 py-1.5 hover:bg-slate-50">';
-            html += `<button type="button" data-action="pick" data-value="${escapeHtml(item)}" class="flex-1 min-w-0 text-left truncate text-slate-700">${escapeHtml(item)}</button>`;
-            html += `<button type="button" data-action="delete" data-value="${escapeHtml(item)}" title="删除这条历史" class="shrink-0 text-slate-300 hover:text-rose-500 px-1"><i class="fa-solid fa-xmark text-[10px]"></i></button>`;
+        let html = '';
+        if (items.length) {
+            html += '<div class="px-3 pt-2 pb-1 flex items-center justify-between">'
+                + '<span class="text-[10px] font-semibold text-slate-400">历史输入（最近使用优先）</span>'
+                + '<button type="button" data-action="clear-all" class="text-[10px] text-slate-400 hover:text-rose-500">清空历史</button>'
+                + '</div>'
+                + '<div class="max-h-52 overflow-y-auto pb-1">';
+            items.forEach((item) => {
+                html += '<div class="flex items-center gap-1.5 px-3 py-1.5 hover:bg-slate-50">';
+                html += `<button type="button" data-action="pick" data-value="${escapeHtml(item)}" class="flex-1 min-w-0 text-left truncate text-slate-700">${escapeHtml(item)}</button>`;
+                html += `<button type="button" data-action="delete" data-value="${escapeHtml(item)}" title="删除这条历史" class="shrink-0 text-slate-300 hover:text-rose-500 px-1"><i class="fa-solid fa-xmark text-[10px]"></i></button>`;
+                html += '</div>';
+            });
             html += '</div>';
-        });
-        html += '</div>';
+        }
+        if (candidates.length) {
+            // 候选区块为空时不渲染标题；候选只读，不给 × 删除按钮（它不是历史记录）。
+            const divider = items.length ? ' border-t border-slate-100' : '';
+            html += `<div class="px-3 pt-2 pb-1 text-[10px] font-semibold text-slate-400${divider}">`
+                + escapeHtml(options.candidateTitle || '候选项')
+                + '</div>'
+                + '<div class="max-h-52 overflow-y-auto pb-1">';
+            candidates.forEach((item) => {
+                html += `<button type="button" data-action="pick" data-value="${escapeHtml(item)}" class="block w-full text-left px-3 py-1.5 hover:bg-slate-50 truncate text-slate-600">${escapeHtml(item)}</button>`;
+            });
+            html += '</div>';
+        }
         panel.innerHTML = html;
 
         panel.addEventListener('click', (event) => {
@@ -342,7 +391,15 @@
         } else {
             input.setAttribute('autocomplete', 'off');
         }
-        const bound = { historyKey, onSelect: options.onSelect, record: options.record !== false };
+        // getCandidates / candidateTitle 必须透传给 renderPanel：面板每次渲染都
+        // 重新读一次候选快照，所以调用方刷新缓存后下一次聚焦即可生效。
+        const bound = {
+            historyKey,
+            onSelect: options.onSelect,
+            record: options.record !== false,
+            getCandidates: options.getCandidates,
+            candidateTitle: options.candidateTitle
+        };
 
         input.addEventListener('focus', () => renderPanel(input, bound));
         input.addEventListener('click', () => {

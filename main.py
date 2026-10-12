@@ -454,6 +454,10 @@ async def app_lifespan(_app: FastAPI):
         yield
         return
 
+    # 历史标签记忆回填：只读题库 + 只写 data_backup/tag_memory.json，
+    # 幂等且自带异常兜底，失败也不会拖住启动。
+    _backfill_free_text_tag_memory()
+
     DOCUMENT_TASKS.start_maintenance(interval_seconds=60.0)
     threading.Thread(
         target=start_startup_cleanup,
@@ -3411,6 +3415,82 @@ def _parse_free_text_list(raw: Optional[str]) -> list[str]:
         except (ValueError, TypeError):
             pass
     return split_custom_tags(text)
+
+
+def _harvest_free_text_tag_memory(db) -> dict[str, list[tuple[str, int]]]:
+    """Read-only harvest of historical free-text tag values from the bank.
+
+    题库里绝大多数题目是在「标签记忆」上线**之前**录入的：它们的自定义标签
+    真实存在于库里，却从没被 ``record_usage`` 记过，面板因此一直显示
+    「暂无记忆」。这里把这段历史值捞出来供回填使用。
+
+    取值来源两处，全部只读 SELECT：
+      * ``question_tags`` 中 dim ∈ {custom, micro} 的 code（新标签体系）；
+      * ``questions.tags``（legacy 逗号分隔字符串，归入 custom）。
+
+    同一个 tag 若在同一道题的两个来源里都出现，**按题去重只算一次**，
+    避免 use_count 被重复计数虚高。返回 ``{dim: [(tag, 出现题数), ...]}``，
+    顺序确定：按出现题数**升序**（同次数按名称）。backfill_from_bank 按传入
+    顺序递增时间戳，所以升序传入 == 用得最多的那条拿到最新时间戳，
+    正好排在「最近使用优先」面板的第一位。
+    """
+
+    owners: dict[str, dict[str, set[int]]] = {
+        dim: {} for dim in tag_memory.MEMORY_DIMENSIONS
+    }
+    rows = (
+        db.query(QuestionTag.question_id, QuestionTag.dim, QuestionTag.code)
+        .filter(QuestionTag.dim.in_(tuple(tag_memory.MEMORY_DIMENSIONS)))
+        .all()
+    )
+    for question_id, dim, code in rows:
+        bucket = owners.get(str(dim or "").strip())
+        if bucket is None:
+            continue
+        for tag in split_custom_tags(code):
+            bucket.setdefault(tag, set()).add(int(question_id or 0))
+
+    legacy = owners.get("custom")
+    if legacy is not None:
+        legacy_rows = db.query(Question.id, Question.tags).filter(
+            Question.tags.isnot(None), Question.tags != ""
+        ).all()
+        for question_id, raw_tags in legacy_rows:
+            if not raw_tags:
+                continue
+            for tag in split_custom_tags(raw_tags):
+                legacy.setdefault(tag, set()).add(int(question_id or 0))
+
+    harvested: dict[str, list[tuple[str, int]]] = {}
+    for dim, bucket in owners.items():
+        ordered = sorted(bucket, key=lambda tag: (len(bucket[tag]), tag))
+        harvested[dim] = [(tag, len(bucket[tag])) for tag in ordered]
+    return harvested
+
+
+def _backfill_free_text_tag_memory() -> None:
+    """Seed the free-text tag memory from the bank; never blocks startup.
+
+    只写 ``data_backup/tag_memory.json``（经 ``tag_memory.backfill_from_bank``），
+    绝不写任何数据库表；任何一步失败都只留日志，应用照常启动。
+    """
+
+    try:
+        from mathbank.database import SessionLocal
+
+        with SessionLocal() as db:
+            harvested = _harvest_free_text_tag_memory(db)
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"[tag-memory] 读取题库历史标签失败（已跳过回填）: {type(exc).__name__}: {exc}")
+        return
+    for dim, entries in harvested.items():
+        try:
+            added = tag_memory.backfill_from_bank(dim, entries)
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"[tag-memory] 回填 {dim} 标签记忆失败（已忽略）: {type(exc).__name__}: {exc}")
+            continue
+        if added:
+            print(f"[tag-memory] 已从题库回填 {added} 条 {dim} 历史标签记忆。")
 
 
 @app.get("/api/tag-memory")

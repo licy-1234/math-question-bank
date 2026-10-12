@@ -3159,3 +3159,193 @@ def test_source_filter_and_catalog_search_autofill_proof_coverage():
         assert element_id in elements, element_id
     assert elements["filterSource"].get("type") == "text"
     assert elements["tagMicroCatalogSearch"].get("type") == "text"
+
+
+def _run_node(script: str) -> None:
+    node = shutil.which("node")
+    assert node, "Node.js is required for the frontend executable regression"
+    result = subprocess.run(
+        [node, "-"],
+        input=script,
+        encoding="utf-8",
+        cwd=PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+# filter-history.js 在 node 里跑起来的最小 DOM 替身（面板定位只用到 rect / 视口）。
+_FILTER_HISTORY_DOM_STUB = r"""
+const storage = {};
+global.localStorage = {
+    getItem(key) { return Object.prototype.hasOwnProperty.call(storage, key) ? storage[key] : null; },
+    setItem(key, value) { storage[key] = String(value); }
+};
+function makeElement(tag) {
+    const el = {
+        tagName: tag, style: {}, dataset: {}, handlers: {}, children: [],
+        innerHTML: '', value: '', isConnected: true, scrollHeight: 120, parent: null,
+        addEventListener(type, fn) { (el.handlers[type] = el.handlers[type] || []).push(fn); },
+        removeEventListener() {},
+        appendChild(child) { child.parent = el; el.children.push(child); return child; },
+        remove() {
+            el.isConnected = false;
+            if (el.parent) {
+                const index = el.parent.children.indexOf(el);
+                if (index >= 0) el.parent.children.splice(index, 1);
+            }
+        },
+        contains() { return false; },
+        getBoundingClientRect() {
+            return { left: 20, top: 100, right: 220, bottom: 122, width: 200, height: 22 };
+        },
+        dispatchEvent(event) {
+            (el.handlers[event.type] || []).forEach((fn) => fn(event));
+            return true;
+        },
+        setAttribute() {}, removeAttribute() {}, querySelectorAll() { return []; }
+    };
+    return el;
+}
+global.document = {
+    documentElement: { clientWidth: 1280, clientHeight: 900 },
+    body: makeElement('body'),
+    activeElement: null,
+    createElement: makeElement,
+    addEventListener() {}, removeEventListener() {}
+};
+global.window = { addEventListener() {}, removeEventListener() {}, innerWidth: 1280, innerHeight: 900 };
+global.requestAnimationFrame = () => 0;
+global.cancelAnimationFrame = () => {};
+global.Event = class { constructor(type) { this.type = type; } };
+"""
+
+
+def test_filter_history_panel_renders_candidates_after_history():
+    """候选区块：排在历史输入之后、剔除重复项、点击即回填并计入历史、空则不开面板。"""
+
+    filter_source = _read(STATIC_JS_DIR / "filter-history.js")
+    _run_node(_FILTER_HISTORY_DOM_STUB + filter_source + r"""
+const historyApi = window.MathBankFilterHistory;
+if (!historyApi) throw new Error('MathBankFilterHistory was not exported');
+
+function openPanel(input) {
+    (input.handlers.focus || []).forEach((fn) => fn());
+    return document.body.children[document.body.children.length - 1];
+}
+
+// 1) 历史 + 候选：候选排在历史之后，且与历史重复的项不再出现一次。
+const first = makeElement('input');
+historyApi.attach(first, {
+    historyKey: 'edit_source',
+    getCandidates: () => ['教材', '《三维设计》'],
+    candidateTitle: '题库中的来源'
+});
+historyApi.record('edit_source', '教材');
+const panelHtml = openPanel(first).innerHTML;
+const historyAt = panelHtml.indexOf('历史输入（最近使用优先）');
+const candidateAt = panelHtml.indexOf('题库中的来源');
+if (historyAt === -1) throw new Error('history section missing');
+if (candidateAt === -1) throw new Error('candidate section missing');
+if (!(historyAt < candidateAt)) throw new Error('candidates must render after history');
+// 历史区块里「教材」已经出现过，候选区块不得再出现一次。
+const candidateSection = panelHtml.slice(candidateAt);
+if (candidateSection.indexOf('教材') !== -1) throw new Error('candidate section repeated a history entry');
+if (candidateSection.indexOf('data-value="《三维设计》"') === -1) throw new Error('candidate entry missing');
+
+// 2) 点击候选：回填输入框 + 计入历史（与点击历史条目同行为）。
+const panel = document.body.children[document.body.children.length - 1];
+const click = (panel.handlers.click || [])[0];
+if (typeof click !== 'function') throw new Error('panel click handler missing');
+click({ target: { closest: () => ({ dataset: { action: 'pick', value: '《三维设计》' } }) } });
+if (first.value !== '《三维设计》') throw new Error('candidate did not fill the input');
+if (historyApi.list('edit_source')[0] !== '《三维设计》') throw new Error('candidate was not recorded');
+
+// 3) 无历史也无候选：维持原行为，不开面板。
+const before = document.body.children.length;
+const empty = makeElement('input');
+historyApi.attach(empty, { historyKey: 'empty_key', getCandidates: () => [] });
+openPanel(empty);
+if (document.body.children.length !== before) throw new Error('empty panel must not open');
+
+// 4) 只有候选、没有历史：也要能开面板并渲染标题。
+const fresh = makeElement('input');
+historyApi.attach(fresh, {
+    historyKey: 'fresh_key',
+    getCandidates: () => ['2025全国甲卷'],
+    candidateTitle: '题库中的来源'
+});
+const freshHtml = openPanel(fresh).innerHTML;
+if (freshHtml.indexOf('题库中的来源') === -1) throw new Error('candidate-only panel lost its title');
+if (freshHtml.indexOf('data-value="2025全国甲卷"') === -1) throw new Error('candidate-only entry missing');
+""")
+
+
+def test_editor_source_history_and_candidate_coverage():
+    """编辑区「来源」框（editSource）接通历史 + 题库候选；筛选栏 filterSource 保持原样。
+
+    回归背景：编辑弹窗里的来源框（截图里「如：2025全国甲卷」那个）此前完全没有
+    候选能力，只能手打；而 /api/sources 已经聚合了题库里全部来源。侧栏
+    #filterSource 不能走这条路——它自带 #filterSourceSuggestions 下拉，
+    再挂一个历史面板就是双浮层叠压（上一轮已锁死）。
+    """
+
+    editor_source = _read(STATIC_JS_DIR / "editor.js")
+    import_source = _read(STATIC_JS_DIR / "import.js")
+    filter_source = _read(STATIC_JS_DIR / "filter-history.js")
+    tag_source = _read(STATIC_JS_DIR / "tag-memory.js")
+    elements = _index_elements()
+
+    # filter-history：候选能力是本组件的一部分，options 必须透传给 renderPanel。
+    for marker in (
+        "function candidateValues(",
+        "typeof options.getCandidates !== 'function'",
+        "options.candidateTitle",
+        "候选排在历史输入之后",
+        "getCandidates: options.getCandidates",
+        "candidateTitle: options.candidateTitle",
+        "if (!items.length && !candidates.length) return;",
+    ):
+        assert marker in filter_source, marker
+
+    # editor.js：editSource 接上 attach（历史输入 + 题库候选 + /api/sources 缓存）。
+    for marker in (
+        "MathBankFilterHistory.attach(editSource",
+        "historyKey: 'edit_source'",
+        "getCandidates: () => editorSourceCandidates.slice()",
+        "candidateTitle: '题库中的来源'",
+        "function refreshEditorSourceCandidates()",
+        "fetch('/api/sources')",
+        "window.refreshEditorSourceCandidates = refreshEditorSourceCandidates;",
+    ):
+        assert marker in editor_source, marker
+
+    # 每次打开编辑弹窗都要刷新候选缓存。
+    open_block = _js_function_block(editor_source, "function openQuestionEditorModal(panelId = 'content')")
+    assert "window.refreshEditorSourceCandidates()" in open_block
+
+    # 保存成功后同样刷新：本次新填的来源要立刻进入候选。
+    save_block = _js_function_block(import_source, "function saveQuestion(skipCheck = false)")
+    assert "window.refreshEditorSourceCandidates()" in save_block
+
+    # makeAutofillProof 现在会被调用两次（业务代码 + attach 内部），必须有幂等守卫，
+    # 否则 unlock/relock 闭包会重复注册、把 readonly 组合拳打架。
+    assert "input.dataset.autofillProofBound === '1'" in tag_source
+    assert "autofillProofBound" in tag_source
+
+    # 反向断言：筛选栏 filterSource 仍然**没有**被接 attach（保持自有下拉，防双面板）。
+    assert "MathBankFilterHistory.attach(sourceInput" not in import_source
+    assert "MathBankFilterHistory.attach(document.getElementById('filterSource')" not in import_source
+    assert "MathBankFilterHistory.attachAll" not in import_source
+
+    # 原有能力不得被破坏。
+    for marker in (
+        "window.MathBankTagMemory.makeAutofillProof(editSource)",
+        "editSource.addEventListener('input', renderEditorPaperMeta)",
+    ):
+        assert marker in editor_source, marker
+
+    assert "editSource" in elements
+    assert elements["editSource"].get("type") == "text"

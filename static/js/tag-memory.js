@@ -239,6 +239,12 @@
      *      pointerdown / focus / keydown 任一触发时立刻解锁，用户完全无感。
      */
     function makeAutofillProof(input) {
+        // 幂等守卫：editSource 这类输入框会先被业务代码调一次、再被
+        // MathBankFilterHistory.attach 调一次。浏览器按「同一元素 + 同一监听器
+        // 类型 + 同一 capture 标志」去重，但这里每次都是新的闭包，去重不了——
+        // 重复注册 unlock/relock 会让 readonly 的解锁/重锁互相打架。
+        if (!input || input.dataset.autofillProofBound === '1') return;
+        input.dataset.autofillProofBound = '1';
         input.setAttribute('autocomplete', 'off');
         input.setAttribute('data-form-type', 'other');
         input.setAttribute('data-lpignore', 'true');

@@ -32,6 +32,12 @@ MEMORY_DIMENSIONS = ("custom", "micro")
 MAX_MEMORY_ENTRIES_PER_DIM = 500
 MAX_TAG_LENGTH = 120
 
+# 回填条目的固定基准时间：绝不用 datetime.now()。回填是「补记历史上真实用过、
+# 但当时还没这套记忆功能」的标签，用当下时间会让每次启动写出的文件都不同
+# （既不幂等，也会把老标签顶到 MRU 最前）。固定基准 + 按序递增微秒 =>
+# 多次回填字节级一致，且永远排在真实使用（时间戳更新）之后。
+BACKFILL_BASE_TIME = datetime(2026, 1, 1)
+
 _LOCK = threading.Lock()
 
 
@@ -122,6 +128,78 @@ def record_usage(dim: str, tags: Iterable) -> list[dict]:
         store[dimension] = entries[:MAX_MEMORY_ENTRIES_PER_DIM]
         _save_store(store)
         return [dict(entry) for entry in store[dimension] if entry.get("tag") in set(clean)]
+
+
+def backfill_from_bank(dim: str, entries: Iterable) -> int:
+    """Seed the memory with tag values harvested from the existing question bank.
+
+    题库里绝大多数题目是在「标签记忆」上线**之前**录入的：它们的自定义标签
+    真实存在（question_tags / questions.tags），却从未被 ``record_usage``
+    记过，面板因此一直显示「暂无记忆」。本函数把这段历史补进 JSON。
+
+    契约（三次强调，都是硬约束）：
+      * **只写 JSON，不碰数据库**：``entries`` 由调用方只读查询后传入。
+      * **只注入缺失的 tag**：已存在的条目原样保留，绝不覆盖真实
+        ``use_count`` / ``last_used_at`` —— 因此可安全地在每次启动时执行。
+      * **确定性时间戳**：新条目用固定基准 + 按传入顺序递增微秒，
+        文件结果与「何时跑、跑几次」无关。
+
+    ``entries`` 形如 ``[(tag, use_count), ...]``；返回新增条数。
+    """
+
+    dimension = str(dim or "").strip()
+    if dimension not in MEMORY_DIMENSIONS:
+        return 0
+
+    prepared: list[tuple[str, int]] = []
+    seen: set[str] = set()
+    for item in entries or []:
+        try:
+            raw_tag, raw_count = item
+        except (TypeError, ValueError):
+            continue
+        tag = _clean_tag(raw_tag)
+        if not tag or tag in seen:
+            continue
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError):
+            count = 1
+        seen.add(tag)
+        prepared.append((tag, max(1, count)))
+    if not prepared:
+        return 0
+
+    added = 0
+    with _LOCK:
+        store = _load_store()
+        existing = store.get(dimension)
+        if not isinstance(existing, list):
+            existing = []
+        known = {
+            _clean_tag(entry.get("tag"))
+            for entry in existing
+            if isinstance(entry, dict) and _clean_tag(entry.get("tag"))
+        }
+        offset = 0
+        for tag, count in prepared:
+            if tag in known:
+                # 已有记忆：真实使用次数优先，回填绝不覆盖。
+                continue
+            stamp = (BACKFILL_BASE_TIME + timedelta(microseconds=offset)).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            )
+            existing.append({"tag": tag, "last_used_at": stamp, "use_count": count})
+            known.add(tag)
+            added += 1
+            offset += 1
+        if not added:
+            return 0
+        # 与 record_usage 同一套裁剪口径：按最近使用排序后只留前 N 条。
+        existing.sort(key=lambda item: str(item.get("last_used_at") or ""), reverse=True)
+        store[dimension] = existing[:MAX_MEMORY_ENTRIES_PER_DIM]
+        _save_store(store)
+    return added
 
 
 def list_memory(dim: str) -> list[dict]:

@@ -1546,6 +1546,11 @@
                                 delete editorDialog.dataset.returnQuestionId;
                             }
                         }
+                        // 保存成功后刷新编辑区「来源」候选：本次新填的来源要立刻
+                        // 进入「题库中的来源」，下一次录入即可直接点选。
+                        if (typeof window.refreshEditorSourceCandidates === 'function') {
+                            window.refreshEditorSourceCandidates();
+                        }
                         return true;
                     } else {
                         showToast('保存题目失败: ' + (data.detail || data.message || '未知错误'), 'error');

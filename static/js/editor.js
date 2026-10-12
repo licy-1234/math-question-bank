@@ -909,6 +909,10 @@ window.functionTagBadge = functionTagBadge;
             });
             delete modal.dataset.allowNewQuestion;
             delete modal.dataset.validationAttempted;
+            // 每次打开编辑弹窗都刷新一次来源候选缓存，新录入的来源要立刻可候选。
+            if (typeof window.refreshEditorSourceCandidates === 'function') {
+                window.refreshEditorSourceCandidates();
+            }
             refreshEditorFeedback();
         }
 
@@ -2605,6 +2609,36 @@ window.functionTagBadge = functionTagBadge;
             if (editSource && window.MathBankTagMemory
                 && typeof window.MathBankTagMemory.makeAutofillProof === 'function') {
                 window.MathBankTagMemory.makeAutofillProof(editSource);
+            }
+
+            // 编辑区「来源」的历史输入 + 题库候选面板。
+            // 与侧栏 #filterSource 不同（它自带 /api/sources 下拉，再挂历史面板会
+            // 双面板叠压），editSource 此前完全没有候选能力，老师只能手打。
+            // 候选是 /api/sources 的会话内缓存：attach 时预取一次，之后每次打开
+            // 编辑弹窗 / 保存成功后刷新，保证新写入的来源立刻可候选。
+            let editorSourceCandidates = [];
+            function refreshEditorSourceCandidates() {
+                return fetch('/api/sources')
+                    .then((res) => (res.ok ? res.json() : []))
+                    .then((data) => {
+                        editorSourceCandidates = Array.isArray(data)
+                            ? data.map((item) => String(item == null ? '' : item).trim()).filter(Boolean)
+                            : [];
+                        return editorSourceCandidates;
+                    })
+                    // 断网 / 后端报错时保留上一次的缓存，绝不把候选清成空。
+                    .catch(() => editorSourceCandidates);
+            }
+            window.refreshEditorSourceCandidates = refreshEditorSourceCandidates;
+
+            if (editSource && window.MathBankFilterHistory
+                && typeof window.MathBankFilterHistory.attach === 'function') {
+                refreshEditorSourceCandidates();
+                window.MathBankFilterHistory.attach(editSource, {
+                    historyKey: 'edit_source',
+                    getCandidates: () => editorSourceCandidates.slice(),
+                    candidateTitle: '题库中的来源'
+                });
             }
 
             editQType.addEventListener('change', renderEditorPaperMeta);
