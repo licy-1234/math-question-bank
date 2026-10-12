@@ -2599,6 +2599,14 @@ window.functionTagBadge = functionTagBadge;
             const editSource = document.getElementById('editSource');
             const editTags = document.getElementById('editTags');
 
+            // 编辑区「来源」与侧栏来源框同属会被 Chrome 记忆并弹「保存的信息」卡的
+            // 自由文本，套用 tag-memory 的同一套防自动填充组合拳。只上防护，
+            // 不改变取值与预览渲染。
+            if (editSource && window.MathBankTagMemory
+                && typeof window.MathBankTagMemory.makeAutofillProof === 'function') {
+                window.MathBankTagMemory.makeAutofillProof(editSource);
+            }
+
             editQType.addEventListener('change', renderEditorPaperMeta);
             editDifficulty.addEventListener('change', renderEditorPaperMeta);
             editSource.addEventListener('input', renderEditorPaperMeta);

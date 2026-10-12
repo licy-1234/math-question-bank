@@ -3098,3 +3098,64 @@ def test_relation_note_memory_and_autofill_proof_coverage():
         "'mathbank.relationDraft.' + qid",
     ):
         assert marker in import_source, marker
+
+
+def _js_function_block(source: str, signature: str) -> str:
+    """截取 import.js 中某个顶层函数的正文（缩进 8 空格），避免跨函数误判。"""
+    start = source.index(signature)
+    nxt = source.find("\n        function ", start + len(signature))
+    return source[start:nxt] if nxt != -1 else source[start:]
+
+
+def test_source_filter_and_catalog_search_autofill_proof_coverage():
+    """侧栏「来源」框与微观方法目录检索框：接入防自动填充组合拳。
+
+    回归背景：用户截图里 Chrome 的原生「保存的信息」卡仍在来源框上弹出——
+    setupSourceFilterAutocomplete() 手写了自己的 #filterSourceSuggestions 下拉，
+    却漏了 tag-memory 的 readonly 组合拳；目录检索框也只有 autocomplete="off"。
+    两处都只补防护、不再挂第二套历史面板（否则两块浮层会同时弹出、互相叠压）。
+    """
+    import_source = _read(STATIC_JS_DIR / "import.js")
+    editor_source = _read(STATIC_JS_DIR / "editor.js")
+    tag_source = _read(STATIC_JS_DIR / "tag-memory.js")
+    tags_source = _read(STATIC_JS_DIR / "tags.js")
+    elements = _index_elements()
+
+    # 组合拳仍是唯一实现（不许另抄一份），并由 tag-memory 导出。
+    assert "window.MathBankTagMemory = {" in tag_source
+    assert "makeAutofillProof" in tag_source
+    assert tag_source.count("function makeAutofillProof(") == 1
+
+    # 来源框：在 setupSourceFilterAutocomplete 内部直接上防护（带空值守卫）。
+    setup_block = _js_function_block(import_source, "function setupSourceFilterAutocomplete()")
+    assert "typeof window.MathBankTagMemory.makeAutofillProof === 'function'" in setup_block
+    assert "window.MathBankTagMemory.makeAutofillProof(sourceInput)" in setup_block
+
+    # 不得再给来源框挂 filter-history：它的历史面板会与 #filterSourceSuggestions
+    # 同时弹出、互相叠压（正是用户抱怨的渲染不一致）。
+    assert "MathBankFilterHistory.attach(sourceInput" not in import_source
+    assert "MathBankFilterHistory.attachAll" not in import_source
+
+    # 来源框原有的能力必须原样保留：自带下拉 + 历史输入区块 + 记忆 + 触发筛选。
+    for marker in (
+        "getElementById('filterSourceSuggestions')",
+        "function renderHistorySection",
+        "function rememberSource",
+        "MathBankFilterHistory.record('bank_source'",
+        "setupSourceFilterAutocomplete();",
+    ):
+        assert marker in import_source, marker
+
+    # 目录检索框：Enter 添加行为保留，另加同一套防护。
+    assert "window.MathBankTagMemory.makeAutofillProof(catalogSearch)" in tags_source
+    assert "addMicroFromInputValue(catalogSearch.value)" in tags_source
+
+    # 同批排查到的另外两个自由文本框（题库搜索 / 编辑区来源）也接入同一套防护。
+    assert "window.MathBankTagMemory.makeAutofillProof(searchInputEl)" in import_source
+    assert "window.MathBankTagMemory.makeAutofillProof(editSource)" in editor_source
+
+    # HTML 侧确认这几个框仍在：ID 一旦改名，上面所有绑定都会静默失效。
+    for element_id in ("filterSource", "tagMicroCatalogSearch", "searchInput", "editSource"):
+        assert element_id in elements, element_id
+    assert elements["filterSource"].get("type") == "text"
+    assert elements["tagMicroCatalogSearch"].get("type") == "text"

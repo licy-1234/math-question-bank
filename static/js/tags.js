@@ -481,6 +481,12 @@
             if (catalogBtn) catalogBtn.addEventListener('click', toggleMicroCatalog);
             const catalogSearch = $('tagMicroCatalogSearch');
             if (catalogSearch) {
+                // 防自动填充组合拳：目录检索框同样会被 Chrome 弹「保存的信息」卡，
+                // 盖在目录卡片上。与自定义标签 / 微观方法输入同一套防护，
+                // 只上防护、不改 Enter 添加行为。
+                if (window.MathBankTagMemory && typeof window.MathBankTagMemory.makeAutofillProof === 'function') {
+                    window.MathBankTagMemory.makeAutofillProof(catalogSearch);
+                }
                 catalogSearch.addEventListener('input', () => {
                     microCatalogQuery = catalogSearch.value || '';
                     if (microCatalogData) renderMicroCatalog();

@@ -6364,6 +6364,15 @@
             
             if (!sourceInput || !suggestionsDiv) return;
 
+            // 防自动填充组合拳：Chrome 会在自由文本框上弹「保存的信息」原生卡，
+            // 既盖住下面的 #filterSourceSuggestions 下拉，被手滑选中还会整串覆盖输入。
+            // 这里只上 tag-memory 的防护（autocomplete 标记 + 初始 readonly +
+            // click/keydown 解锁 + blur 重锁），**不**接 MathBankFilterHistory.attach
+            // —— 那会让历史面板与本下拉同时弹出、互相叠压。
+            if (window.MathBankTagMemory && typeof window.MathBankTagMemory.makeAutofillProof === 'function') {
+                window.MathBankTagMemory.makeAutofillProof(sourceInput);
+            }
+
             function fetchSources(callback) {
                 fetch('/api/sources')
                     .then(r => r.json())
@@ -6642,8 +6651,16 @@
             // Load and update drafts count
             updateDraftCountBadge();
 
+            // 防自动填充组合拳：搜索框也是 Chrome 会记忆并弹「保存的信息」的自由文本，
+            // 与 tag-memory / filter-history 同一套防护。只上防护，不改搜索行为。
+            const searchInputEl = document.getElementById('searchInput');
+            if (searchInputEl && window.MathBankTagMemory
+                && typeof window.MathBankTagMemory.makeAutofillProof === 'function') {
+                window.MathBankTagMemory.makeAutofillProof(searchInputEl);
+            }
+
             // Bind search input to loadQuestions / loadDrafts dynamically
-            document.getElementById('searchInput').addEventListener('input', () => {
+            searchInputEl.addEventListener('input', () => {
                 currentBankPage = 1;
                 currentDraftPage = 1;
                 if (activeSidebarTab === 'bank') {
