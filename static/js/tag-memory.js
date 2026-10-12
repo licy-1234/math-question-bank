@@ -22,6 +22,8 @@
     let activePanel = null;    // 当前打开的面板元素
     let activeInput = null;
     let lastUsedTag = {};      // dim -> 最近一次使用的 tag
+    // dim -> 面板内「过滤历史标签」框当前的关键字（面板重渲染后回填，避免过滤词丢失）
+    let historyFilterWord = {};
 
     function escapeHtml(value) {
         if (window.MathBankSafe && typeof window.MathBankSafe.escapeText === 'function') {
@@ -112,29 +114,74 @@
         panel.className = 'tag-memory-panel rounded-xl border border-slate-200 bg-white shadow-lg text-xs';
         let html = '';
 
-        if (memory.length) {
-            html += '<div class="px-3 pt-2 pb-1 flex items-center justify-between">';
-            html += '<span class="text-[10px] font-semibold text-slate-400">记忆的标签（最近使用优先）</span>';
-            html += `<button type="button" data-action="clear-all" class="text-[10px] text-slate-400 hover:text-rose-500">清空记忆</button>`;
-            html += '</div>';
-            html += '<div class="max-h-56 overflow-y-auto">';
-            memory.forEach((entry, index) => {
-                const tag = entry.tag || '';
+        // 历史标签区。
+        //   · sortByCount=true（微观解题方法）：始终渲染该区块，按使用次数降序，
+        //     并额外提供一个独立的关键字过滤框；
+        //   · 缺省（自定义标签）：维持原有的「最近使用优先」且仅非空时渲染的行为。
+        const isCountSort = options.sortByCount === true;
+        const memoryOrdered = isCountSort
+            ? memory.slice().sort((a, b) => {
+                const countA = Number(a && a.use_count) || 0;
+                const countB = Number(b && b.use_count) || 0;
+                if (countB !== countA) return countB - countA;
+                // 次数相同按最近使用时间降序，保证顺序稳定可预期。
+                return String((b && b.last_used_at) || '').localeCompare(String((a && a.last_used_at) || ''));
+            })
+            : memory;
+        // 「上次使用」徽标改为按时间匹配：次数排序下第一条已不再等于最近使用的那条。
+        const latestTime = memory.reduce((max, entry) => {
+            const time = String((entry && entry.last_used_at) || '');
+            return time > max ? time : max;
+        }, '');
+
+        // 历史标签行：过滤框变化时只重建这一段，过滤框本身因此不会失焦。
+        const historyRowsHtml = () => {
+            const word = String(historyFilterWord[dim] || '').trim().toLowerCase();
+            let rows = '';
+            memoryOrdered.forEach((entry) => {
+                const tag = (entry && entry.tag) || '';
+                if (!tag) return;
                 const lowTag = tag.toLowerCase();
                 if (query && lowTag.indexOf(query) === -1) return;
+                if (word && lowTag.indexOf(word) === -1) return;
                 const isSelected = queryParts.indexOf(lowTag) !== -1;
-                const isLastUsed = index === 0 && !lastUsedTag[dim];
-                const isMarked = lastUsedTag[dim] === tag || isLastUsed;
-                html += `<div class="flex items-center gap-1.5 px-3 py-1.5 hover:bg-slate-50 ${isSelected ? 'opacity-50' : ''}">`;
-                html += `<button type="button" data-action="pick" data-tag="${escapeHtml(tag)}" class="flex-1 min-w-0 text-left truncate">`;
-                html += `<span class="text-slate-700">${escapeHtml(tag)}</span>`;
-                if (isMarked) html += '<span class="ml-1 text-[9px] font-bold text-brand-600 bg-brand-50 border border-brand-200 rounded px-1 py-0.5 align-middle">上次使用</span>';
-                if ((entry.use_count || 0) > 1) html += `<span class="ml-1 text-[9px] text-slate-400">${escapeHtml(entry.use_count)}次</span>`;
-                html += '</button>';
-                html += `<button type="button" data-action="delete" data-tag="${escapeHtml(tag)}" title="删除这条记忆" class="shrink-0 text-slate-300 hover:text-rose-500 px-1"><i class="fa-solid fa-xmark text-[10px]"></i></button>`;
-                html += '</div>';
+                const isMarked = lastUsedTag[dim]
+                    ? lastUsedTag[dim] === tag
+                    : String((entry && entry.last_used_at) || '') === latestTime;
+                rows += `<div class="flex items-center gap-1.5 px-3 py-1.5 hover:bg-slate-50 ${isSelected ? 'opacity-50' : ''}">`;
+                rows += `<button type="button" data-action="pick" data-tag="${escapeHtml(tag)}" class="flex-1 min-w-0 text-left truncate">`;
+                rows += `<span class="text-slate-700">${escapeHtml(tag)}</span>`;
+                if (isMarked) rows += '<span class="ml-1 text-[9px] font-bold text-brand-600 bg-brand-50 border border-brand-200 rounded px-1 py-0.5 align-middle">上次使用</span>';
+                rows += `<span class="ml-1 text-[9px] text-slate-400">${escapeHtml(Number(entry.use_count) || 1)}次</span>`;
+                rows += '</button>';
+                rows += `<button type="button" data-action="delete" data-tag="${escapeHtml(tag)}" title="删除这条记忆" class="shrink-0 text-slate-300 hover:text-rose-500 px-1"><i class="fa-solid fa-xmark text-[10px]"></i></button>`;
+                rows += '</div>';
             });
+            if (!rows) {
+                // 有标签但被过滤掉 = 「没有匹配」；本来就没有 = 引导文案。
+                const hasAnyBeforeFilter = memoryOrdered.some((entry) => {
+                    const tag = String((entry && entry.tag) || '');
+                    if (!tag) return false;
+                    return !(query && tag.toLowerCase().indexOf(query) === -1);
+                });
+                rows = `<div class="px-3 py-3 text-[11px] text-slate-400">${hasAnyBeforeFilter ? '没有匹配的历史标签' : (options.emptyMemoryHint || '暂无历史标签。保存题目后，这里会记住你用过的标签。')}</div>`;
+            }
+            return rows;
+        };
+
+        if (isCountSort || memory.length) {
+            html += '<div class="px-3 pt-2 pb-1 flex items-center justify-between">';
+            html += `<span class="text-[10px] font-semibold text-slate-400">${isCountSort ? '历史标签（按使用次数优先）' : '记忆的标签（最近使用优先）'}</span>`;
+            if (memory.length) {
+                html += `<button type="button" data-action="clear-all" class="text-[10px] text-slate-400 hover:text-rose-500">清空记忆</button>`;
+            }
             html += '</div>';
+            if (isCountSort && memory.length) {
+                html += '<div class="px-3 pb-1.5">';
+                html += `<input type="text" class="tag-memory-filter w-full px-2 py-1 text-[11px] rounded-lg border border-slate-200 bg-white" placeholder="过滤历史标签…" autocomplete="off" value="${escapeHtml(historyFilterWord[dim] || '')}">`;
+                html += '</div>';
+            }
+            html += `<div class="max-h-56 overflow-y-auto" data-role="history-list">${historyRowsHtml()}</div>`;
         }
 
         if (suggestions.length) {
@@ -156,6 +203,26 @@
         }
 
         panel.innerHTML = html;
+
+        // 面板内的关键字过滤框：只重建历史标签列表，不动输入框本身，因此不会失焦。
+        const filterBox = panel.querySelector('.tag-memory-filter');
+        if (filterBox) {
+            filterBox.addEventListener('input', () => {
+                historyFilterWord[dim] = filterBox.value || '';
+                const list = panel.querySelector('[data-role="history-list"]');
+                if (list) list.innerHTML = historyRowsHtml();
+            });
+            // Escape 先清空过滤词，再按一次才关闭面板（输入框主体仍是一次性关闭）。
+            filterBox.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && filterBox.value) {
+                    event.stopPropagation();
+                    filterBox.value = '';
+                    historyFilterWord[dim] = '';
+                    const list = panel.querySelector('[data-role="history-list"]');
+                    if (list) list.innerHTML = historyRowsHtml();
+                }
+            });
+        }
 
         // 换面板前先撤掉旧面板（含滚动/resize 监听），避免 DOM 里残留多个面板。
         if (activePanel) {

@@ -510,6 +510,9 @@
                     loadMicroSuggestions();
                     window.MathBankTagMemory.attach(microInput, {
                         dim: 'micro',
+                        // 历史标签区：按使用次数降序 + 独立过滤框 + 始终渲染（含空状态）。
+                        sortByCount: true,
+                        emptyMemoryHint: '暂无历史标签。保存题目后，这里会记住你用过的微观方法。',
                         suggestionTitle: '目录建议（微观解题方法）',
                         getSuggestions: () => microVocabSuggestions || []
                     });

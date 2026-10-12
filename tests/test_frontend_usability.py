@@ -3349,3 +3349,113 @@ def test_editor_source_history_and_candidate_coverage():
 
     assert "editSource" in elements
     assert elements["editSource"].get("type") == "text"
+
+
+# tag-memory.js 在 node 里跑起来的最小 DOM 替身（在 filter-history 的桩基础上补了
+# querySelector —— 面板内的过滤框与历史列表容器需要被取到）。
+_TAG_MEMORY_DOM_STUB = _FILTER_HISTORY_DOM_STUB + r"""
+const _origMakeElement = makeElement;
+makeElement = function (tag) {
+    const el = _origMakeElement(tag);
+    el._q = {};
+    el.querySelector = function (sel) {
+        if (!el._q[sel]) el._q[sel] = _origMakeElement('div');
+        return el._q[sel];
+    };
+    return el;
+};
+global.document.createElement = makeElement;
+"""
+
+
+def test_micro_method_panel_history_sorted_by_count_with_filter_box():
+    """微观方法面板：历史区按使用次数降序、始终渲染、可独立过滤、无匹配有空状态。"""
+
+    tag_source = _read(STATIC_JS_DIR / "tag-memory.js")
+    tags_source = _read(STATIC_JS_DIR / "tags.js")
+
+    _run_node(_TAG_MEMORY_DOM_STUB + tag_source + r"""
+const api = window.MathBankTagMemory;
+if (!api) throw new Error('MathBankTagMemory was not exported');
+
+// 后端 list_memory 返回「最近使用优先」，fixture 顺序与之一致（配方法是最近用过的）。
+const memory = [
+    { tag: '配方法', use_count: 3, last_used_at: '2026-09-09T00:00:00.000000Z' },
+    { tag: '同构法·乘除同构', use_count: 5, last_used_at: '2026-01-05T00:00:00.000000Z' },
+    { tag: '换元法', use_count: 9, last_used_at: '2026-01-01T00:00:00.000000Z' }
+];
+global.fetch = () => Promise.resolve({ ok: true, json: () => ({ items: memory }) });
+window.MathBankFloatingPanel = {
+    mount: (panel) => { document.body.appendChild(panel); return true; },
+    unmount: () => {}
+};
+
+(async () => {
+    const input = makeElement('input');
+    document.activeElement = input;
+    api.attach(input, {
+        dim: 'micro',
+        sortByCount: true,
+        emptyMemoryHint: '暂无历史标签。保存题目后，这里会记住你用过的微观方法。'
+    });
+    (input.handlers.focus || []).forEach((fn) => fn());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const panel = document.body.children[document.body.children.length - 1];
+    const html = panel.innerHTML;
+
+    // 1) 历史区标题（与目录建议分区展示）。
+    if (html.indexOf('历史标签（按使用次数优先）') === -1) {
+        throw new Error('history section title missing');
+    }
+    // 2) 按 use_count 降序：换元法(9) → 同构法(5) → 配方法(3)。
+    const atHuan = html.indexOf('换元法');
+    const atTong = html.indexOf('同构法·乘除同构');
+    const atPei = html.indexOf('配方法');
+    if (atHuan === -1 || atTong === -1 || atPei === -1) throw new Error('history entries missing');
+    if (!(atHuan < atTong && atTong < atPei)) throw new Error('history is not sorted by use_count desc');
+    // 3) 每条都带次数角标（不再只给 >1 次的加）。
+    if (html.indexOf('9次') === -1 || html.indexOf('3次') === -1) {
+        throw new Error('use_count badge missing');
+    }
+    // 4) 「上次使用」徽标跟的是最近时间（配方法 2026-09-09），而不是排序后的第一条。
+    const atBadge = html.indexOf('上次使用');
+    if (atBadge === -1) throw new Error('last-used badge missing');
+    if (!(atBadge > atPei && atBadge < atPei + 300)) {
+        throw new Error('last-used badge is not attached to the most recent tag');
+    }
+    // 5) 独立过滤框：输入后只重建历史列表，保留匹配项、剔除非匹配项。
+    const filterBox = panel.querySelector('.tag-memory-filter');
+    if (!filterBox || !(filterBox.handlers.input || []).length) {
+        throw new Error('filter box was not wired');
+    }
+    const list = panel.querySelector('[data-role="history-list"]');
+    filterBox.value = '同构';
+    (filterBox.handlers.input || []).forEach((fn) => fn());
+    if (list.innerHTML.indexOf('同构法·乘除同构') === -1) throw new Error('filter dropped a matching tag');
+    if (list.innerHTML.indexOf('换元法') !== -1) throw new Error('filter kept a non-matching tag');
+    // 6) 无匹配 → 空状态提示。
+    filterBox.value = '不存在的标签xyz';
+    (filterBox.handlers.input || []).forEach((fn) => fn());
+    if (list.innerHTML.indexOf('没有匹配的历史标签') === -1) throw new Error('empty state missing');
+    // 7) 清空过滤 → 恢复全量。
+    filterBox.value = '';
+    (filterBox.handlers.input || []).forEach((fn) => fn());
+    if (list.innerHTML.indexOf('换元法') === -1 || list.innerHTML.indexOf('配方法') === -1) {
+        throw new Error('clearing the filter must restore every entry');
+    }
+})().catch((error) => {
+    console.error((error && error.message) || error);
+    process.exitCode = 1;
+});
+""")
+
+    # 源码层：新能力只对微观方法启用，自定义标签面板的行为与文案保持原样。
+    assert "sortByCount" in tag_source
+    assert "历史标签（按使用次数优先）" in tag_source
+    assert "记忆的标签（最近使用优先）" in tag_source
+    assert "没有匹配的历史标签" in tag_source
+    assert "tag-memory-filter" in tag_source
+    assert "data-role=\"history-list\"" in tag_source
+    assert tags_source.count("sortByCount") == 1, "sortByCount 只能用于微观方法面板"
+    assert "dim: 'custom'" in tags_source
