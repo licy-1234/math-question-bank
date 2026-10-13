@@ -558,3 +558,30 @@ def test_cancel_during_last_base64_encode_cannot_return_messages(prepared_views,
     with pytest.raises(TaskCancelled):
         details.prepare_detail_messages(prepared_views, page_index=3, check_cancelled=cancel)
     assert len(calls) == 2 and all(Path(view["path"]).is_file() for view in prepared_views)
+
+
+def test_ownership_snapshot_comparable_across_path_and_handle(tmp_path):
+    """A path query must compare equal to the fd snapshot for the same file.
+
+    On Windows ``os.lstat`` (path) and ``os.fstat`` (handle) can report different
+    ``st_ctime_ns`` for one and the same file.  Comparing them directly made every
+    ownership check look "changed": rollback silently skipped files (orphan PNGs
+    left in the uploads directory) and freshly written detail images were
+    rejected as unregistered.  Mixed comparisons therefore drop ctime, while
+    handle-to-handle comparisons keep it (that is what catches an in-place
+    rewrite whose mtime was restored afterwards).
+    """
+
+    probe = tmp_path / "owned.png"
+    probe.write_bytes(b"png-payload")
+    descriptor = os.open(probe, os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    try:
+        snapshot = details._stat_key(os.fstat(descriptor))
+    finally:
+        os.close(descriptor)
+
+    # Full snapshot keeps ctime (handle-to-handle comparisons stay strict).
+    assert len(snapshot) == 5
+    # Path-vs-handle comparison ignores ctime, so it agrees for the same file.
+    assert details._mixed_stat_key(probe.lstat()) == details._loose_snapshot(snapshot)
+    assert details._loose_snapshot(snapshot) == snapshot[:4]

@@ -265,3 +265,36 @@ class TestMicroVocabEndpoint:
         first = payload["modules"][0]
         assert first["name"] == "函数与导数"
         assert any(f["name"] == "同构法" for f in first["families"])
+
+
+class TestDeprecatedUtcnowIsNotUsed:
+    """datetime.utcnow() 自 Python 3.12 起已弃用，且返回的是 naive UTC。
+
+    便携包自带的是 Python 3.10，但升级到 3.12+ 后每个 DeprecationWarning
+    都会在控制台刷屏，最终版本里还会直接移除。这里锁死「不再使用它」。
+    """
+
+    def test_module_source_has_no_utcnow(self):
+        import ast
+        import inspect
+
+        tree = ast.parse(inspect.getsource(tag_memory))
+        # 只看真实调用，注释/文档字符串里提到 utcnow 不算。
+        calls = [
+            node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        ]
+        assert "utcnow" not in calls, "datetime.utcnow() 已弃用，请改用 _utcnow_naive()"
+
+    def test_record_usage_still_writes_naive_utc(self, isolated_memory):
+        entries = tag_memory.record_usage("custom", ["弃用检查"])
+        assert entries
+        stamp = entries[0]["last_used_at"]
+        # 与 database._utcnow_naive 同口径：naive、UTC、可解析。
+        from datetime import datetime, timezone
+
+        parsed = datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%S.%fZ")
+        assert parsed.tzinfo is None
+        delta = abs((datetime.now(timezone.utc).replace(tzinfo=None) - parsed).total_seconds())
+        assert delta < 60, "时间戳必须是「当下」的 UTC，不能是本地时间或固定基准"

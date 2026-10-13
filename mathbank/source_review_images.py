@@ -195,7 +195,26 @@ def _references(value: str, identifier: str, field: str) -> list[dict]:
 
 
 def _stat_key(status) -> tuple:
-    return status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns
+    """Fingerprint used to notice the file being swapped while we read it.
+
+    ``st_ctime_ns`` is deliberately excluded: on Windows the value returned by
+    ``os.stat()`` (path query) and ``os.fstat()`` (handle query) is *not*
+    guaranteed to agree for the very same file — CPython 3.13 on Windows reports
+    the path query up to ~1 ms behind the handle query.  Any mixed path/handle
+    comparison that includes ctime therefore reports "changed" for every single
+    image, and the whole candidate silently drops out of the evidence payload.
+    ``st_dev`` / ``st_ino`` / ``st_size`` / ``st_mtime_ns`` are consistent across
+    both calls and still catch the real cases: a replace (new inode) or an
+    in-place rewrite (new mtime / new size).
+    """
+
+    return status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns
+
+
+def _path_stat_key(status) -> tuple:
+    """Path-to-path variant; both sides come from ``os.stat`` so ctime is comparable."""
+
+    return _stat_key(status) + (status.st_ctime_ns,)
 
 
 def _read_image(reference: str, allowed: set[str], uploads_dir, test_uploads_dir) -> tuple[dict, bytes]:
@@ -225,7 +244,8 @@ def _read_image(reference: str, allowed: set[str], uploads_dir, test_uploads_dir
             after_read = os.fstat(stream.fileno())
         checked_path = resolve_upload_asset(reference, uploads_dir=root, url_prefix=prefix)
         if (checked_path != path or _stat_key(before) != _stat_key(after_read)
-                or _stat_key(before) != _stat_key(checked_path.stat()) or len(data) != before.st_size):
+                or _path_stat_key(before) != _path_stat_key(checked_path.stat())
+                or len(data) != before.st_size):
             raise _ImageEvidenceError("changed")
     except (AssetSecurityError, OSError):
         raise _ImageEvidenceError("asset") from None

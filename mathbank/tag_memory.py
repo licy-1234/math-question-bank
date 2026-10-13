@@ -23,7 +23,7 @@ import json
 import os
 import sys
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from mathbank.paths import DATA_BACKUP_DIR
@@ -39,6 +39,18 @@ MAX_TAG_LENGTH = 120
 BACKFILL_BASE_TIME = datetime(2026, 1, 1)
 
 _LOCK = threading.Lock()
+
+
+def _utcnow_naive() -> datetime:
+    """Return UTC without tzinfo — same convention as ``database._utcnow_naive``.
+
+    ``datetime.utcnow()`` is deprecated from Python 3.12 onward (it silently
+    returns a naive object that every caller then has to reinterpret as UTC).
+    Keeping a local helper (instead of importing ``mathbank.database``) keeps
+    this module free of the SQLAlchemy import chain.
+    """
+
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _memory_path() -> str:
@@ -95,7 +107,7 @@ def record_usage(dim: str, tags: Iterable) -> list[dict]:
     clean = _clean_tags(tags)
     if not clean:
         return []
-    base = datetime.utcnow()
+    base = _utcnow_naive()
     with _LOCK:
         store = _load_store()
         entries = store.get(dimension)

@@ -3459,3 +3459,22 @@ window.MathBankFloatingPanel = {
     assert "data-role=\"history-list\"" in tag_source
     assert tags_source.count("sortByCount") == 1, "sortByCount 只能用于微观方法面板"
     assert "dim: 'custom'" in tags_source
+
+
+def test_question_save_refreshes_both_tag_memory_dimensions():
+    """保存题目成功后必须同时作废 custom / micro 两个维度的记忆缓存。
+
+    后端在保存时已经记下本次用过的取值，但面板读的是会话内缓存
+    （tag-memory.js 的 cacheByDim）。只刷新「来源」候选而不通知记忆组件，
+    新存的自定义标签 / 微观方法要刷新页面才会出现在面板里。
+    """
+
+    import_source = _read(STATIC_JS_DIR / "import.js")
+
+    # 保存成功分支里，来源候选刷新与两个维度的 notifySaved 必须同时存在。
+    assert "window.refreshEditorSourceCandidates()" in import_source
+    assert "notifySaved('custom'" in import_source
+    assert "notifySaved('micro'" in import_source
+    # 取值要有防御：editTags 可能尚未渲染，MathBankTags 可能未加载。
+    assert "document.getElementById('editTags')" in import_source
+    assert "window.MathBankTags.getSelection" in import_source

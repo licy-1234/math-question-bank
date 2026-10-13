@@ -81,6 +81,27 @@ def _stat_key(value) -> tuple:
     return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
 
 
+def _mixed_stat_key(value) -> tuple:
+    """Fingerprint for comparing an ``os.lstat`` result with an fd snapshot.
+
+    ``st_ctime_ns`` is dropped here on purpose: on Windows the path query
+    (``os.lstat``) and the handle query (``os.fstat``) are *not* guaranteed to
+    agree for the very same file.  Mixing them made every ownership check report
+    "changed", so rollback silently skipped files (orphan PNGs left behind) and
+    valid detail images were rejected as unregistered.  ``st_dev`` / ``st_ino`` /
+    ``st_size`` / ``st_mtime_ns`` are consistent across both calls and still
+    catch a replace (new inode) or an in-place rewrite (new size / mtime).
+    """
+
+    return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns
+
+
+def _loose_snapshot(snapshot: tuple) -> tuple:
+    """Trim a stored snapshot down to the fields comparable with a path query."""
+
+    return tuple(snapshot)[:4]
+
+
 @dataclass(frozen=True)
 class _OwnedFile:
     path: Path
@@ -116,7 +137,7 @@ def _freeze_owned_file(path: Path, descriptor: int, expected: bytes) -> _OwnedFi
     snapshot, checksum = _read_snapshot(descriptor, expected=expected)
     _safe_directory(path.parent)
     current = path.lstat()
-    if not stat.S_ISREG(current.st_mode) or _stat_key(current) != snapshot:
+    if not stat.S_ISREG(current.st_mode) or _mixed_stat_key(current) != _loose_snapshot(snapshot):
         raise ValueError("详情图路径已变化，不能确认归属。")
     return _OwnedFile(path, snapshot, checksum)
 
@@ -129,7 +150,7 @@ def _rollback(created: list[_OwnedFile]) -> None:
         try:
             _safe_directory(path.parent)
             current = path.lstat()
-            if not stat.S_ISREG(current.st_mode) or _stat_key(current) != owned.snapshot:
+            if not stat.S_ISREG(current.st_mode) or _mixed_stat_key(current) != _loose_snapshot(owned.snapshot):
                 continue
             descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
             try:
@@ -141,7 +162,8 @@ def _rollback(created: list[_OwnedFile]) -> None:
             _safe_directory(path.parent)
             current = path.lstat()
             if (snapshot == owned.snapshot and checksum == owned.sha256
-                    and stat.S_ISREG(current.st_mode) and _stat_key(current) == owned.snapshot):
+                    and stat.S_ISREG(current.st_mode)
+                    and _mixed_stat_key(current) == _loose_snapshot(owned.snapshot)):
                 path.unlink()
         except (OSError, ValueError):
             # A replacement or moved/symlinked parent is no longer our file.
@@ -288,9 +310,9 @@ def render_pdf_detail_views(
                 raise _DetailUnavailable("registration")
             check_cancelled()
             _safe_directory(directory)
-            current = destination.lstat()
-            if not stat.S_ISREG(current.st_mode) or _stat_key(current) != owned.snapshot:
-                raise _DetailUnavailable("registration")
+        current = destination.lstat()
+        if not stat.S_ISREG(current.st_mode) or _mixed_stat_key(current) != _loose_snapshot(owned.snapshot):
+            raise _DetailUnavailable("registration")
             views.append({**descriptor, "path": str(destination), "url": url})
         # Registration is a caller callback. Before returning, ensure no callback
         # replaced or modified any earlier view, including in-place writes.

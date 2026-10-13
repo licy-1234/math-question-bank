@@ -1551,6 +1551,24 @@
                         if (typeof window.refreshEditorSourceCandidates === 'function') {
                             window.refreshEditorSourceCandidates();
                         }
+                        // 同样让「自定义标签 / 微观解题方法」的记忆缓存失效并重拉。
+                        // 后端在保存时已经记下了本次用过的取值，但前端面板读的是
+                        // 会话内缓存；不作废缓存的话，新存的标签要刷新页面才会出现。
+                        if (window.MathBankTagMemory && typeof window.MathBankTagMemory.notifySaved === 'function') {
+                            const splitSavedTags = (value) => String(value || '')
+                                .split(/[,，]/).map((item) => String(item || '').trim()).filter(Boolean);
+                            const savedCustomInput = document.getElementById('editTags');
+                            const savedCustomTags = splitSavedTags(savedCustomInput ? savedCustomInput.value : '');
+                            if (savedCustomTags.length) {
+                                window.MathBankTagMemory.notifySaved('custom', savedCustomTags);
+                            }
+                            const savedMicroTags = (window.MathBankTags
+                                && typeof window.MathBankTags.getSelection === 'function')
+                                ? (window.MathBankTags.getSelection().micro_methods || []) : [];
+                            if (savedMicroTags.length) {
+                                window.MathBankTagMemory.notifySaved('micro', savedMicroTags);
+                            }
+                        }
                         return true;
                     } else {
                         showToast('保存题目失败: ' + (data.detail || data.message || '未知错误'), 'error');

@@ -8,7 +8,7 @@ no adoptable text. Every raw character is accounted for exactly once.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 import math
 import re
 import statistics

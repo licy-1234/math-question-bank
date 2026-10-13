@@ -18,7 +18,7 @@ import re
 from typing import Any
 
 from mathbank.content_locks import (
-    _ANSWER_LABEL, _NUMBER, _formulas, _is_exam_administration,
+    _NUMBER, _formulas, _is_exam_administration,
     _administrative_numeric_view, _page_footer_ranges, _preamble_instruction_ranges, _source_parts,
     lock_visible_math, reconcile_visible_math, strip_source_answer_label, _source_style_group_end,
     _is_choice_answer_blank, _next_math_span, _literal_math_scan_source,

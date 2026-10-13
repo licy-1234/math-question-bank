@@ -11,8 +11,6 @@ import threading
 import zipfile
 from collections import OrderedDict
 from io import BytesIO
-from sqlalchemy.orm import Session
-from mathbank.database import Question, Paper, PaperQuestion, QuestionCurriculum
 from mathbank.paths import TEMPLATES_DIR
 from mathbank.question_types import PAPER_TYPE_ORDER, custom_type_labels, is_written_question_type, paper_type_order
 from mathbank.latex_diagnostics import build_local_latex_diagnostic

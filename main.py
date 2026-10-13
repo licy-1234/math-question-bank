@@ -27,7 +27,6 @@ from PIL import Image
 from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, Form, BackgroundTasks, Request, Response, Header
 from sqlalchemy import func, or_
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import and_
@@ -49,7 +48,7 @@ from mathbank.database import (
     init_db,
     normalize_figure_size,
 )
-from mathbank.sub_knowledge import detect_curriculum_version, normalize_sub_knowledge
+from mathbank.sub_knowledge import normalize_sub_knowledge
 from mathbank.question_duplicates import (
     QuestionDuplicateInput,
     build_question_fingerprint,
@@ -122,7 +121,6 @@ from mathbank.ai_providers import (
     apply_model_thinking_policy,
     apply_structured_output_policy,
     resolve_draw_provider,
-    resolve_ocr_fallbacks,
     resolve_ocr_provider,
     resolve_text_provider,
 )
