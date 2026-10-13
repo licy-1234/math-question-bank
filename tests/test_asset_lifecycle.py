@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import threading
 
+import anyio
 import pytest
 from starlette.applications import Starlette
 from starlette.routing import Mount
@@ -233,6 +234,32 @@ def test_static_image_get_head_cache_and_other_static_files(store):
         assert client.post(reference).status_code == 405
         assert client.get("/static/app.css").text == css.read_text()
         assert client.get("/static/.system_generated/retained_uploads/files/example.png").status_code == 404
+
+
+def test_windows_style_path_still_reaches_the_retained_upload_interceptor(store):
+    """Starlette derives the static path with ``os.path.normpath``, which rewrites
+    "/" into "\\" on Windows.  A forward-slash-only prefix check therefore never
+    matches there and quarantined images 404 instead of restoring, so pin the
+    backslash shape on every platform."""
+
+    uploads, recovery = store
+    image, reference = write_image(uploads)
+    static = lifecycle.RetainedUploadStaticFiles(
+        directory=uploads.parent, uploads_dir=uploads, url_prefix="static/uploads"
+    )
+    scope = {"type": "http", "method": "GET", "headers": []}
+    assert retire(store, reference)
+    assert not image.exists()
+
+    response = anyio.run(static.get_response, "uploads\\example.png", scope)
+    assert response.status_code == 200
+    assert response.body == b"original image bytes"
+    assert image.read_bytes() == b"original image bytes"
+    # A backslash path outside the upload prefix still falls through to Starlette.
+    css = uploads.parent / "app.css"
+    css.write_text("body { color: red; }")
+    fallthrough = anyio.run(static.get_response, "app.css", scope)
+    assert fallthrough.status_code == 200
 
 
 def test_serialization_decorator_preserves_signature_and_blocks_other_threads():

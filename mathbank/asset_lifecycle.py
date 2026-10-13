@@ -270,6 +270,13 @@ class RetainedUploadStaticFiles(StaticFiles):
             return Response(content, media_type=file_response.media_type, headers=dict(file_response.headers))
 
     async def get_response(self, path, scope):
-        if path.startswith(self.upload_static_prefix):
-            return await anyio.to_thread.run_sync(self._upload_response, path, scope)
+        # Starlette derives this path with os.path.normpath, which rewrites "/"
+        # into "\\" on Windows.  Comparing against a forward-slash prefix would
+        # then never match, silently bypassing the retained-upload interceptor
+        # (quarantined images would 404 instead of restoring).  Normalise the
+        # separators first, but hand the untouched path to the parent so its
+        # own directory lookup keeps working with native separators.
+        normalized = path.replace("\\", "/")
+        if normalized.startswith(self.upload_static_prefix):
+            return await anyio.to_thread.run_sync(self._upload_response, normalized, scope)
         return await super().get_response(path, scope)
