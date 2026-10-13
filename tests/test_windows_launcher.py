@@ -1,7 +1,6 @@
 """Shared local-launcher behavior; runs without importing the application or data."""
 import hashlib
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path

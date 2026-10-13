@@ -1,5 +1,6 @@
 import ast
 import asyncio
+import re
 
 from mathbank.curriculums import get_curriculum_preset, load_curriculum
 from mathbank.paths import (
@@ -342,3 +343,139 @@ def test_metadata_load_does_not_run_full_database_heal_before_ready():
     assert "heal_database_curriculum_names()" not in main_source[
         metadata_start:metadata_end
     ]
+
+
+def _python_source_paths():
+    source_paths = [PROJECT_ROOT / "main.py"]
+    for directory_name in ("mathbank", "scripts", "tests", "tools"):
+        source_paths.extend((PROJECT_ROOT / directory_name).rglob("*.py"))
+    return [
+        path for path in source_paths
+        if not any(part in ("__pycache__",) for part in path.parts)
+        and path.name != "__init__.py"
+    ]
+
+
+def test_python_sources_have_no_unused_imports():
+    """F401 regression guard.
+
+    ruff/pyflakes are not part of the offline runtime, so the dead-import class
+    that was cleaned up in d56ca6c is guarded here instead. Package
+    re-exports stay allowed through the standard ``# noqa: F401`` marker, which
+    is the convention already used in main.py.
+    """
+
+    violations = []
+
+    for source_path in _python_source_paths():
+        source = source_path.read_text(encoding="utf-8")
+        lines = source.splitlines()
+        tree = ast.parse(source, filename=str(source_path))
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                candidates = [
+                    (alias.asname or alias.name.split(".")[0], node.lineno)
+                    for alias in node.names
+                ]
+            elif isinstance(node, ast.ImportFrom):
+                if node.module == "__future__":
+                    continue
+                candidates = [
+                    (alias.asname or alias.name, node.lineno)
+                    for alias in node.names
+                    if alias.name != "*"
+                ]
+            else:
+                continue
+
+            first_line = node.lineno
+            last_line = node.end_lineno or node.lineno
+            statement_lines = set(range(first_line, last_line + 1))
+            statement_source = "\n".join(lines[first_line - 1:last_line])
+            is_suppressed = bool(re.search(r"noqa:\s*F401", statement_source))
+
+            for name, _lineno in candidates:
+                if is_suppressed:
+                    continue
+                # A reference anywhere outside the import statement keeps the
+                # binding alive. This deliberately also counts re-exports
+                # mentioned in __all__, string annotations and docstrings, so
+                # the guard stays on the conservative side.
+                if not any(
+                    re.search(rf"\b{re.escape(name)}\b", line)
+                    for offset, line in enumerate(lines, start=1)
+                    if offset not in statement_lines
+                ):
+                    violations.append(
+                        f"{source_path.relative_to(PROJECT_ROOT)}:{node.lineno} "
+                        f"unused import {name}"
+                    )
+
+    assert violations == []
+
+
+def test_frontend_verbose_logs_are_gated_by_the_debug_switch():
+    """Packaged builds must not spray internals into the console.
+
+    Verbose frontend logging goes through window.MathBankDebug, which is off
+    unless the operator sets mathbank_debug_logs in localStorage. warn/error
+    stay raw on purpose: they report failures the operator must react to.
+    """
+
+    api_source = (STATIC_JS_DIR / "api.js").read_text(encoding="utf-8")
+
+    assert "window.MathBankDebug = MathBankDebug" in api_source
+
+    verbose_logs = []
+    for js_path in sorted(STATIC_JS_DIR.glob("*.js")):
+        source = js_path.read_text(encoding="utf-8")
+        for lineno, line in enumerate(source.splitlines(), start=1):
+            if "console.log(" in line:
+                verbose_logs.append(f"{js_path.name}:{lineno}")
+
+    assert verbose_logs == []
+    assert "MathBankDebug.info(" in api_source
+    assert "MathBankDebug.debug(" in api_source
+
+
+def test_no_statement_follows_a_raise_in_the_same_block():
+    """Guard against indentation accidents that silently disable a code path.
+
+    A statement placed after ``raise`` in the same block is unreachable. That
+    is easy to introduce when an edit moves a verification block around, and it
+    does not fail loudly: the surrounding function keeps running and just stops
+    producing part of its result. This is exactly how the detail-view append in
+    ``render_pdf_detail_views`` was lost.
+    """
+
+    unreachable = []
+
+    for source_path in _python_source_paths():
+        source = source_path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(source_path))
+
+        for node in ast.walk(tree):
+            bodies = []
+            if isinstance(node, (ast.If, ast.For, ast.AsyncFor, ast.While, ast.With,
+                                 ast.AsyncWith, ast.FunctionDef, ast.AsyncFunctionDef)):
+                bodies.append(node.body)
+            elif isinstance(node, ast.Try):
+                bodies.extend((node.body, node.handlers, node.orelse, node.finalbody))
+            elif isinstance(node, ast.ExceptHandler):
+                bodies.append(node.body)
+            else:
+                continue
+
+            for body in bodies:
+                statements = [item for item in body if isinstance(item, ast.stmt)]
+                for index, statement in enumerate(statements[:-1]):
+                    if isinstance(statement, ast.Raise):
+                        follower = statements[index + 1]
+                        unreachable.append(
+                            f"{source_path.relative_to(PROJECT_ROOT)}:"
+                            f"{statement.lineno} raise hides "
+                            f"{type(follower).__name__} at line {follower.lineno}"
+                        )
+
+    assert unreachable == []

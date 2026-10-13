@@ -1,6 +1,5 @@
 """Original DOCX evidence lifecycle, with no model or real converter in unit tests."""
 
-from copy import deepcopy
 from io import BytesIO
 import json
 from pathlib import Path

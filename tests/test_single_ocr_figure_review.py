@@ -2,7 +2,6 @@
 
 import base64
 import hashlib
-import io
 import json
 from pathlib import Path
 from types import SimpleNamespace

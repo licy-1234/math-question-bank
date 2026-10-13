@@ -3470,11 +3470,33 @@ def test_question_save_refreshes_both_tag_memory_dimensions():
     """
 
     import_source = _read(STATIC_JS_DIR / "import.js")
+    tags_source = _read(STATIC_JS_DIR / "tags.js")
 
     # 保存成功分支里，来源候选刷新与两个维度的 notifySaved 必须同时存在。
     assert "window.refreshEditorSourceCandidates()" in import_source
     assert "notifySaved('custom'" in import_source
     assert "notifySaved('micro'" in import_source
-    # 取值要有防御：editTags 可能尚未渲染，MathBankTags 可能未加载。
-    assert "document.getElementById('editTags')" in import_source
-    assert "window.MathBankTags.getSelection" in import_source
+
+    # 维度键必须与 tag-memory.js 的 cacheByDim 完全对齐（后端 MEMORY_DIMENSIONS
+    # 也只有 custom / micro 两个值），写错键等于刷新了一个不存在的缓存。
+    assert "dim: 'custom'" in tags_source
+    assert "dim: 'micro'" in tags_source
+    # 调用点清单（含既有的一处 micro —— AI 分类建议写入路径 import.js:2136）：
+    # 新增/删除 notifySaved 调用都会让这里失败，便于复核是否漏刷某个维度。
+    assert import_source.count("notifySaved('custom'") == 1
+    assert import_source.count("notifySaved('micro'") == 2
+
+    # 取值必须发生在「提交之前」：保存过程中编辑器可能被重绘/回显，
+    # 等到成功回调再读输入框就可能读到空值。
+    capture_at = import_source.index("const pendingMemoryTags")
+    submit_at = import_source.index("const formData = new FormData()", capture_at)
+    success_at = import_source.index("window.refreshEditorSourceCandidates()", submit_at)
+    assert capture_at < submit_at < success_at, "标签取值必须先于提交、提交先于成功回调"
+
+    # 只有在真正提交标签的那条分支里才缓存取值（编辑未改动标签时不提交、不刷新）。
+    assert "pendingMemoryTags.custom =" in import_source
+    assert "pendingMemoryTags.micro =" in import_source
+
+    # 失败/异常分支不得刷新：notifySaved 只能出现在成功分支（上面已断言各 1 次），
+    # 且必须位于 return true 之前。
+    assert import_source.index("notifySaved('micro'") < import_source.index("pendingMemoryTags.micro.length)") + 200

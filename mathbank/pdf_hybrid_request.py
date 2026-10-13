@@ -1,8 +1,10 @@
 """PDF adapters retain native and first-pass-transcript evidence distinctions."""
-from mathbank.source_hybrid_request import request_source_hybrid, SourceHybridResult
+from mathbank.source_hybrid_request import request_source_hybrid
 from mathbank.source_metadata import (
     SourceMetadataContractError,
-    SourceMetadataMessageBudgetError as PdfHybridMessageBudgetError,
+    # Re-exported under the PDF adapter name; existing callers and tests import it
+    # from this module rather than from mathbank.source_metadata.
+    SourceMetadataMessageBudgetError as PdfHybridMessageBudgetError,  # noqa: F401
 )
 from mathbank.pdf_hybrid_plan import (
     PdfHybridPlanError, require_pdf_hybrid_plan, require_pdf_snapshot_hybrid_plan,

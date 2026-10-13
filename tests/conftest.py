@@ -3,7 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
 from mathbank import database
-from mathbank.database import Base, Question
+from mathbank.database import Base
 
 # Configure database module to use in-memory SQLite with StaticPool for tests
 test_engine = create_engine(

@@ -1,13 +1,10 @@
 """Word compatibility adapter for the shared bounded source-hybrid request."""
-from mathbank.source_hybrid_request import (
-    SourceHybridResult as WordHybridResult,
-    SourceHybridContractError as WordHybridContractError,
-    build_source_hybrid_messages as build_word_hybrid_messages,
-    request_source_hybrid,
-)
+from mathbank.source_hybrid_request import request_source_hybrid
 from mathbank.source_metadata import (
     SourceMetadataContractError,
-    SourceMetadataMessageBudgetError as WordHybridMessageBudgetError,
+    # Re-exported under the Word adapter name; existing callers and tests import
+    # it from this module rather than from mathbank.source_metadata.
+    SourceMetadataMessageBudgetError as WordHybridMessageBudgetError,  # noqa: F401
 )
 from mathbank.word_hybrid_plan import WordHybridPlanError, require_word_hybrid_plan, word_hybrid_plan_diagnostics
 

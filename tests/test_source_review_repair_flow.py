@@ -5,8 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from test_docx_source_verify import state as word_state
-from test_pdf_source_verify import setup as pdf_state
 from mathbank import docx_source_verify as word, pdf_source_verify as pdf
 from mathbank.task_manager import TaskCancelled
 

@@ -466,3 +466,60 @@ def test_repeated_bindings_consume_label_budget_even_without_extra_pixels(assets
     result = prepare(assets, [item(content=f"![图]({url}) " * 10)], [url])
     assert not result["per_item"]["q1"]["complete"] and not result["messages"]
     assert evidence._REASONS["item_resources"] in result["per_item"]["q1"]["reasons"]
+
+
+class TestPathHandleCtimeSkew:
+    """路径查询与句柄查询的 ctime 不一致时，图片证据不能被误判丢弃。
+
+    Windows 上同一文件的 ``os.stat(path)`` 与 ``os.fstat(fd)`` 返回的
+    ``st_ctime_ns`` 并不保证一致（实测 CPython 3.13 约 28/50；3.10 上几乎不出现）。
+    所以这里**显式制造偏差**来复现，而不是依赖某个 Python 版本碰巧复现：
+    这样便携包 3.10 上跑也能防住回归。
+    """
+
+    @staticmethod
+    def _skew_handle_ctime(monkeypatch, delta_ns=1_234_567):
+        import os
+        from types import SimpleNamespace
+
+        real_fstat = os.fstat
+
+        def skewed_fstat(fd):
+            status = real_fstat(fd)
+            # 复制全部 st_* 字段（st_mode / st_size 等都要用），只把 ctime 拧偏。
+            fields = SimpleNamespace(**{name: getattr(status, name)
+                                        for name in dir(status) if name.startswith("st_")})
+            fields.st_ctime_ns = status.st_ctime_ns + delta_ns
+            return fields
+
+        monkeypatch.setattr(os, "fstat", skewed_fstat)
+
+    def test_image_is_kept_when_handle_ctime_disagrees(self, assets, monkeypatch):
+        self._skew_handle_ctime(monkeypatch)
+        url, _ = assets[1]()
+        result = prepare(assets, [item(content=f"![公式]({url})")], [url])
+        assert result["per_item"]["q1"]["complete"], result["per_item"]["q1"]["reasons"]
+        assert result["per_item"]["q1"]["images"], "图片被误判为已变化而丢弃"
+        assert len(result["messages"]) == 2
+
+    def test_full_key_detects_real_change_while_mixed_key_tolerates_skew(self, assets):
+        """口径分离：跨源比较容忍 ctime 偏差，同源比较仍然抓得到真实变化。"""
+
+        url, path = assets[1]()
+        before = path.stat()
+        with open(path, "ab") as handle:
+            handle.write(b"extra")
+        after = path.stat()
+
+        # 同源（路径 ↔ 路径）：ctime 保留，仍视为不同。
+        assert evidence._stat_key(before) != evidence._stat_key(after)
+        # 句柄↔路径的跨源口径只比对 dev/ino/size/mtime —— 尺寸变了照样抓得到。
+        assert evidence._path_stat_key(before) != evidence._path_stat_key(after)
+
+    def test_mixed_key_ignores_ctime_by_design(self):
+        from types import SimpleNamespace
+
+        left = SimpleNamespace(st_dev=1, st_ino=2, st_size=3, st_mtime_ns=4, st_ctime_ns=5)
+        right = SimpleNamespace(st_dev=1, st_ino=2, st_size=3, st_mtime_ns=4, st_ctime_ns=999)
+        assert evidence._path_stat_key(left) == evidence._path_stat_key(right)
+        assert evidence._stat_key(left) != evidence._stat_key(right)

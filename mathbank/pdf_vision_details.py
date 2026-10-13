@@ -78,26 +78,39 @@ def _safe_directory(directory: Path, *, create: bool = False) -> None:
 
 
 def _stat_key(value) -> tuple:
+    """Fingerprint for **same-source** comparisons (path↔path or handle↔handle).
+
+    ⚠️ 不要把 ``os.lstat(path)`` 的结果与 ``os.fstat(fd)`` 的结果用本函数互比：
+    Windows 上同一文件的路径查询与句柄查询返回的 ``st_ctime_ns`` 不保证一致，
+    混比会让所有权校验恒为「已变化」——回滚静默跳过留下孤儿文件、详情图被判未注册。
+    跨源比较请用 :func:`_mixed_stat_key` + :func:`_loose_snapshot`。
+
+    另注：Windows 的 ``st_ctime`` 是**创建时间**而非 Unix 的「元数据变更时间」，
+    抓不到「原地改写且事后还原 mtime」；真正的安全等价应依赖内容哈希
+    （本模块已对 PNG 计算 sha256）或文件 ID/USN，不要把 ctime 当强依据。
+    """
+
     return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
 
 
 def _mixed_stat_key(value) -> tuple:
-    """Fingerprint for comparing an ``os.lstat`` result with an fd snapshot.
+    """Fingerprint for comparing a **path query** with a **handle snapshot**.
 
-    ``st_ctime_ns`` is dropped here on purpose: on Windows the path query
-    (``os.lstat``) and the handle query (``os.fstat``) are *not* guaranteed to
-    agree for the very same file.  Mixing them made every ownership check report
-    "changed", so rollback silently skipped files (orphan PNGs left behind) and
-    valid detail images were rejected as unregistered.  ``st_dev`` / ``st_ino`` /
-    ``st_size`` / ``st_mtime_ns`` are consistent across both calls and still
-    catch a replace (new inode) or an in-place rewrite (new size / mtime).
+    ⚠️ 用途单一：只用于「``os.lstat(path)`` ↔ ``os.fstat(fd)``」这种跨源比较，
+    **不得**用于句柄↔句柄的安全等价判断（那应走 :func:`_stat_key`，保留 ctime
+    才能抓到「同尺寸原地改写且还原 mtime」）。
+    去掉 ``st_ctime_ns`` 是为了消除 Windows 上两类查询的偏差；dev / ino / size /
+    mtime 在两侧一致，仍可抓到替换（新 inode）与改写（新 size / 新 mtime）。
     """
 
     return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns
 
 
 def _loose_snapshot(snapshot: tuple) -> tuple:
-    """Trim a stored snapshot down to the fields comparable with a path query."""
+    """Trim a stored (handle) snapshot down to the fields comparable with a path query.
+
+    只配合 :func:`_mixed_stat_key` 使用，语义见该函数。
+    """
 
     return tuple(snapshot)[:4]
 
@@ -310,9 +323,9 @@ def render_pdf_detail_views(
                 raise _DetailUnavailable("registration")
             check_cancelled()
             _safe_directory(directory)
-        current = destination.lstat()
-        if not stat.S_ISREG(current.st_mode) or _mixed_stat_key(current) != _loose_snapshot(owned.snapshot):
-            raise _DetailUnavailable("registration")
+            current = destination.lstat()
+            if not stat.S_ISREG(current.st_mode) or _mixed_stat_key(current) != _loose_snapshot(owned.snapshot):
+                raise _DetailUnavailable("registration")
             views.append({**descriptor, "path": str(destination), "url": url})
         # Registration is a caller callback. Before returning, ensure no callback
         # replaced or modified any earlier view, including in-place writes.

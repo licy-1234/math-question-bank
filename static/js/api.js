@@ -160,6 +160,38 @@
         })();
         window.MathBankSafe = MathBankSafe;
 
+        // Verbose diagnostics stay silent unless the operator opts in. Packaging a
+        // console.log per request leaks internals (tokens, endpoints, payloads)
+        // into the console of every installed copy, so debug/info level logs are
+        // gated behind an explicit switch. warn/error keep their level because
+        // they describe real failures the operator has to act on.
+        const MathBankDebug = (() => {
+            const STORAGE_KEY = 'mathbank_debug_logs';
+            let override = null;
+
+            function isEnabled() {
+                if (override !== null) return override;
+                try {
+                    const raw = window.localStorage && window.localStorage.getItem(STORAGE_KEY);
+                    return raw === '1' || raw === 'true';
+                } catch (err) {
+                    return false;
+                }
+            }
+
+            return {
+                STORAGE_KEY,
+                isEnabled,
+                // Pins the gate for a support session or an automated check
+                // without touching persisted storage.
+                setOverride(value) { override = value === true; },
+                clearOverride() { override = null; },
+                debug(...args) { if (isEnabled()) console.debug('[MathBank]', ...args); },
+                info(...args) { if (isEnabled()) console.info('[MathBank]', ...args); }
+            };
+        })();
+        window.MathBankDebug = MathBankDebug;
+
         // Safe image previews use one delegated listener rather than interpolated
         // inline handlers containing untrusted URLs.
         document.addEventListener('click', (event) => {
@@ -1472,13 +1504,13 @@
                         return data;
                     })
                     .then(data => {
-                        console.log("Server shutdown command sent:", data);
+                        MathBankDebug.info('Server shutdown command sent:', data);
                     })
                     .catch(err => {
                         if (err && err.shutdownRejected) {
                             console.warn("Server shutdown rejected:", err);
                         } else {
-                            console.log("Server socket closed as expected during exit:", err);
+                            MathBankDebug.debug('Server socket closed as expected during exit:', err);
                         }
                     });
             }

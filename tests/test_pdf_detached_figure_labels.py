@@ -1,8 +1,6 @@
 """Detached labels need original stroke endpoints, ownership and growth bounds."""
 from copy import deepcopy
-from io import BytesIO
 
-from PIL import Image
 import pymupdf as fitz
 import pytest
 

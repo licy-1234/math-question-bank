@@ -195,26 +195,43 @@ def _references(value: str, identifier: str, field: str) -> list[dict]:
 
 
 def _stat_key(status) -> tuple:
-    """Fingerprint used to notice the file being swapped while we read it.
+    """Fingerprint for ``os.stat``/``os.lstat`` results **on both sides**.
 
-    ``st_ctime_ns`` is deliberately excluded: on Windows the value returned by
-    ``os.stat()`` (path query) and ``os.fstat()`` (handle query) is *not*
-    guaranteed to agree for the very same file — CPython 3.13 on Windows reports
-    the path query up to ~1 ms behind the handle query.  Any mixed path/handle
-    comparison that includes ctime therefore reports "changed" for every single
-    image, and the whole candidate silently drops out of the evidence payload.
-    ``st_dev`` / ``st_ino`` / ``st_size`` / ``st_mtime_ns`` are consistent across
-    both calls and still catch the real cases: a replace (new inode) or an
-    in-place rewrite (new mtime / new size).
+    ⚠️ 仅限「路径↔路径」或「句柄↔句柄」的同源比较。
+    不要把 ``os.stat(path)`` 的结果与 ``os.fstat(fd)`` 的结果用本函数互比：
+    Windows 上同一文件的路径查询与句柄查询返回的 ``st_ctime_ns`` **不保证一致**
+    （实测 CPython 3.13 约 28/50 次不一致），混比会让「文件是否被替换」的判定
+    恒为真，整批图片证据被静默丢弃。跨源比较请用 :func:`_path_stat_key`。
+
+    另注：Windows 的 ``st_ctime`` 语义是**创建时间**，不是 Unix 的「元数据变更时间」，
+    因此它抓不到「原地改写且事后还原 mtime」这类场景。真正的安全等价判断应依赖
+    内容哈希（本模块已有 sha256）或文件 ID/USN，不要把 ctime 当作强依据。
+    """
+
+    return status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns, status.st_ctime_ns
+
+
+def _path_stat_key(status) -> tuple:
+    """Fingerprint for comparing a **path query** with a **handle snapshot**.
+
+    ⚠️ 用途单一：只用于「``os.stat(path)`` / ``os.lstat(path)`` ↔ ``os.fstat(fd)``」
+    这种跨源比较，**不得**用于句柄↔句柄的安全等价判断（那应走 :func:`_stat_key`）。
+    这里去掉 ``st_ctime_ns`` 是为了消除 Windows 上路径查询与句柄查询的偏差；
+    ``st_dev`` / ``st_ino`` / ``st_size`` / ``st_mtime_ns`` 在两种查询下一致，
+    足以抓到替换（新 inode）与原地改写（新 mtime / 新 size）。
     """
 
     return status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns
 
 
-def _path_stat_key(status) -> tuple:
-    """Path-to-path variant; both sides come from ``os.stat`` so ctime is comparable."""
+def _warn_image_dropped(reference: str, reason: str) -> None:
+    """证据被丢弃时的显式告警。
 
-    return _stat_key(status) + (status.st_ctime_ns,)
+    之前这类丢弃是完全静默的：一旦判定逻辑出偏差，整批图片会无声消失，
+    用户只看到「核验通过率下降」而无法定位原因。这里保留一条可检索的日志。
+    """
+
+    print(f"[source-review-images] 候选图片未纳入核验依据（{reason}）：{reference}")
 
 
 def _read_image(reference: str, allowed: set[str], uploads_dir, test_uploads_dir) -> tuple[dict, bytes]:
@@ -238,14 +255,19 @@ def _read_image(reference: str, allowed: set[str], uploads_dir, test_uploads_dir
             os.close(descriptor)
             raise
         with stream:
-            if _stat_key(os.fstat(stream.fileno())) != _stat_key(before):
+            # 跨源比较（句柄 ↔ 路径）：用去掉 ctime 的口径。
+            if _path_stat_key(os.fstat(stream.fileno())) != _path_stat_key(before):
+                _warn_image_dropped(reference, "打开后快照与打开前不一致")
                 raise _ImageEvidenceError("changed")
             data = stream.read(MAX_IMAGE_BYTES + 1)
             after_read = os.fstat(stream.fileno())
         checked_path = resolve_upload_asset(reference, uploads_dir=root, url_prefix=prefix)
-        if (checked_path != path or _stat_key(before) != _stat_key(after_read)
-                or _path_stat_key(before) != _path_stat_key(checked_path.stat())
+        # before/after_read 是跨源（路径 ↔ 句柄）→ 弱口径；
+        # before/checked_path.stat() 同源（路径 ↔ 路径）→ 保留 ctime 的强口径。
+        if (checked_path != path or _path_stat_key(before) != _path_stat_key(after_read)
+                or _stat_key(before) != _stat_key(checked_path.stat())
                 or len(data) != before.st_size):
+            _warn_image_dropped(reference, "读取后快照与读取前不一致")
             raise _ImageEvidenceError("changed")
     except (AssetSecurityError, OSError):
         raise _ImageEvidenceError("asset") from None
@@ -297,6 +319,8 @@ def prepare_candidate_images(items: list[dict], *, allowed_paths: Iterable[str],
         raise ValueError("Candidate image evidence requires unique nonempty string IDs")
     allowed = {path for path in allowed_paths if isinstance(path, str)}
     per_item, references, all_bindings, field_hashes = {}, {}, {}, {}
+    # 丢弃原因计数：整批证据缺失曾经是完全静默的，这里留一条可观测的汇总日志。
+    dropped_reasons = Counter()
     images, image_data = {}, {}
     total_bytes, total_pixels, total_label_chars = 0, 0, 0
     for item in items:
@@ -358,7 +382,9 @@ def prepare_candidate_images(items: list[dict], *, allowed_paths: Iterable[str],
                     pending_images[path] = {"image_id": image_ids[path], **metadata}
                     pending_data[path] = data
         except _ImageEvidenceError as exc:
-            result["reasons"].append(_REASONS[str(exc)])
+            reason = str(exc)
+            dropped_reasons[reason] += 1
+            result["reasons"].append(_REASONS[reason])
             continue
         images.update(pending_images)
         image_data.update(pending_data)
@@ -368,6 +394,13 @@ def prepare_candidate_images(items: list[dict], *, allowed_paths: Iterable[str],
         for path in paths:
             all_bindings.setdefault(path, []).extend(item_bindings[path])
             result["images"].append({**images[path], "bindings": item_bindings[path]})
+    if dropped_reasons:
+        summary = "，".join(f"{reason}×{count}" for reason, count in sorted(dropped_reasons.items()))
+        print(f"[source-review-images] 本批有候选题图未纳入核验依据：{summary}")
+        if dropped_reasons.get("changed", 0) > 1:
+            # 同上：单张被替换是正常防御，成批出现几乎一定是判定逻辑本身出了问题。
+            print("[source-review-images] 警告：多张图片同时判定为「读取期间发生变化」，"
+                  "请检查 _read_image 的快照比较口径（不要混用路径查询与句柄查询的 ctime）。")
     messages = []
     for path, metadata in images.items():
         messages.extend([{"type": "text", "text": _image_label(metadata["image_id"], path, all_bindings[path])},

@@ -1,6 +1,4 @@
 """Machine transcript integrity is separate from native mathematical truth."""
-from copy import deepcopy
-from pathlib import Path
 import hashlib
 import pytest
 from PIL import Image

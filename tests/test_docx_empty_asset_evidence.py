@@ -8,7 +8,7 @@ import pytest
 
 from mathbank.docx_helper import extract_docx_markdown
 from mathbank.docx_source_assets import (
-    _uniform_empty_png, _declared_image_description, verified_empty_asset_urls,
+    _uniform_empty_png, verified_empty_asset_urls,
 )
 
 RESOURCE = "学科网(www.zxxk.com)--教育资源门户，提供试卷、教案、课件、论文、素材以及各类教学资源下载，还有大量而丰富的教学相关资讯！"

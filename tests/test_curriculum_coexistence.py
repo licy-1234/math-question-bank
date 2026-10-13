@@ -1,6 +1,5 @@
-import pytest
 from main import LOCAL_TOKEN
-from mathbank.database import Question, QuestionCurriculum, init_db
+from mathbank.database import QuestionCurriculum, init_db
 
 # 单教材版本定案后的共存契约（get_active_version_code() 固定返回 "A"）：
 #   * 题目新增/更新只写入**启用版本 A** 的映射；

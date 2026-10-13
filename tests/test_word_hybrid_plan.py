@@ -11,7 +11,7 @@ from PIL import Image
 
 import pytest
 
-from mathbank.docx_helper import extract_docx_markdown, _new_diagnostics
+from mathbank.docx_helper import extract_docx_markdown
 from mathbank.word_hybrid_plan import (
     MAX_GROUPS, WordHybridPlanError, build_word_hybrid_plan,
     require_word_hybrid_plan, word_hybrid_plan_diagnostics,

@@ -1,6 +1,5 @@
 """Auxiliary views preserve the one-page OCR and task asset contracts."""
 from copy import deepcopy
-from pathlib import Path
 from uuid import uuid4
 
 import pymupdf as fitz

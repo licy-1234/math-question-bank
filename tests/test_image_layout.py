@@ -15,7 +15,7 @@ from sqlalchemy import create_engine
 from mathbank.image_layout import split_image_anchors, normalize_image_layouts
 from mathbank.paper_helper import build_latex_document, compile_tex_to_pdf
 from mathbank.word_export_helper import build_word_document
-from mathbank.database import Base, Question
+from mathbank.database import Base
 from mathbank import db_migrations
 
 A = '![](/static/uploads/a.png)'

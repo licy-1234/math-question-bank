@@ -33,7 +33,6 @@ import hashlib
 import json
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 # 需要同步的顶层路径（相对仓库根）

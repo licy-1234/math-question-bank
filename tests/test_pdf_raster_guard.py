@@ -1,6 +1,4 @@
 """Conservative scan-rectangle checks with Pillow-only synthetic evidence."""
-import hashlib
-import json
 import os
 from pathlib import Path
 import time

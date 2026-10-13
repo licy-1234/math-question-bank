@@ -1349,6 +1349,11 @@
                     return false;
                 }
                 
+                // 保存成功后要作废标签记忆缓存，取值必须在「提交之前」抓下来：
+                // 一是与真正提交给后端的值完全同源（后端按这份值累计使用次数），
+                // 二是避免保存过程中编辑器被重绘/回显后取到空值。
+                const pendingMemoryTags = { custom: [], micro: [] };
+
                 const formData = new FormData();
                 formData.append('content', content);
                 formData.append('question_type', qtype);
@@ -1385,6 +1390,12 @@
                         formData.append('tag_micro_methods', JSON.stringify(tagSelection.micro_methods || []));
                         formData.append('tag_function_code', tagSelection.function_code || '');
                         formData.append('tag_custom_tags', tagSelection.custom_tags || '');
+                        // 同一个分隔符/裁剪口径要跟后端 split_custom_tags 保持一致。
+                        const splitSavedTags = (value) => String(value || '')
+                            .split(/[,，]/).map((item) => String(item || '').trim()).filter(Boolean);
+                        pendingMemoryTags.custom = splitSavedTags(tagSelection.custom_tags);
+                        pendingMemoryTags.micro = (tagSelection.micro_methods || [])
+                            .map((item) => String(item || '').trim()).filter(Boolean);
                     }
                 }
                 const combinedImages = typeof window.editorAssetReferences === 'function'
@@ -1552,21 +1563,16 @@
                             window.refreshEditorSourceCandidates();
                         }
                         // 同样让「自定义标签 / 微观解题方法」的记忆缓存失效并重拉。
-                        // 后端在保存时已经记下了本次用过的取值，但前端面板读的是
+                        // 后端在保存时已经按本次提交的值累计了使用次数，但前端面板读的是
                         // 会话内缓存；不作废缓存的话，新存的标签要刷新页面才会出现。
+                        // 维度键必须与 tag-memory.js 的 cacheByDim 一致：custom / micro
+                        // （后端 MEMORY_DIMENSIONS 也只有这两个值）。
                         if (window.MathBankTagMemory && typeof window.MathBankTagMemory.notifySaved === 'function') {
-                            const splitSavedTags = (value) => String(value || '')
-                                .split(/[,，]/).map((item) => String(item || '').trim()).filter(Boolean);
-                            const savedCustomInput = document.getElementById('editTags');
-                            const savedCustomTags = splitSavedTags(savedCustomInput ? savedCustomInput.value : '');
-                            if (savedCustomTags.length) {
-                                window.MathBankTagMemory.notifySaved('custom', savedCustomTags);
+                            if (pendingMemoryTags.custom.length) {
+                                window.MathBankTagMemory.notifySaved('custom', pendingMemoryTags.custom);
                             }
-                            const savedMicroTags = (window.MathBankTags
-                                && typeof window.MathBankTags.getSelection === 'function')
-                                ? (window.MathBankTags.getSelection().micro_methods || []) : [];
-                            if (savedMicroTags.length) {
-                                window.MathBankTagMemory.notifySaved('micro', savedMicroTags);
+                            if (pendingMemoryTags.micro.length) {
+                                window.MathBankTagMemory.notifySaved('micro', pendingMemoryTags.micro);
                             }
                         }
                         return true;

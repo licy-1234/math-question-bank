@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from mathbank.docx_helper import extract_docx_markdown, _SYMBOL_FONT_MAP
+from mathbank.docx_helper import extract_docx_markdown
 from mathbank.docx_source_scopes import verify_source_review_evidence
 from mathbank.mathml_helper import MathMLUnsupported, mathml_element_to_latex
 from mathbank.source_metadata import prepare_word_source_metadata

@@ -7,6 +7,14 @@
 用法：
     python tools/deploy/snapshot_db.py <db_path> [--out 输出json路径]
 
+指纹范围（重要，别误解）：
+    - ``fingerprint`` 是**查询结果**的 SHA256（逐题 ``id|content``），不是数据库文件
+      的字节哈希。SQLite 读取时会自动合并 -wal 中已提交但未 checkpoint 的内容，
+      所以这个指纹天然覆盖 WAL，不存在"主文件没变但数据变了"的盲区。
+    - 若将来改成对文件字节做哈希，就必须先 ``PRAGMA wal_checkpoint(TRUNCATE)``
+      或把 ``-wal`` / ``-shm`` 一起纳入，否则会漏掉未落盘的变更。本工具因此
+      额外输出 journal_mode 与 -wal/-shm 的大小，便于核对当前是否存在未落盘数据。
+
 安全护栏（都是踩过坑才加的，不要删）：
     - 输入必须是**已存在**且带 SQLite 文件头的数据库。早先版本对不存在的路径
       会静默建一个 0 字节的 sqlite 文件，看起来像"数据库被清空了"。
@@ -87,9 +95,19 @@ def snapshot(db_path: str) -> dict:
         blob = []
         for r in rows:
             blob.append(f"{r.get('id')}|{r.get('content') or ''}")
+        # WAL 相关的可观测信息：只为审计"是否有未落盘数据"，不做任何写操作
+        # （wal_checkpoint 会写库，绝不能在这里调用）。
+        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        sidecars = {}
+        for suffix in ("-wal", "-shm"):
+            side = Path(str(path) + suffix)
+            sidecars[suffix] = side.stat().st_size if side.exists() else 0
         return {
             "db_path": str(path),
             "db_size": path.stat().st_size,
+            "journal_mode": journal_mode,
+            "wal_size": sidecars["-wal"],
+            "shm_size": sidecars["-shm"],
             "columns": cols,
             "count": len(rows),
             "fingerprint": _sha256("\n".join(blob)),

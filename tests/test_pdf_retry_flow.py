@@ -1,7 +1,6 @@
 """PDF retry routing in an isolated source copy, with no provider networking."""
 
 import json
-from pathlib import Path
 from types import SimpleNamespace
 from copy import deepcopy
 import uuid

@@ -585,3 +585,35 @@ def test_ownership_snapshot_comparable_across_path_and_handle(tmp_path):
     # Path-vs-handle comparison ignores ctime, so it agrees for the same file.
     assert details._mixed_stat_key(probe.lstat()) == details._loose_snapshot(snapshot)
     assert details._loose_snapshot(snapshot) == snapshot[:4]
+
+
+def test_rollback_survives_path_handle_ctime_skew(tmp_path, monkeypatch):
+    """句柄↔路径 ctime 不一致时，回滚仍必须删掉自己写的文件（不留孤儿）。
+
+    与 test_collision_never_overwrites_or_deletes_existing_file 同一场景，但**显式制造**
+    ctime 偏差：便携包 Python 3.10 上几乎不会自然复现，靠环境"碰运气"防不住回归。
+    修复前：unlink 闸门用了含 ctime 的混比 → 判定不等 → 静默跳过删除 → 目录残留。
+    """
+
+    real_fstat = os.fstat
+
+    def skewed_fstat(fd):
+        status = real_fstat(fd)
+        # 复制全部 st_* 字段（st_mode / st_size 等都要用），只把 ctime 拧偏。
+        fields = SimpleNamespace(**{name: getattr(status, name)
+                                    for name in dir(status) if name.startswith("st_")})
+        fields.st_ctime_ns = status.st_ctime_ns + 1_234_567
+        return fields
+
+    monkeypatch.setattr(os, "fstat", skewed_fstat)
+    monkeypatch.setattr(details.uuid, "uuid4", lambda: SimpleNamespace(hex="fixed"))
+
+    existing = tmp_path / "detail_test_p1_d2_fixed.png"
+    existing.write_bytes(b"previous asset")
+    with fitz.open() as document:
+        result = render(document.new_page(width=240, height=320), tmp_path)
+
+    assert result["status"] == "skipped" and not result["views"]
+    # 关键：自己写的 d1 必须被回滚删掉，只留下原本就存在的 d2。
+    assert list(tmp_path.iterdir()) == [existing]
+    assert existing.read_bytes() == b"previous asset"
