@@ -410,6 +410,7 @@
         const recordsSec = document.getElementById('recordsWorkspaceSection');
         const dashboardSec = document.getElementById('dashboardWorkspaceSection');
         const qaSec = document.getElementById('qaWorkspaceSection');
+        const topicSec = document.getElementById('topicWorkspaceSection');
         if (workspaceId === 'import' && previousWorkspace !== 'import' && importSec) {
             importSec.dataset.returnNavTarget = previousWorkspace;
         }
@@ -432,6 +433,7 @@
         if (importSec) importSec.classList.add('hidden');
         if (recordsSec) recordsSec.classList.add('hidden');
         if (qaSec) qaSec.classList.add('hidden');
+        if (topicSec) topicSec.classList.add('hidden');
 
         if (workspaceId === 'dashboard') {
             if (dashboardSec) {
@@ -451,6 +453,10 @@
             if (recordsSec) recordsSec.classList.remove('hidden');
         } else if (workspaceId === 'qa') {
             if (qaSec) qaSec.classList.remove('hidden');
+        } else if (workspaceId === 'topic') {
+            // 专题工坊：与 qa 分支同构；topic.js 必须在 paper.js 之后加载。
+            if (topicSec) topicSec.classList.remove('hidden');
+            if (typeof window.renderTopicWorkspace === 'function') window.renderTopicWorkspace();
         } else {
             if (typeof window.closeBankDetail === 'function') window.closeBankDetail();
             if (bankSec) bankSec.classList.remove('hidden');

@@ -19,7 +19,7 @@ from mathbank.paths import SCHEMA_SNAPSHOT_DIR
 from mathbank.sub_knowledge import normalize_sub_knowledge
 
 
-LATEST_SCHEMA_VERSION = 12
+LATEST_SCHEMA_VERSION = 13
 LEGACY_REQUIRED_TABLES = {
     "questions",
     "question_curriculums",
@@ -31,7 +31,25 @@ REQUIRED_TABLES = LEGACY_REQUIRED_TABLES | {
     "question_tags",
     "question_relations",
     "question_sub_knowledge",
+    "topics",
+    "topic_groups",
+    "topic_items",
+    "topic_versions",
+    "topic_links",
+    "question_usage_stats",
 }
+
+#: 专题工坊六表（v13）。刻意不纳入 SELF_HEALING_TABLES：这些表存用户原创
+#: 教学设计（等同 papers），不是可从其他表派生的索引；缺表时重建空表等于
+#: 静默数据丢失，必须 fail-closed 引导用户从 data_backup 恢复备份。
+TOPIC_TABLES = (
+    "topics",
+    "topic_groups",
+    "topic_items",
+    "topic_versions",
+    "topic_links",
+    "question_usage_stats",
+)
 
 V6_QUESTION_FINGERPRINT_COLUMNS = {
     "question_id",
@@ -813,6 +831,343 @@ def _backfill_question_relations(connection) -> int:
     return inserted
 
 
+#: v13 专题工坊建表语句（纯增量；与 database.py 的 ORM 模型逐列对齐）。
+_TOPIC_TABLE_DDL = {
+    "topics": """
+        CREATE TABLE topics (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            title VARCHAR(200) NOT NULL,
+            topic_type VARCHAR(30) NOT NULL DEFAULT 'knowledge',
+            description TEXT NOT NULL DEFAULT '',
+            view_mode VARCHAR(20) NOT NULL DEFAULT 'linear',
+            parent_topic_id INTEGER DEFAULT NULL,
+            is_template BOOLEAN NOT NULL DEFAULT 0,
+            status VARCHAR(20) NOT NULL DEFAULT 'active',
+            usage_count INTEGER NOT NULL DEFAULT 0,
+            last_used_at DATETIME DEFAULT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT fk_topics_parent FOREIGN KEY(parent_topic_id) REFERENCES topics(id) ON DELETE RESTRICT
+        )
+    """,
+    "topic_groups": """
+        CREATE TABLE topic_groups (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            topic_id INTEGER NOT NULL,
+            title VARCHAR(120) NOT NULL DEFAULT '',
+            position INTEGER NOT NULL DEFAULT 0,
+            note TEXT NOT NULL DEFAULT '',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_topic_group_order UNIQUE (topic_id, position),
+            CONSTRAINT ck_topic_group_position CHECK (position >= 0),
+            CONSTRAINT fk_topic_groups_topic FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
+        )
+    """,
+    "topic_items": """
+        CREATE TABLE topic_items (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            topic_id INTEGER NOT NULL,
+            question_id INTEGER NOT NULL,
+            group_id INTEGER DEFAULT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            note TEXT NOT NULL DEFAULT '',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_topic_item_question UNIQUE (topic_id, question_id),
+            CONSTRAINT uq_topic_item_order UNIQUE (topic_id, position),
+            CONSTRAINT ck_topic_item_position CHECK (position >= 0),
+            CONSTRAINT fk_topic_items_topic FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE,
+            CONSTRAINT fk_topic_items_question FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE,
+            CONSTRAINT fk_topic_items_group FOREIGN KEY(group_id) REFERENCES topic_groups(id) ON DELETE SET NULL
+        )
+    """,
+    "topic_versions": """
+        CREATE TABLE topic_versions (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            topic_id INTEGER NOT NULL,
+            version_no INTEGER NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            item_count INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_topic_version_no UNIQUE (topic_id, version_no),
+            CONSTRAINT ck_topic_version_no_positive CHECK (version_no >= 1),
+            CONSTRAINT ck_topic_version_item_count CHECK (item_count >= 0),
+            CONSTRAINT fk_topic_versions_topic FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
+        )
+    """,
+    "topic_links": """
+        CREATE TABLE topic_links (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            source_topic_id INTEGER NOT NULL,
+            target_topic_id INTEGER NOT NULL,
+            link_code VARCHAR(60) NOT NULL,
+            link_label VARCHAR(120) NOT NULL DEFAULT '',
+            note TEXT NOT NULL DEFAULT '',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_topic_link UNIQUE (source_topic_id, target_topic_id, link_code),
+            CONSTRAINT ck_topic_link_order CHECK (source_topic_id <> target_topic_id),
+            CONSTRAINT fk_topic_links_source FOREIGN KEY(source_topic_id) REFERENCES topics(id) ON DELETE CASCADE,
+            CONSTRAINT fk_topic_links_target FOREIGN KEY(target_topic_id) REFERENCES topics(id) ON DELETE CASCADE
+        )
+    """,
+    "question_usage_stats": """
+        CREATE TABLE question_usage_stats (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            question_id INTEGER NOT NULL,
+            topic_id INTEGER DEFAULT NULL,
+            paper_id INTEGER DEFAULT NULL,
+            record_kind VARCHAR(20) NOT NULL DEFAULT 'manual',
+            correct_rate REAL DEFAULT NULL,
+            avg_seconds INTEGER DEFAULT NULL,
+            sample_size INTEGER NOT NULL DEFAULT 0,
+            note TEXT NOT NULL DEFAULT '',
+            recorded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT ck_qus_rate CHECK (correct_rate IS NULL OR (correct_rate BETWEEN 0 AND 1)),
+            CONSTRAINT ck_qus_seconds CHECK (avg_seconds IS NULL OR avg_seconds >= 0),
+            CONSTRAINT ck_qus_sample CHECK (sample_size >= 0),
+            CONSTRAINT fk_qus_question FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE,
+            CONSTRAINT fk_qus_topic FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE SET NULL,
+            CONSTRAINT fk_qus_paper FOREIGN KEY(paper_id) REFERENCES papers(id) ON DELETE SET NULL
+        )
+    """,
+}
+
+#: 每张专题表的普通索引（不含 UNIQUE 约束自建索引与部分唯一索引）。
+_TOPIC_TABLE_INDEXES = {
+    "topics": {
+        "idx_topics_parent": ("parent_topic_id",),
+        "idx_topics_type": ("topic_type",),
+        "idx_topics_status": ("status",),
+    },
+    "topic_groups": {
+        "idx_topic_groups_topic": ("topic_id",),
+    },
+    "topic_items": {
+        "idx_topic_items_topic": ("topic_id",),
+        "idx_topic_items_question": ("question_id",),
+        "idx_topic_items_group": ("group_id",),
+    },
+    "topic_versions": {
+        "idx_topic_versions_topic": ("topic_id",),
+    },
+    "topic_links": {
+        "idx_topic_links_source": ("source_topic_id",),
+        "idx_topic_links_target": ("target_topic_id",),
+        "idx_topic_links_code": ("link_code",),
+    },
+    "question_usage_stats": {
+        "idx_qus_question_time": ("question_id", "recorded_at"),
+        "idx_qus_topic": ("topic_id",),
+    },
+}
+
+#: 同一试卷讲评对同一题只允许一条反馈（NULL 不参与；手工记录可追加成趋势）。
+_TOPIC_TABLE_PARTIAL_INDEXES = {
+    "question_usage_stats": {
+        "uq_qus_paper_question": (
+            ("paper_id", "question_id"),
+            "paper_id IS NOT NULL AND record_kind = 'paper_review'",
+        ),
+    },
+}
+
+#: 每张专题表的列集合（id 之外全部 NOT NULL）。
+_TOPIC_TABLE_COLUMNS = {
+    "topics": (
+        "id", "title", "topic_type", "description", "view_mode", "parent_topic_id",
+        "is_template", "status", "usage_count", "last_used_at", "created_at", "updated_at",
+    ),
+    "topic_groups": ("id", "topic_id", "title", "position", "note", "created_at"),
+    "topic_items": ("id", "topic_id", "question_id", "group_id", "position", "note", "created_at"),
+    "topic_versions": ("id", "topic_id", "version_no", "snapshot_json", "note", "item_count", "created_at"),
+    "topic_links": ("id", "source_topic_id", "target_topic_id", "link_code", "link_label", "note", "created_at"),
+    "question_usage_stats": (
+        "id", "question_id", "topic_id", "paper_id", "record_kind", "correct_rate",
+        "avg_seconds", "sample_size", "note", "recorded_at",
+    ),
+}
+
+#: 每张专题表允许为 NULL 的列（其余非 id 列必须 NOT NULL）。
+_TOPIC_TABLE_NULLABLE_COLUMNS = {
+    "topics": ("parent_topic_id", "last_used_at"),
+    "topic_groups": (),
+    "topic_items": ("group_id",),
+    "topic_versions": (),
+    "topic_links": (),
+    "question_usage_stats": ("topic_id", "paper_id", "correct_rate", "avg_seconds"),
+}
+
+#: 每张专题表必须存在的外键动作：(table, from_column) -> (parent_table, parent_column, on_delete)。
+_TOPIC_TABLE_FOREIGN_KEYS = {
+    "topics": {("topics", "parent_topic_id"): ("topics", "id", "RESTRICT")},
+    "topic_groups": {("topic_groups", "topic_id"): ("topics", "id", "CASCADE")},
+    "topic_items": {
+        ("topic_items", "topic_id"): ("topics", "id", "CASCADE"),
+        ("topic_items", "question_id"): ("questions", "id", "CASCADE"),
+        ("topic_items", "group_id"): ("topic_groups", "id", "SET NULL"),
+    },
+    "topic_versions": {("topic_versions", "topic_id"): ("topics", "id", "CASCADE")},
+    "topic_links": {
+        ("topic_links", "source_topic_id"): ("topics", "id", "CASCADE"),
+        ("topic_links", "target_topic_id"): ("topics", "id", "CASCADE"),
+    },
+    "question_usage_stats": {
+        ("question_usage_stats", "question_id"): ("questions", "id", "CASCADE"),
+        ("question_usage_stats", "topic_id"): ("topics", "id", "SET NULL"),
+        ("question_usage_stats", "paper_id"): ("papers", "id", "SET NULL"),
+    },
+}
+
+#: 每张专题表必须存在的 UNIQUE 约束列组（含顺序）。
+_TOPIC_TABLE_UNIQUE_CONSTRAINTS = {
+    "topics": (),
+    "topic_groups": (("topic_id", "position"),),
+    "topic_items": (("topic_id", "question_id"), ("topic_id", "position")),
+    "topic_versions": (("topic_id", "version_no"),),
+    "topic_links": (("source_topic_id", "target_topic_id", "link_code"),),
+    "question_usage_stats": (),
+}
+
+#: 每张专题表必须存在的 CHECK 约束名（防手改库把约束抹掉）。
+_TOPIC_TABLE_CHECK_CONSTRAINTS = {
+    "topics": (),
+    "topic_groups": ("ck_topic_group_position",),
+    "topic_items": ("ck_topic_item_position",),
+    "topic_versions": ("ck_topic_version_no_positive", "ck_topic_version_item_count"),
+    "topic_links": ("ck_topic_link_order",),
+    "question_usage_stats": ("ck_qus_rate", "ck_qus_seconds", "ck_qus_sample"),
+}
+
+
+def _ensure_topic_tables(connection) -> dict[str, int]:
+    """v13 adds the six topic-studio tables; purely additive, no backfill."""
+
+    stats: dict[str, int] = {}
+    for table, ddl in _TOPIC_TABLE_DDL.items():
+        exists = bool(connection.exec_driver_sql(
+            f"SELECT 1 FROM sqlite_master WHERE type='table' AND name='{table}'"
+        ).first())
+        if not exists:
+            connection.exec_driver_sql(ddl)
+            stats[f"added_{table}"] = 1
+        for index_name, columns in _TOPIC_TABLE_INDEXES[table].items():
+            connection.exec_driver_sql(
+                f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({', '.join(columns)})"
+            )
+        for index_name, (columns, where_clause) in _TOPIC_TABLE_PARTIAL_INDEXES.get(table, {}).items():
+            connection.exec_driver_sql(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table} "
+                f"({', '.join(columns)}) WHERE {where_clause}"
+            )
+    _validate_topic_tables(connection)
+    return stats
+
+
+def _validate_topic_tables(connection) -> None:
+    """Fail closed when any topic table is missing, damaged or drifted."""
+
+    table_names = {
+        row[0]
+        for row in connection.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    missing_tables = [table for table in TOPIC_TABLES if table not in table_names]
+    if missing_tables:
+        raise RuntimeError(
+            "检测到专题表缺失: " + ", ".join(missing_tables)
+            + "。专题数据为用户原创教学内容，不会自动重建；请从 data_backup 恢复备份后重启。"
+        )
+
+    for table in TOPIC_TABLES:
+        info = {
+            row[1]: row
+            for row in connection.exec_driver_sql(f'PRAGMA table_info("{table}")').fetchall()
+        }
+        expected_columns = set(_TOPIC_TABLE_COLUMNS[table])
+        if set(info) != expected_columns:
+            raise RuntimeError(
+                f"数据库表 {table} 字段集合与 v13 结构不符: "
+                f"缺少 {sorted(expected_columns - set(info))}，多出 {sorted(set(info) - expected_columns)}"
+            )
+        for column in _TOPIC_TABLE_COLUMNS[table]:
+            if column == "id":
+                if int(info[column][5]) != 1:
+                    raise RuntimeError(f"{table} 主键结构异常")
+                continue
+            if int(info[column][5]) != 0:
+                raise RuntimeError(f"{table} 字段 {column} 不应当主键")
+            if column in _TOPIC_TABLE_NULLABLE_COLUMNS[table]:
+                continue
+            if int(info[column][3]) != 1:
+                raise RuntimeError(f"数据库表 {table} 字段 {column} 缺少 NOT NULL 约束")
+
+        foreign_keys = connection.exec_driver_sql(
+            f'PRAGMA foreign_key_list("{table}")'
+        ).fetchall()
+        for (from_table, from_column), (parent_table, parent_column, action) in (
+            _TOPIC_TABLE_FOREIGN_KEYS[table].items()
+        ):
+            if not any(
+                row[2] == parent_table
+                and row[3] == from_column
+                and row[4] == parent_column
+                and str(row[6]).upper() == action
+                for row in foreign_keys
+            ):
+                raise RuntimeError(
+                    f"数据库表 {table} 缺少外键 {from_column} -> "
+                    f"{parent_table}.{parent_column} ON DELETE {action}"
+                )
+
+        index_rows = connection.exec_driver_sql(f'PRAGMA index_list("{table}")').fetchall()
+        index_columns = {
+            tuple(
+                entry[2]
+                for entry in connection.exec_driver_sql(
+                    f'PRAGMA index_info("{row[1]}")'
+                ).fetchall()
+            ): row
+            for row in index_rows
+        }
+        for columns in _TOPIC_TABLE_UNIQUE_CONSTRAINTS[table]:
+            row = index_columns.get(columns)
+            if row is None or int(row[2]) != 1 or str(row[3]).upper() != "U":
+                raise RuntimeError(
+                    f"数据库表 {table} 缺少唯一约束 {columns}"
+                )
+        for index_name, columns in _TOPIC_TABLE_INDEXES[table].items():
+            row = index_columns.get(columns)
+            if row is None:
+                raise RuntimeError(f"数据库表 {table} 缺少索引 {index_name}")
+            if int(row[2]) == 1 and str(row[3]).upper() == "U":
+                raise RuntimeError(f"数据库表 {table} 索引 {index_name} 不应当唯一")
+        for index_name, (columns, where_clause) in (
+            _TOPIC_TABLE_PARTIAL_INDEXES.get(table, {}).items()
+        ):
+            row = index_columns.get(columns)
+            if row is None:
+                raise RuntimeError(f"数据库表 {table} 缺少部分唯一索引 {index_name}")
+            if int(row[2]) != 1 or len(row) < 5 or int(row[4]) != 1:
+                raise RuntimeError(f"数据库表 {table} 部分唯一索引 {index_name} 结构异常")
+            actual_where = connection.exec_driver_sql(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (index_name,)
+            ).scalar()
+            if not actual_where or where_clause not in str(actual_where):
+                raise RuntimeError(f"数据库表 {table} 部分唯一索引 {index_name} 条件不符")
+
+        table_sql = str(connection.exec_driver_sql(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).scalar() or "")
+        for constraint_name in _TOPIC_TABLE_CHECK_CONSTRAINTS[table]:
+            if constraint_name not in table_sql:
+                raise RuntimeError(f"数据库表 {table} 缺少 CHECK 约束 {constraint_name}")
+
+        violations = connection.exec_driver_sql(f"PRAGMA foreign_key_check({table})").fetchall()
+        if violations:
+            raise RuntimeError(f"数据库表 {table} 存在外键异常: {violations[:3]}")
+
+
 def _rebuild_relationship_tables(engine: Engine) -> dict[str, int]:
     """Rebuild relation tables with real FKs while repairing legacy drift."""
 
@@ -948,6 +1303,7 @@ def _rebuild_relationship_tables(engine: Engine) -> dict[str, int]:
             added_question_fingerprints = _ensure_question_fingerprint_table(connection)
             tag_stats = _ensure_question_tags_table(connection)
             relation_stats = _ensure_question_relations_table(connection)
+            topic_stats = _ensure_topic_tables(connection)
             _validate_figure_layout_schema(connection)
 
             violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
@@ -966,6 +1322,7 @@ def _rebuild_relationship_tables(engine: Engine) -> dict[str, int]:
                 **tag_stats,
                 **relation_stats,
                 **sub_knowledge_stats,
+                **topic_stats,
             }
         except Exception:
             if transaction_started:
@@ -995,6 +1352,7 @@ def _upgrade_derived_schema(engine: Engine) -> dict[str, int]:
             )
             stats.update(_ensure_question_tags_table(connection))
             stats.update(_ensure_question_relations_table(connection))
+            stats.update(_ensure_topic_tables(connection))
             _validate_figure_layout_schema(connection)
             connection.exec_driver_sql(f"PRAGMA user_version={LATEST_SCHEMA_VERSION}")
             connection.exec_driver_sql("COMMIT")
@@ -1067,6 +1425,7 @@ def _upgrade_v6_or_v7_fingerprint_schema(
             tag_stats = _ensure_question_tags_table(connection)
             relation_stats = _ensure_question_relations_table(connection)
             sub_knowledge_stats = _ensure_sub_knowledge_columns(connection)
+            topic_stats = _ensure_topic_tables(connection)
             _validate_figure_layout_schema(connection)
             connection.exec_driver_sql(f"PRAGMA user_version={LATEST_SCHEMA_VERSION}")
             connection.exec_driver_sql("COMMIT")
@@ -1079,6 +1438,7 @@ def _upgrade_v6_or_v7_fingerprint_schema(
                 **tag_stats,
                 **relation_stats,
                 **sub_knowledge_stats,
+                **topic_stats,
             }
         except Exception:
             if transaction_started:
@@ -1119,11 +1479,17 @@ def migrate_database(
         table_names = set(inspect(engine).get_table_names())
         if not REQUIRED_TABLES.issubset(table_names):
             missing = ", ".join(sorted(REQUIRED_TABLES - table_names))
+            if set(missing.split(", ")) & set(TOPIC_TABLES):
+                raise RuntimeError(
+                    "检测到专题表缺失: " + missing
+                    + "。专题数据为用户原创教学内容，不会自动重建；请从 data_backup 恢复备份后重启。"
+                )
             raise RuntimeError(f"数据库结构不完整，缺少必要数据表: {missing}")
         with engine.connect() as connection:
             _validate_question_fingerprint_schema(connection)
             _validate_figure_layout_schema(connection)
             _validate_sub_knowledge_schema(connection)
+            _validate_topic_tables(connection)
         return {"from_version": current, "to_version": current, "backup": None}
 
     if not table_names:

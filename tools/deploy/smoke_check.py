@@ -161,6 +161,36 @@ def main() -> int:
         str(custom_codes),
     )
 
+    # ---- schema v13：专题工坊配置白名单（types / link_codes / view_modes）----
+    try:
+        topic_config = (get("/api/config/topic-types") or {}).get("data") or {}
+        topic_type_codes = [t.get("code") for t in topic_config.get("topic_types") or []]
+        link_codes_all = [t.get("code") for t in topic_config.get("link_codes") or []]
+        view_mode_codes = [t.get("code") for t in topic_config.get("view_modes") or []]
+        scene_codes = [t.get("code") for t in topic_config.get("usage_scenes") or []]
+        check(
+            "专题类型白名单 10 项",
+            len(topic_type_codes) == 10,
+            str(topic_type_codes),
+        )
+        check(
+            "专题关联内置 5 项",
+            set(link_codes_all[:5]) == {"prereq", "progression", "similar", "parent_variant", "derived_from"},
+            str(link_codes_all),
+        )
+        check(
+            "视图模式 5 项",
+            set(view_mode_codes) == {"linear", "grouped", "tree", "tag", "relation"},
+            str(view_mode_codes),
+        )
+        check(
+            "使用场景 5 项",
+            len(scene_codes) == 5,
+            str(scene_codes),
+        )
+    except Exception as exc:  # noqa: BLE001
+        check("/api/config/topic-types 可访问", False, str(exc))
+
     n_easy = len(get("/api/questions?difficulty=easy&page_size=100"))
     n_medium = len(get("/api/questions?difficulty=medium&page_size=100"))
     n_hard = len(get("/api/questions?difficulty=hard&page_size=100"))

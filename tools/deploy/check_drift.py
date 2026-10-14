@@ -14,6 +14,10 @@
        tools/deploy/migrate_db.py。顺带报告题目数量，方便一眼看出"数据是不是还在"。
     4. schema v12 结构体检：question_relations 表必须在位（新关联单轨），
        且旧题组列 questions.association_group_id 必须已清空（无残留双轨）。
+    5. schema v13 结构体检：专题工坊六表（topics/topic_groups/topic_items/
+       topic_versions/topic_links/question_usage_stats）必须在位。专题是用户
+       原创教学设计，刻意不纳入自愈白名单——缺表不会静默重建，必须在体检中
+       暴露，引导从 data_backup 恢复备份。
 
 数据库全程以 sqlite 只读模式（mode=ro）打开，本脚本不做任何写操作。
 
@@ -186,6 +190,17 @@ def main() -> int:
                         "WHERE association_group_id IS NOT NULL AND association_group_id <> ''"
                     ).fetchone()[0]
                 )
+            # schema v13：专题工坊六表必须在位（原创内容，缺表不静默重建）。
+            topic_table_names = (
+                "topics", "topic_groups", "topic_items",
+                "topic_versions", "topic_links", "question_usage_stats",
+            )
+            missing_topic_tables = [
+                name for name in topic_table_names
+                if conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
+                ).fetchone() is None
+            ]
         finally:
             conn.close()
         db_info.append({
@@ -194,6 +209,7 @@ def main() -> int:
             "has_question_relations": has_relations,
             "question_relations": relation_rows,
             "legacy_association_group_rows": legacy_group_rows,
+            "missing_topic_tables": missing_topic_tables,
         })
     report["databases"] = db_info
     for info in db_info:
@@ -212,6 +228,13 @@ def main() -> int:
                 f"{info['db']} 仍有 {info['legacy_association_group_rows']} 道题目带着旧的 "
                 f"association_group_id（旧题组未折叠），会与新关联双轨不同步 —— "
                 f"请跑 migrate_db.py 完成 v{LATEST_SCHEMA_VERSION} 迁移"
+            )
+        if info["missing_topic_tables"]:
+            problems.append(
+                f"{info['db']} 缺少专题工坊表：{', '.join(info['missing_topic_tables'])}"
+                f"（schema v{info['schema_version']}，程序要求 v{LATEST_SCHEMA_VERSION}）—— "
+                f"专题属用户原创教学设计，不纳入自愈白名单，缺表不会静默重建；"
+                f"请先从 data_backup 恢复备份，或跑 migrate_db.py 完成 v{LATEST_SCHEMA_VERSION} 迁移"
             )
         if info["schema_version"] < LATEST_SCHEMA_VERSION:
             problems.append(
@@ -255,10 +278,15 @@ def main() -> int:
     print(f"\n  数据库（目标 schema v{LATEST_SCHEMA_VERSION}，只读打开）：")
     for info in db_info:
         verdict = "版本达标" if info["schema_version"] == LATEST_SCHEMA_VERSION else "版本不达标"
+        topic_note = (
+            "专题六表齐全" if not info["missing_topic_tables"]
+            else f"缺专题表：{', '.join(info['missing_topic_tables'])}"
+        )
         print(f"      {info['db']}: schema v{info['schema_version']}（{verdict}），题目 {info['questions']} 道，"
               f"question_tags {'有' if info['has_question_tags'] else '无'}，"
               f"question_relations {'有' if info['has_question_relations'] else '无'}"
-              f"（{info['question_relations']} 条），旧题组残留 {info['legacy_association_group_rows']} 道")
+              f"（{info['question_relations']} 条），旧题组残留 {info['legacy_association_group_rows']} 道，"
+              f"{topic_note}")
     print()
     if problems:
         print("  结论：存在漂移，页面看到的就是旧版本。")

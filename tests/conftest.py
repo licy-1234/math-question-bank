@@ -42,7 +42,17 @@ def db_session():
         yield session
     finally:
         session.close()
-        Base.metadata.drop_all(bind=test_engine)
+        # ``topics`` is self-referencing (parent_topic_id) and every pooled
+        # connection runs with PRAGMA foreign_keys=ON, so the implicit DELETE
+        # inside ``DROP TABLE topics`` trips over parent/child rows.  Drop the
+        # schema with enforcement off, then restore it for the next test.
+        with test_engine.connect() as connection:
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+        try:
+            Base.metadata.drop_all(bind=test_engine)
+        finally:
+            with test_engine.connect() as connection:
+                connection.exec_driver_sql("PRAGMA foreign_keys=ON")
 
 @pytest.fixture(scope="function")
 def client(db_session):

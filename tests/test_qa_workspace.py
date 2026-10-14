@@ -91,7 +91,7 @@ def test_qa_search_navigation_and_responsive_layout(browser, tmp_path, viewport)
     assert browser.evaluate("PaperStore.activeWorkspace === 'qa' && !document.getElementById('qaWorkspaceSection').classList.contains('hidden')")
     assert browser.evaluate("JSON.stringify({cart:PaperStore.cart,meta:PaperStore.meta,drafts:localStorage.getItem('mathbank_local_drafts')})") == before
     layout = browser.evaluate("(() => {const qa=document.getElementById('qaWorkspaceSection');const buttons=[...document.querySelectorAll('#appNavPrimary button')].map(n=>n.getBoundingClientRect());return {overflow:qa.scrollWidth>qa.clientWidth+1,navCount:buttons.length,touch:buttons.every(r=>r.width>=44&&r.height>=44),inViewport:buttons.every(r=>r.left>=0&&r.right<=innerWidth+1)}})()")
-    assert not layout['overflow'] and layout['navCount'] == 6 and layout['touch'] and layout['inViewport'], layout
+    assert not layout['overflow'] and layout['navCount'] == 7 and layout['touch'] and layout['inViewport'], layout
     browser.command('screenshot', str(tmp_path / f'qa-{viewport[0]}-light.png'))
     browser.evaluate("document.documentElement.classList.add('dark');document.body.classList.add('dark');true")
     browser.command('wait', '--fn', "getComputedStyle(document.querySelector('#qaCategories [aria-pressed=true]')).color === getComputedStyle(document.getElementById('qaWorkspaceSection')).color && getComputedStyle(document.getElementById('qaResetFilters')).backgroundColor === getComputedStyle(document.querySelector('.qa-question')).backgroundColor")
@@ -116,4 +116,4 @@ def test_qa_disabled_navigation_and_existing_workspaces(browser, viewport):
     browser.evaluate("closeImportModal();true")
     assert browser.evaluate("PaperStore.activeWorkspace === 'bank'")
     layout = browser.evaluate("(() => {const buttons=[...document.querySelectorAll('#appNavPrimary button')].map(n=>n.getBoundingClientRect());return {count:buttons.length,touch:buttons.every(r=>r.width>=44&&r.height>=44),inside:buttons.every(r=>r.left>=0&&r.right<=innerWidth+1)}})()")
-    assert layout['count'] == 5 and layout['touch'] and layout['inside'], layout
+    assert layout['count'] == 6 and layout['touch'] and layout['inside'], layout

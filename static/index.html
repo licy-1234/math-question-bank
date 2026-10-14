@@ -112,6 +112,12 @@
                 <span>QA</span>
             </button>
             <!-- QA_END -->
+            <!-- TOPIC_START -->
+            <button type="button" id="appNavTopic" class="app-nav-item" data-app-nav-target="topic" onclick="selectWorkspace('topic', '专题工坊')">
+                <i class="fa-solid fa-diagram-project" aria-hidden="true"></i>
+                <span>专题工坊</span>
+            </button>
+            <!-- TOPIC_END -->
         </nav>
 
         <div class="app-nav-spacer"></div>
@@ -173,6 +179,12 @@
                         <i class="fa-solid fa-check text-[10px] text-brand-600 dark:text-brand-500 hidden" id="ws-check-qa"></i>
                     </button>
                     <!-- QA_END -->
+                    <!-- TOPIC_START -->
+                    <button type="button" onclick="selectWorkspace('topic', '专题工坊')" class="glass-dropdown-item w-full px-3.5 py-2.5 text-xs text-left flex items-center justify-between rounded-xl" id="ws-btn-topic">
+                        <span>专题工坊</span>
+                        <i class="fa-solid fa-check text-[10px] text-brand-600 dark:text-brand-500 hidden" id="ws-check-topic"></i>
+                    </button>
+                    <!-- TOPIC_END -->
                 </div>
             </div>
 
@@ -1240,6 +1252,12 @@
                     <i class="fa-solid fa-pen" aria-hidden="true"></i>
                     <span>编辑</span>
                 </button>
+                <!-- TOPIC_START -->
+                <button type="button" id="addCurrentQuestionToTopicBtn" onclick="window.addCurrentQuestionToTopic && window.addCurrentQuestionToTopic()" class="bank-detail-topic-btn glass-btn rounded-xl" aria-label="将当前题目加入专题" title="加入专题">
+                    <i class="fa-solid fa-folder-plus" aria-hidden="true"></i>
+                    <span>加入专题</span>
+                </button>
+                <!-- TOPIC_END -->
             </div>
 
             <!-- Beautiful Paper View Card -->
@@ -1383,6 +1401,75 @@
             </div>
         </div>
         <!-- End of Paper Workspace Section -->
+
+        <!-- TOPIC_START -->
+        <!-- Workspace: Topic studio (专题自由组合) -->
+        <section id="topicWorkspaceSection" class="topic-workspace hidden w-full h-full overflow-hidden" aria-labelledby="topicWorkspaceTitle">
+            <h1 class="sr-only">专题工坊</h1>
+            <header class="topic-workspace-header">
+                <div class="workspace-context-heading topic-workspace-heading">
+                    <span class="topic-workspace-heading-icon" aria-hidden="true"><i class="fa-solid fa-diagram-project"></i></span>
+                    <div>
+                        <h2 id="topicWorkspaceTitle">专题工坊</h2>
+                        <p>按教学意图自由创建、组合、复用、迭代题目专题</p>
+                    </div>
+                </div>
+                <div class="topic-workspace-actions">
+                    <label for="topicSearchInput" class="sr-only">搜索专题</label>
+                    <input id="topicSearchInput" type="search" placeholder="搜索专题标题或导语" class="glass-input" oninput="window.onTopicSearchInput && window.onTopicSearchInput(this.value)">
+                    <div class="topic-create-menu" role="menu" aria-label="新建专题方式">
+                        <button type="button" class="glass-btn" onclick="window.toggleTopicCreateMenu && window.toggleTopicCreateMenu()" aria-haspopup="menu" aria-expanded="false" id="topicCreateMenuBtn">
+                            <i class="fa-solid fa-plus" aria-hidden="true"></i><span>新建专题</span>
+                        </button>
+                        <div class="topic-create-menu-list hidden" id="topicCreateMenuList" role="menu">
+                            <button type="button" role="menuitem" onclick="window.createTopicBlank && window.createTopicBlank()"><i class="fa-solid fa-file-pen" aria-hidden="true"></i>空白创建</button>
+                            <button type="button" role="menuitem" onclick="window.openTopicFromTagsModal && window.openTopicFromTagsModal()"><i class="fa-solid fa-tags" aria-hidden="true"></i>从标签生成</button>
+                            <button type="button" role="menuitem" onclick="window.openTopicFromPaperModal && window.openTopicFromPaperModal()"><i class="fa-solid fa-file-lines" aria-hidden="true"></i>从试卷反推</button>
+                            <button type="button" role="menuitem" onclick="window.openTopicFromCurriculumModal && window.openTopicFromCurriculumModal()"><i class="fa-solid fa-sitemap" aria-hidden="true"></i>从课程树生成</button>
+                        </div>
+                    </div>
+                </div>
+            </header>
+            <div class="topic-workspace-body">
+                <aside class="topic-list-panel" aria-label="专题列表">
+                    <div class="topic-list-filters" id="topicListFilters"><!-- Rendered by topic.js --></div>
+                    <div class="topic-list-container custom-scrollbar" id="topicListContainer">
+                        <div class="ui-state ui-state-loading" role="status" aria-live="polite">
+                            <span class="ui-state-icon" aria-hidden="true"><i class="fa-solid fa-spinner fa-spin"></i></span>
+                            <strong class="ui-state-title">正在载入专题</strong>
+                            <span class="ui-state-description">专题列表加载完成后会显示在这里。</span>
+                        </div>
+                    </div>
+                    <div class="topic-list-footer">
+                        <button type="button" class="topic-new-btn" onclick="window.createTopicBlank && window.createTopicBlank()">
+                            <i class="fa-solid fa-plus" aria-hidden="true"></i><span>新建专题</span>
+                        </button>
+                    </div>
+                </aside>
+                <section class="topic-detail-panel" aria-label="专题详情">
+                    <div class="topic-detail-empty" id="topicDetailEmpty">
+                        <span class="ui-state-icon" aria-hidden="true"><i class="fa-solid fa-diagram-project"></i></span>
+                        <strong class="ui-state-title">还没有选择专题</strong>
+                        <span class="ui-state-description">从左侧列表选择一个专题，或新建一个专题开始组合题目。</span>
+                    </div>
+                    <div class="topic-detail-content hidden" id="topicDetailContent">
+                        <header class="topic-detail-header" id="topicDetailHeader"><!-- Rendered by topic.js --></header>
+                        <div class="topic-detail-scroll custom-scrollbar" id="topicDetailScroll"><!-- Rendered by topic.js --></div>
+                    </div>
+                </section>
+                <aside class="topic-inspector-panel" aria-label="检查器">
+                    <div class="topic-inspector-section" id="topicInspectorQuestion"><!-- Rendered by topic.js --></div>
+                    <div class="topic-inspector-section" id="topicInspectorInfo"><!-- Rendered by topic.js --></div>
+                </aside>
+            </div>
+            <div class="topic-mobile-switch" role="tablist" aria-label="专题视图">
+                <button type="button" role="tab" aria-selected="true" data-topic-pane="list" onclick="window.setTopicMobilePane && window.setTopicMobilePane('list')">专题</button>
+                <button type="button" role="tab" aria-selected="false" data-topic-pane="detail" onclick="window.setTopicMobilePane && window.setTopicMobilePane('detail')">详情</button>
+                <button type="button" role="tab" aria-selected="false" data-topic-pane="inspector" onclick="window.setTopicMobilePane && window.setTopicMobilePane('inspector')">检查器</button>
+            </div>
+        </section>
+        <!-- TOPIC_END -->
+        <!-- End of Topic Workspace Section -->
 
         <!-- Workspace 3: Saved paper records -->
         <section id="recordsWorkspaceSection" class="records-workspace hidden w-full h-full overflow-hidden" aria-labelledby="recordsWorkspaceTitle">
@@ -2477,6 +2564,9 @@
     <script src="/static/js/ocr.js"></script>
     <script src="/static/js/import.js"></script>
     <script src="/static/js/paper.js"></script>
+    <!-- TOPIC_START（必须在 paper.js 之后加载：selectWorkspace 的 topic 分支在 paper.js 中） -->
+    <script src="/static/js/topic.js"></script>
+    <!-- TOPIC_END -->
     <script src="/static/js/dashboard.js"></script>
     <!-- QA_START -->
     <script src="/static/js/qa-data.js"></script>

@@ -7,6 +7,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -714,6 +715,193 @@ class PaperQuestion(Base):
             "score": self.score
         }
 
+
+# ----------------- 专题工坊（schema v13） -----------------
+
+class Topic(Base):
+    """教学专题：题目的教学化重组单元（长期沉淀、可嵌套、可关联、可版本化）。"""
+
+    __tablename__ = "topics"
+    __table_args__ = (
+        Index("idx_topics_parent", "parent_topic_id"),
+        Index("idx_topics_type", "topic_type"),
+        Index("idx_topics_status", "status"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String(200), nullable=False)
+    topic_type = Column(String(30), nullable=False, default="knowledge", server_default=text("'knowledge'"))
+    description = Column(Text, nullable=False, default="", server_default=text("''"))
+    view_mode = Column(String(20), nullable=False, default="linear", server_default=text("'linear'"))
+    parent_topic_id = Column(Integer, ForeignKey("topics.id", ondelete="RESTRICT"), nullable=True)
+    is_template = Column(Boolean, nullable=False, default=False, server_default="0")
+    status = Column(String(20), nullable=False, default="active", server_default=text("'active'"))
+    usage_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    last_used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow_naive, server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+    updated_at = Column(DateTime, default=_utcnow_naive, onupdate=_utcnow_naive,
+                        server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+
+    # passive_deletes 必须：否则 ORM 删父行前会先把子专题 FK 清 NULL，绕过 DB RESTRICT。
+    parent_topic = relationship("Topic", remote_side=[id], passive_deletes=True)
+    # 依赖 DB 级 ON DELETE CASCADE / SET NULL，避免 ORM 预先加载子行改写 FK。
+    groups = relationship("TopicGroup", passive_deletes=True)
+    items = relationship("TopicItem", passive_deletes=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "title": self.title, "topic_type": self.topic_type,
+            "description": self.description or "", "view_mode": self.view_mode or "linear",
+            "parent_topic_id": self.parent_topic_id, "is_template": bool(self.is_template),
+            "status": self.status or "active", "usage_count": self.usage_count or 0,
+            "last_used_at": (self.last_used_at.isoformat() + "Z") if self.last_used_at else None,
+            "created_at": (self.created_at.isoformat() + "Z") if self.created_at else None,
+            "updated_at": (self.updated_at.isoformat() + "Z") if self.updated_at else None,
+        }
+
+
+class TopicGroup(Base):
+    """专题内的题目分组（有序；删除分组只会把题目置为未分组）。"""
+
+    __tablename__ = "topic_groups"
+    __table_args__ = (
+        UniqueConstraint("topic_id", "position", name="uq_topic_group_order"),
+        CheckConstraint("position >= 0", name="ck_topic_group_position"),
+        Index("idx_topic_groups_topic", "topic_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    topic_id = Column(Integer, ForeignKey("topics.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(120), nullable=False, default="", server_default=text("''"))
+    position = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    note = Column(Text, nullable=False, default="", server_default=text("''"))
+    created_at = Column(DateTime, default=_utcnow_naive, server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "topic_id": self.topic_id, "title": self.title or "",
+                "position": self.position, "note": self.note or ""}
+
+
+class TopicItem(Base):
+    """专题-题目有序多对多行：position 全局有序 + 题目级教学批注 note。"""
+
+    __tablename__ = "topic_items"
+    __table_args__ = (
+        UniqueConstraint("topic_id", "question_id", name="uq_topic_item_question"),
+        UniqueConstraint("topic_id", "position", name="uq_topic_item_order"),
+        CheckConstraint("position >= 0", name="ck_topic_item_position"),
+        Index("idx_topic_items_topic", "topic_id"),
+        Index("idx_topic_items_question", "question_id"),
+        Index("idx_topic_items_group", "group_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    topic_id = Column(Integer, ForeignKey("topics.id", ondelete="CASCADE"), nullable=False)
+    question_id = Column(Integer, ForeignKey("questions.id", ondelete="CASCADE"), nullable=False)
+    group_id = Column(Integer, ForeignKey("topic_groups.id", ondelete="SET NULL"), nullable=True)
+    position = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    note = Column(Text, nullable=False, default="", server_default=text("''"))
+    created_at = Column(DateTime, default=_utcnow_naive, server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+
+    # DB 级 CASCADE 负责删题离组；ORM 侧不得抢先 UPDATE 非空 FK。
+    question = relationship("Question", passive_deletes=True)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "topic_id": self.topic_id, "question_id": self.question_id,
+                "group_id": self.group_id, "position": self.position, "note": self.note or ""}
+
+
+class TopicVersion(Base):
+    """专题版本快照：append-only，snapshot_json 自包含（主题 + 分组 + 题目项）。"""
+
+    __tablename__ = "topic_versions"
+    __table_args__ = (
+        UniqueConstraint("topic_id", "version_no", name="uq_topic_version_no"),
+        CheckConstraint("version_no >= 1", name="ck_topic_version_no_positive"),
+        CheckConstraint("item_count >= 0", name="ck_topic_version_item_count"),
+        Index("idx_topic_versions_topic", "topic_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    topic_id = Column(Integer, ForeignKey("topics.id", ondelete="CASCADE"), nullable=False)
+    version_no = Column(Integer, nullable=False)
+    snapshot_json = Column(Text, nullable=False)
+    note = Column(Text, nullable=False, default="", server_default=text("''"))
+    item_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    created_at = Column(DateTime, default=_utcnow_naive, server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+
+    def to_dict(self) -> dict:
+        return {"version_no": self.version_no, "note": self.note or "",
+                "item_count": self.item_count,
+                "created_at": (self.created_at.isoformat() + "Z") if self.created_at else None}
+
+
+class TopicLink(Base):
+    """专题间有类型关联：前置/进阶/同类对比/母题变式/派生来源（照 question_relations 范式）。"""
+
+    __tablename__ = "topic_links"
+    __table_args__ = (
+        UniqueConstraint("source_topic_id", "target_topic_id", "link_code", name="uq_topic_link"),
+        CheckConstraint("source_topic_id <> target_topic_id", name="ck_topic_link_order"),
+        Index("idx_topic_links_source", "source_topic_id"),
+        Index("idx_topic_links_target", "target_topic_id"),
+        Index("idx_topic_links_code", "link_code"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    source_topic_id = Column(Integer, ForeignKey("topics.id", ondelete="CASCADE"), nullable=False)
+    target_topic_id = Column(Integer, ForeignKey("topics.id", ondelete="CASCADE"), nullable=False)
+    link_code = Column(String(60), nullable=False)
+    link_label = Column(String(120), nullable=False, default="", server_default=text("''"))
+    note = Column(Text, nullable=False, default="", server_default=text("''"))
+    created_at = Column(DateTime, default=_utcnow_naive, server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+
+    source_topic = relationship("Topic", foreign_keys=[source_topic_id], passive_deletes=True)
+    target_topic = relationship("Topic", foreign_keys=[target_topic_id], passive_deletes=True)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "source_topic_id": self.source_topic_id,
+                "target_topic_id": self.target_topic_id, "link_code": self.link_code,
+                "link_label": self.link_label or "", "note": self.note or ""}
+
+
+class QuestionUsageStat(Base):
+    """题目级学情记录（本地单机务实版）：手工录入追加 + 组卷讲评回写。"""
+
+    __tablename__ = "question_usage_stats"
+    __table_args__ = (
+        CheckConstraint("correct_rate IS NULL OR (correct_rate BETWEEN 0 AND 1)", name="ck_qus_rate"),
+        CheckConstraint("avg_seconds IS NULL OR avg_seconds >= 0", name="ck_qus_seconds"),
+        CheckConstraint("sample_size >= 0", name="ck_qus_sample"),
+        Index("idx_qus_question_time", "question_id", "recorded_at"),
+        Index("idx_qus_topic", "topic_id"),
+        Index("uq_qus_paper_question", "paper_id", "question_id",
+              unique=True, sqlite_where=text("paper_id IS NOT NULL AND record_kind = 'paper_review'")),
+    )
+
+    id = Column(Integer, primary_key=True)
+    question_id = Column(Integer, ForeignKey("questions.id", ondelete="CASCADE"), nullable=False)
+    topic_id = Column(Integer, ForeignKey("topics.id", ondelete="SET NULL"), nullable=True)
+    paper_id = Column(Integer, ForeignKey("papers.id", ondelete="SET NULL"), nullable=True)
+    record_kind = Column(String(20), nullable=False, default="manual", server_default=text("'manual'"))
+    correct_rate = Column(Float, nullable=True)
+    avg_seconds = Column(Integer, nullable=True)
+    sample_size = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    note = Column(Text, nullable=False, default="", server_default=text("''"))
+    recorded_at = Column(DateTime, default=_utcnow_naive, server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+
+    question = relationship("Question", passive_deletes=True)
+    topic = relationship("Topic", passive_deletes=True)
+    paper = relationship("Paper", passive_deletes=True)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "question_id": self.question_id, "topic_id": self.topic_id,
+                "paper_id": self.paper_id, "record_kind": self.record_kind,
+                "correct_rate": self.correct_rate, "avg_seconds": self.avg_seconds,
+                "sample_size": self.sample_size, "note": self.note or "",
+                "recorded_at": (self.recorded_at.isoformat() + "Z") if self.recorded_at else None}
+
+
 # Dependency to get db session
 def get_db():
     db = SessionLocal()
@@ -767,6 +955,18 @@ def init_db():
                 # turn a recoverable gap into a hard startup failure.
                 missing = (REQUIRED_TABLES - SELF_HEALING_TABLES) - existing_tables
                 if missing:
+                    topic_missing = sorted(
+                        set(missing) & {
+                            "topics", "topic_groups", "topic_items",
+                            "topic_versions", "topic_links", "question_usage_stats",
+                        }
+                    )
+                    if topic_missing:
+                        raise RuntimeError(
+                            "检测到专题表缺失: " + ", ".join(topic_missing)
+                            + "。专题数据为用户原创教学内容，不会自动重建；"
+                            "请从 data_backup 恢复备份后重启。"
+                        )
                     raise RuntimeError(
                         "数据库结构不完整，缺少必要数据表: "
                         + ", ".join(sorted(missing))

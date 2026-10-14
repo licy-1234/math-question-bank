@@ -811,3 +811,43 @@ def build_source_repair_prompt(items, verdicts):
         "\"after\":\"修正串\"}],\"evidence\":\"原页位置和可见修正依据\"}]}，不输出核验通过结论。\n"
         + json.dumps({"items": visible}, ensure_ascii=False)
     )
+
+
+def build_topic_recommendation_prompts(
+    topic_title: str,
+    topic_type: str,
+    candidates: list[dict],
+    *,
+    limit: int = 5,
+    teacher_hint: str = "",
+) -> tuple[str, str]:
+    """Build prompts for optional LLM polishing of topic recommendations.
+
+    The model may only pick from the supplied candidate ids; anything else is
+    rejected by the caller.  Only ids and truncated stems are ever sent.
+    """
+
+    system_prompt = (
+        "你是一位资深的高中数学教研专家。\n"
+        "请根据给定的专题信息，从候选题目池中挑选出最适合纳入该专题的题目，"
+        "并为每题给出一句讲解要点建议。\n"
+        "【硬性规则】\n"
+        "1. 只能从候选池的 id 中选择，绝对禁止编造候选池之外的 id。\n"
+        "2. 你的输出只是建议，最终由教师确认后才会入库。\n"
+        "3. 优先覆盖关键结构情形与易错辨析，避免同质化。\n"
+        "【输出格式规范】\n"
+        "必须且只能返回一个可解析的合法 JSON 对象，绝对禁止包含 Markdown 格式标记代码块（例如不要写 ```json ... ```）：\n"
+        "{\n"
+        '  "selected_ids": [12, 45, 89],\n'
+        '  "reasons": {"12": "讲解要点一句", "45": "讲解要点一句"},\n'
+        '  "ai_analysis": "整体选题分析"\n'
+        "}"
+    )
+    user_content = (
+        f"【专题标题】: {topic_title}\n"
+        f"【专题类型】: {topic_type}\n"
+        f"【需要挑选的题目数量】: {limit} 道\n"
+        + (f"【教师补充要求】: {teacher_hint}\n" if teacher_hint else "")
+        + f"【候选题目池】:\n{json.dumps(candidates, ensure_ascii=False)}"
+    )
+    return system_prompt, user_content

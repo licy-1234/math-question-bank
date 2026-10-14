@@ -1024,6 +1024,20 @@ window.functionTagBadge = functionTagBadge;
         window.openNewQuestionEditor = openNewQuestionEditor;
         window.setQuestionDetailEditAvailability = setQuestionDetailEditAvailability;
 
+        // 「加入专题」入口（详情工具栏按钮调用）：topic.js 未加载时静默不可用。
+        window.addCurrentQuestionToTopic = function () {
+            const questionId = parseInt(EditorState.questionId, 10);
+            if (!questionId) {
+                if (window.showToast) window.showToast('请先从题库中选择一道题目', 'info');
+                return;
+            }
+            if (typeof window.openAddToTopicModal === 'function') {
+                window.openAddToTopicModal(questionId);
+            } else if (window.showToast) {
+                window.showToast('专题工坊模块尚未加载', 'info');
+            }
+        };
+
         // ==========================================
         //         LOCALSTORAGE DRAFTS SYSTEM
         // ==========================================
@@ -2151,6 +2165,10 @@ window.functionTagBadge = functionTagBadge;
                                     ${functionTagBadge(item.tag_codes)}
                                     ${difficultyBadge}
                                     ${relationBadgeHtml}
+                                    <!-- Add to Topic Button -->
+                                    <button type="button" aria-label="加入专题" onclick="event.stopPropagation(); if (window.openAddToTopicModal) { window.openAddToTopicModal(${item.id}); }" class="bank-add-to-topic-btn text-slate-400 hover:text-brand-600 p-0.5 rounded hover:bg-slate-100 transition-all opacity-0 group-hover:opacity-100" title="加入专题">
+                                        <i class="fa-solid fa-folder-plus text-[10px]"></i>
+                                    </button>
                                     <span class="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-brand-50 text-brand-600 shadow-sm">#${window.MathBankSafe.escapeText(item.seq_num)}</span>
                                     <!-- Delete Button -->
                                     <button type="button" aria-label="删除题目" onclick="event.stopPropagation(); deleteQuestion(${item.id})" class="text-slate-400 hover:text-red-500 p-0.5 rounded hover:bg-slate-100 transition-all opacity-0 group-hover:opacity-100" title="删除">

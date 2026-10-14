@@ -2415,6 +2415,13 @@
             if (checkQa) checkQa.classList.toggle('hidden', workspaceId !== 'qa');
             if (btnQa) btnQa.classList.toggle('font-medium', workspaceId === 'qa');
 
+            // TOPIC_START（照 QA 先例：专题工坊下拉勾选）
+            const checkTopic = document.getElementById('ws-check-topic');
+            const btnTopic = document.getElementById('ws-btn-topic');
+            if (checkTopic) checkTopic.classList.toggle('hidden', workspaceId !== 'topic');
+            if (btnTopic) btnTopic.classList.toggle('font-medium', workspaceId === 'topic');
+            // TOPIC_END
+
             closeWorkspaceDropdown();
         };
 

@@ -25,7 +25,7 @@ import secrets
 from typing import List, Optional
 from PIL import Image
 from fastapi import FastAPI, Depends, HTTPException, Query, UploadFile, File, Form, BackgroundTasks, Request, Response, Header
-from sqlalchemy import func, or_
+from sqlalchemy import bindparam, func, or_, text
 from fastapi.responses import FileResponse, JSONResponse, HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, selectinload
@@ -43,10 +43,17 @@ from mathbank.database import (
     QuestionFingerprint as StoredQuestionFingerprint,
     Paper,
     PaperQuestion,
+    Topic,
+    TopicGroup,
+    TopicItem,
+    TopicLink,
+    TopicVersion,
+    QuestionUsageStat,
     engine,
     get_db,
     init_db,
     normalize_figure_size,
+    _utcnow_naive,
 )
 from mathbank.sub_knowledge import normalize_sub_knowledge
 from mathbank.question_duplicates import (
@@ -795,7 +802,7 @@ def read_index():
         html_content = render_qa_visibility(html_content, enabled=qa_enabled)
         
         # Inject dynamic cache-busting version parameter based on file mtime
-        js_files = ["api.js", "editor.js", "ocr.js", "import.js", "paper.js", "dashboard.js", "qa-data.js", "qa.js"]
+        js_files = ["api.js", "editor.js", "ocr.js", "import.js", "paper.js", "dashboard.js", "qa-data.js", "qa.js", "topic.js"]
         for js in js_files:
             js_path = str(STATIC_JS_DIR / js)
             mtime = int(os.path.getmtime(js_path)) if os.path.exists(js_path) else 0
@@ -4327,6 +4334,15 @@ def delete_question(
             .distinct()
             .all()
         ]
+        # 专题影响回传：级联删题目前，先记录受影响的专题，删后重排并明示
+        # （topic_items.question_id 是 ON DELETE CASCADE，DB 级一致）。
+        affected_topic_ids = [
+            int(topic_id)
+            for (topic_id,) in db.query(TopicItem.topic_id)
+            .filter(TopicItem.question_id == question_id)
+            .distinct()
+            .all()
+        ]
         if affected_paper_ids:
             remaining_scores = dict(
                 db.query(
@@ -4346,6 +4362,13 @@ def delete_question(
                 paper.total_score = int(remaining_scores.get(paper.id, 0))
         db.delete(db_question)
         db.commit()
+        # 受影响专题的 items 已被 DB 级联删除，把 position 重排为 0 基连续。
+        if affected_topic_ids:
+            from mathbank.topics import compact_item_positions
+
+            for topic_id in affected_topic_ids:
+                compact_item_positions(db, topic_id)
+            db.commit()
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=f"删除题目失败: {str(e)}")
@@ -4365,7 +4388,12 @@ def delete_question(
     # Auto export database to files for Git synchronization and AI referencing (Async Background Task)
     schedule_database_export(background_tasks, operation="delete_question")
 
-    return {"status": "success", "message": "题目删除成功"}
+    return {
+        "status": "success",
+        "message": "题目删除成功",
+        # 前端 toast「该题已从 N 个专题移除」
+        "removed_from_topics": affected_topic_ids,
+    }
 
 # ----------------- Category Hierarchy Autocomplete API -----------------
 
@@ -8304,6 +8332,1662 @@ def export_paper_word(payload: dict, db: Session = Depends(get_db)):
             content={"status": "error", "message": f"生成 Word 试卷包失败: {str(e)}"},
             status_code=500,
         )
+
+
+# ----------------- 专题工坊 API -----------------
+#
+# 风格约定（沿用全库既有约定）：
+# - payload: dict 收 body（全库无 Pydantic）；Depends(get_db)；
+# - 成功 {"status":"success","data":...}；参数错 400 / 不存在 404 / 意外 500；
+# - 校验函数抛 ValueError 由路由转 400（照 save_paper）；
+# - 专题变更刻意不调用 schedule_database_export：专题不在题库导出载荷内，
+#   避免每次编辑白写大 JSON（sync_helper.export_database_to_files 不含专题表）。
+
+
+@app.get("/api/config/topic-types")
+def list_topic_types(db: Session = Depends(get_db)):
+    """类型 / 关联 / 视图 / 场景 / 难度配比白名单（照 /api/relation-types）。"""
+
+    from mathbank.topics import (
+        DIFFICULTY_PROFILES,
+        LEVEL_LABEL,
+        TOPIC_LINK_CODES,
+        TOPIC_LINK_LABELS,
+        TOPIC_TYPES,
+        TOPIC_TYPE_LABELS,
+        TOPIC_USAGE_SCENES,
+        TOPIC_USAGE_SCENE_LABELS,
+        TOPIC_VIEW_MODES,
+        TOPIC_VIEW_MODE_LABELS,
+    )
+
+    used_custom_codes = [
+        row[0]
+        for row in db.query(TopicLink.link_code)
+        .filter(TopicLink.link_code.like("custom:%"))
+        .distinct()
+        .all()
+    ]
+    return {
+        "status": "success",
+        "data": {
+            "topic_types": [
+                {"code": code, "label": TOPIC_TYPE_LABELS.get(code, code)}
+                for code in TOPIC_TYPES
+            ],
+            "link_codes": [
+                {"code": code, "label": TOPIC_LINK_LABELS.get(code, code)}
+                for code in TOPIC_LINK_CODES
+            ]
+            + [{"code": code, "label": code} for code in used_custom_codes],
+            "view_modes": [
+                {"code": code, "label": TOPIC_VIEW_MODE_LABELS.get(code, code)}
+                for code in TOPIC_VIEW_MODES
+            ],
+            "usage_scenes": [
+                {"code": code, "label": TOPIC_USAGE_SCENE_LABELS.get(code, code)}
+                for code in TOPIC_USAGE_SCENES
+            ],
+            "levels": [
+                {"code": level, "label": LEVEL_LABEL[level]}
+                for level in ("easy", "medium", "hard")
+            ],
+            "difficulty_profiles": DIFFICULTY_PROFILES,
+        },
+    }
+
+
+def _topic_list_row(db: Session, topic: Topic) -> dict:
+    """列表行：带 item_count / child_count（GROUP BY 聚合，照 list_papers）。"""
+
+    item_count = (
+        db.query(TopicItem).filter(TopicItem.topic_id == topic.id).count()
+    )
+    child_count = (
+        db.query(Topic).filter(Topic.parent_topic_id == topic.id).count()
+    )
+    row = topic.to_dict()
+    row["item_count"] = int(item_count)
+    row["child_count"] = int(child_count)
+    return row
+
+
+@app.get("/api/topics")
+def list_topics(
+    type: str = None,
+    status: str = None,
+    parent_id: Optional[int] = None,
+    root_only: bool = False,
+    is_template: Optional[bool] = None,
+    q: str = None,
+    sort: str = "updated",
+    db: Session = Depends(get_db),
+):
+    """专题列表：类型/状态/父专题/模板/关键词过滤 + 计数聚合。"""
+
+    query = db.query(Topic)
+    if type:
+        query = query.filter(Topic.topic_type == str(type).strip())
+    if status:
+        query = query.filter(Topic.status == str(status).strip())
+    if parent_id is not None:
+        query = query.filter(Topic.parent_topic_id == int(parent_id))
+    if root_only:
+        query = query.filter(Topic.parent_topic_id.is_(None))
+    if is_template is not None:
+        query = query.filter(Topic.is_template == bool(is_template))
+    keyword = str(q or "").strip()
+    if keyword:
+        like = f"%{_escape_like(keyword)}%"
+        query = query.filter(
+            or_(Topic.title.like(like, escape="\\"), Topic.description.like(like, escape="\\"))
+        )
+    if sort == "title":
+        query = query.order_by(Topic.title.asc())
+    elif sort == "created":
+        query = query.order_by(Topic.created_at.desc())
+    elif sort == "used":
+        query = query.order_by(Topic.usage_count.desc(), Topic.updated_at.desc())
+    else:
+        query = query.order_by(Topic.updated_at.desc())
+    topics = query.all()
+    return {"status": "success", "data": [_topic_list_row(db, topic) for topic in topics]}
+
+
+@app.post("/api/topics")
+def create_topic(payload: dict, db: Session = Depends(get_db)):
+    """创建专题（空标题/类型非法/父不存在/环/超深 → 400）。"""
+
+    from mathbank.topics import (
+        TOPIC_MAX_DEPTH,
+        create_topic_with_items,
+        validate_topic_type,
+    )
+
+    try:
+        title = str(payload.get("title") or "").strip()
+        parent_topic_id = payload.get("parent_topic_id")
+        if parent_topic_id is not None:
+            if db.get(Topic, int(parent_topic_id)) is None:
+                raise ValueError("父专题不存在")
+            # 新专题尚无自身 id，环检测只需确认父链不超深
+            cursor, depth = int(parent_topic_id), 0
+            while cursor is not None:
+                cursor = db.execute(
+                    text("SELECT parent_topic_id FROM topics WHERE id = :i"),
+                    {"i": cursor},
+                ).scalar()
+                depth += 1
+                if depth > TOPIC_MAX_DEPTH:
+                    raise ValueError(f"专题嵌套层级过深（上限 {TOPIC_MAX_DEPTH} 层）")
+        question_ids = payload.get("question_ids") or []
+        topic_id = create_topic_with_items(
+            db,
+            title=title,
+            topic_type=validate_topic_type(payload.get("topic_type") or "knowledge"),
+            description=str(payload.get("description") or ""),
+            parent_topic_id=parent_topic_id,
+            view_mode=str(payload.get("view_mode") or "linear"),
+            question_ids=question_ids,
+            notes={
+                int(key): str(value)
+                for key, value in (payload.get("notes") or {}).items()
+            },
+            group_of={
+                int(key): (int(value) if value is not None else None)
+                for key, value in (payload.get("group_of") or {}).items()
+            },
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"创建专题失败: {exc}"})
+    return {"status": "success", "data": {"id": topic_id}}
+
+
+@app.get("/api/topics/{topic_id}")
+def get_topic_detail(topic_id: int, db: Session = Depends(get_db)):
+    """专题详情：topic + groups + items（一次 join hydrate，禁 N+1）。"""
+
+    topic = db.get(Topic, topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    groups = (
+        db.query(TopicGroup)
+        .filter(TopicGroup.topic_id == topic_id)
+        .order_by(TopicGroup.position.asc(), TopicGroup.id.asc())
+        .all()
+    )
+    rows = (
+        db.query(TopicItem, Question)
+        .join(Question, Question.id == TopicItem.question_id)
+        .filter(TopicItem.topic_id == topic_id)
+        .order_by(TopicItem.position.asc(), TopicItem.id.asc())
+        .all()
+    )
+    version_count = (
+        db.query(TopicVersion).filter(TopicVersion.topic_id == topic_id).count()
+    )
+    children = (
+        db.query(Topic).filter(Topic.parent_topic_id == topic_id)
+        .order_by(Topic.updated_at.desc())
+        .all()
+    )
+    links = (
+        db.query(TopicLink)
+        .filter(
+            or_(
+                TopicLink.source_topic_id == topic_id,
+                TopicLink.target_topic_id == topic_id,
+            )
+        )
+        .order_by(TopicLink.created_at.asc(), TopicLink.id.asc())
+        .all()
+    )
+    link_topic_ids = {
+        row.target_topic_id if row.source_topic_id == topic_id else row.source_topic_id
+        for row in links
+    }
+    link_topics = (
+        {topic.id: topic for topic in db.query(Topic).filter(Topic.id.in_(link_topic_ids)).all()}
+        if link_topic_ids
+        else {}
+    )
+    seq_map = get_seq_mapping(db, [item.question_id for item, _ in rows])
+    active_version = get_active_version_code()
+    return {
+        "status": "success",
+        "data": {
+            "topic": topic.to_dict(),
+            "groups": [group.to_dict() for group in groups],
+            "items": [
+                {
+                    "seq_num": index + 1,
+                    **item.to_dict(),
+                    "bank_seq_num": seq_map.get(item.question_id),
+                    "question": question.to_dict(active_version),
+                }
+                for index, (item, question) in enumerate(rows)
+            ],
+            "children": [_topic_list_row(db, child) for child in children],
+            "links": [
+                {
+                    **row.to_dict(),
+                    "direction": (
+                        "out" if row.source_topic_id == topic_id else "in"
+                    ),
+                    "other_topic": (
+                        link_topics[
+                            row.target_topic_id
+                            if row.source_topic_id == topic_id
+                            else row.source_topic_id
+                        ].to_dict()
+                        if (
+                            row.target_topic_id
+                            if row.source_topic_id == topic_id
+                            else row.source_topic_id
+                        )
+                        in link_topics
+                        else None
+                    ),
+                }
+                for row in links
+            ],
+            "version_count": int(version_count),
+        },
+    }
+
+
+@app.put("/api/topics/{topic_id}")
+def update_topic(topic_id: int, payload: dict, db: Session = Depends(get_db)):
+    """改元信息；parent 走环检测 + 深度上限。"""
+
+    from mathbank.topics import (
+        ensure_no_topic_cycle,
+        validate_topic_status,
+        validate_topic_type,
+        validate_topic_view_mode,
+    )
+
+    topic = db.get(Topic, topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    try:
+        if "title" in payload:
+            title = str(payload.get("title") or "").strip()
+            if not title:
+                raise ValueError("专题标题不能为空")
+            if len(title) > 200:
+                raise ValueError("专题标题不能超过 200 字")
+            topic.title = title
+        if "topic_type" in payload:
+            topic.topic_type = validate_topic_type(payload.get("topic_type"))
+        if "description" in payload:
+            topic.description = str(payload.get("description") or "")
+        if "view_mode" in payload:
+            topic.view_mode = validate_topic_view_mode(payload.get("view_mode"))
+        if "status" in payload:
+            topic.status = validate_topic_status(payload.get("status"))
+        if "is_template" in payload:
+            topic.is_template = bool(payload.get("is_template"))
+        if "parent_topic_id" in payload:
+            parent_topic_id = payload.get("parent_topic_id")
+            if parent_topic_id is None:
+                topic.parent_topic_id = None
+            else:
+                if db.get(Topic, int(parent_topic_id)) is None:
+                    raise ValueError("父专题不存在")
+                ensure_no_topic_cycle(db, topic_id, int(parent_topic_id))
+                topic.parent_topic_id = int(parent_topic_id)
+        db.commit()
+        db.refresh(topic)
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"更新专题失败: {exc}"})
+    return {"status": "success", "data": topic.to_dict()}
+
+
+@app.delete("/api/topics/{topic_id}")
+def delete_topic(topic_id: int, db: Session = Depends(get_db)):
+    """删专题：有子专题 400（DB RESTRICT 兜底）；否则级联删。"""
+
+    topic = db.get(Topic, topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    child_count = (
+        db.query(Topic).filter(Topic.parent_topic_id == topic_id).count()
+    )
+    if child_count:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "请先移除子专题后再删除母专题"},
+        )
+    try:
+        db.delete(topic)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(
+            status_code=400, content={"status": "error", "message": f"删除专题失败: {exc}"}
+        )
+    return {"status": "success", "message": "专题已删除"}
+
+
+@app.post("/api/topics/{topic_id}/duplicate")
+def duplicate_topic_endpoint(topic_id: int, payload: dict, db: Session = Depends(get_db)):
+    """深拷贝 groups+items，自动建 derived_from 链接。"""
+
+    from mathbank.topics import duplicate_topic
+
+    try:
+        new_id = duplicate_topic(db, topic_id, title=str(payload.get("title") or ""))
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"复制专题失败: {exc}"})
+    return {"status": "success", "data": {"id": new_id}}
+
+
+@app.post("/api/topics/{topic_id}/items")
+def add_topic_items(topic_id: int, payload: dict, db: Session = Depends(get_db)):
+    """批量加题 {question_ids, group_id?, note?}；已存在跳过；超 300 → 400。"""
+
+    from mathbank.topics import add_items_to_topic
+
+    topic = db.get(Topic, topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    question_ids = payload.get("question_ids")
+    if not isinstance(question_ids, list):
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "question_ids 必须是数组"},
+        )
+    group_id = payload.get("group_id")
+    try:
+        result = add_items_to_topic(
+            db,
+            topic,
+            question_ids,
+            group_id=(int(group_id) if group_id is not None else None),
+            note=str(payload.get("note") or ""),
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"添加题目失败: {exc}"})
+    return {"status": "success", "data": result}
+
+
+@app.put("/api/topics/{topic_id}/items/order")
+def reorder_topic_items_endpoint(topic_id: int, payload: dict, db: Session = Depends(get_db)):
+    """全量重排：读入内存→重排→两段式写位单事务（不用 SQL 增量位移）。"""
+
+    from mathbank.topics import reorder_topic_items
+
+    if db.get(Topic, topic_id) is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    ordered = payload.get("question_ids")
+    if not isinstance(ordered, list):
+        return JSONResponse(
+            status_code=400, content={"status": "error", "message": "question_ids 必须是数组"}
+        )
+    try:
+        reorder_topic_items(db, topic_id, [int(value) for value in ordered])
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"重排失败: {exc}"})
+    return {"status": "success", "message": "排序已保存"}
+
+@app.put("/api/topics/{topic_id}/items/{item_id}")
+def update_topic_item(topic_id: int, item_id: int, payload: dict, db: Session = Depends(get_db)):
+    """改 note / 转组。"""
+
+    item = (
+        db.query(TopicItem)
+        .filter(TopicItem.id == item_id, TopicItem.topic_id == topic_id)
+        .first()
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="专题题目不存在")
+    try:
+        if "note" in payload:
+            item.note = str(payload.get("note") or "")
+        if "group_id" in payload:
+            group_id = payload.get("group_id")
+            if group_id is None:
+                item.group_id = None
+            else:
+                group = db.get(TopicGroup, int(group_id))
+                if group is None or group.topic_id != topic_id:
+                    raise ValueError("分组不存在或不属于该专题")
+                item.group_id = group.id
+        db.commit()
+        db.refresh(item)
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    return {"status": "success", "data": item.to_dict()}
+
+
+@app.delete("/api/topics/{topic_id}/items/{item_id}")
+def remove_topic_item(topic_id: int, item_id: int, db: Session = Depends(get_db)):
+    """移出并重排 position（0 基连续）。"""
+
+    from mathbank.topics import compact_item_positions
+
+    item = (
+        db.query(TopicItem)
+        .filter(TopicItem.id == item_id, TopicItem.topic_id == topic_id)
+        .first()
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="专题题目不存在")
+    try:
+        db.delete(item)
+        db.flush()
+        compact_item_positions(db, topic_id)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": f"移出失败: {exc}"})
+    return {"status": "success", "message": "已移出专题"}
+
+
+
+@app.post("/api/topics/{topic_id}/groups")
+def create_topic_group(topic_id: int, payload: dict, db: Session = Depends(get_db)):
+    """建分组（支持预设空分组：备课先搭框架再拖题）。"""
+
+    if db.get(Topic, topic_id) is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    try:
+        title = str(payload.get("title") or "").strip()
+        if len(title) > 120:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "分组标题不能超过 120 字"},
+            )
+        max_position = (
+            db.query(func.max(TopicGroup.position))
+            .filter(TopicGroup.topic_id == topic_id)
+            .scalar()
+        )
+        # 0 基连续：与 topic_items.position、compact_group_positions 的写位口径一致
+        # （首个分组落 0，而非 1；重排/压缩后新建仍延续该序列）。
+        group = TopicGroup(
+            topic_id=topic_id,
+            title=title,
+            position=(int(max_position) + 1) if max_position is not None else 0,
+            note=str(payload.get("note") or ""),
+        )
+        db.add(group)
+        db.flush()
+        db.commit()
+        db.refresh(group)
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"创建分组失败: {exc}"})
+    return {"status": "success", "data": group.to_dict()}
+
+
+@app.put("/api/topics/{topic_id}/groups/order")
+def reorder_topic_groups_endpoint(topic_id: int, payload: dict, db: Session = Depends(get_db)):
+    """分组全量重排：两段式写位单事务（必须声明在 groups/{group_id} 之前）。"""
+
+    from mathbank.topics import reorder_topic_groups
+
+    if db.get(Topic, topic_id) is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    ordered = payload.get("group_ids")
+    if not isinstance(ordered, list):
+        return JSONResponse(
+            status_code=400, content={"status": "error", "message": "group_ids 必须是数组"}
+        )
+    try:
+        reorder_topic_groups(db, topic_id, [int(value) for value in ordered])
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"分组重排失败: {exc}"})
+    return {"status": "success", "message": "分组顺序已保存"}
+
+
+@app.put("/api/topics/{topic_id}/groups/{group_id}")
+def update_topic_group(topic_id: int, group_id: int, payload: dict, db: Session = Depends(get_db)):
+    """改分组标题 / 批注。"""
+
+    group = (
+        db.query(TopicGroup)
+        .filter(TopicGroup.id == group_id, TopicGroup.topic_id == topic_id)
+        .first()
+    )
+    if group is None:
+        raise HTTPException(status_code=404, detail="分组不存在")
+    try:
+        if "title" in payload:
+            title = str(payload.get("title") or "").strip()
+            if len(title) > 120:
+                raise ValueError("分组标题不能超过 120 字")
+            group.title = title
+        if "note" in payload:
+            group.note = str(payload.get("note") or "")
+        db.commit()
+        db.refresh(group)
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    return {"status": "success", "data": group.to_dict()}
+
+
+@app.delete("/api/topics/{topic_id}/groups/{group_id}")
+def delete_topic_group(topic_id: int, group_id: int, db: Session = Depends(get_db)):
+    """删分组：items.group_id 置 NULL（组内题变未分组，不删题）。"""
+
+    group = (
+        db.query(TopicGroup)
+        .filter(TopicGroup.id == group_id, TopicGroup.topic_id == topic_id)
+        .first()
+    )
+    if group is None:
+        raise HTTPException(status_code=404, detail="分组不存在")
+    try:
+        db.delete(group)
+        db.flush()
+        from mathbank.topics import compact_group_positions
+
+        compact_group_positions(db, topic_id)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": f"删除分组失败: {exc}"})
+    return {"status": "success", "message": "分组已删除，组内题目已移至未分组"}
+
+
+# ---- 专题创建方式：从标签 / 从试卷 / 从学情 / 从课程树 ----
+
+#: 从标签生成专题时允许的标签维度（question_tags.dim 词表子集）。
+TOPIC_FROM_TAGS_DIMS = ("thought", "strategy", "micro", "function", "custom", "chapter")
+#: 一节精讲课 ≈ 8-12 题；超过 30 那是章节不是专题。
+TOPIC_FROM_TAGS_DEFAULT_LIMIT = 12
+TOPIC_FROM_TAGS_MIN_LIMIT = 5
+TOPIC_FROM_TAGS_MAX_LIMIT = 30
+
+
+@app.post("/api/topics/from-tags")
+def create_topic_from_tags(payload: dict, db: Session = Depends(get_db)):
+    """标签 → 专题：单值小节 + 标签维度筛选，按难度分层抽样后落库。
+
+    约束（本地定制已禁多值小节筛选）：只走 category_knowledge 单值小节与
+    question_tags 标签维度，绝不传 sub_knowledge。
+    """
+
+    from mathbank.topics import (
+        DIFFICULTY_ORDER,
+        DIFFICULTY_PROFILES,
+        create_topic_with_items,
+        validate_topic_type,
+    )
+
+    try:
+        title = str(payload.get("title") or "").strip()
+        tag_dim = str(payload.get("tag_dim") or "strategy").strip()
+        tag_codes = [str(code).strip() for code in (payload.get("tag_codes") or []) if str(code).strip()]
+        if not tag_codes:
+            raise ValueError("请至少选择一个标签")
+        if tag_dim not in TOPIC_FROM_TAGS_DIMS:
+            raise ValueError(f"标签维度必须是：{' / '.join(TOPIC_FROM_TAGS_DIMS)}")
+        compulsory = payload.get("compulsory") or None
+        chapter = payload.get("chapter") or None
+        knowledge = payload.get("knowledge") or None
+        max_questions = int(payload.get("max_questions") or TOPIC_FROM_TAGS_DEFAULT_LIMIT)
+        max_questions = max(
+            TOPIC_FROM_TAGS_MIN_LIMIT, min(TOPIC_FROM_TAGS_MAX_LIMIT, max_questions)
+        )
+        topic_type = validate_topic_type(payload.get("topic_type") or "method")
+
+        query = (
+            db.query(Question)
+            .join(QuestionTag, QuestionTag.question_id == Question.id)
+            .filter(QuestionTag.dim == tag_dim, QuestionTag.code.in_(tag_codes))
+            .distinct()
+        )
+        query = apply_curriculum_filters(
+            query, compulsory, chapter, knowledge
+        )
+        candidates = query.all()
+        if not candidates:
+            raise ValueError("没有题目匹配所选标签与筛选条件")
+
+        target = DIFFICULTY_PROFILES.get(topic_type) or DIFFICULTY_PROFILES["knowledge"]
+        # 分层抽样：各难度配额 = round(target[level]×max_questions)；
+        # 层内排序（有答案 DESC, usage_count DESC, id ASC）——教师验证过的题优先入选；
+        # 某层不足余额顺延。排序键全稳定 → 重新生成结果一致。
+        by_level = {level: [] for level in DIFFICULTY_ORDER}
+        for question in candidates:
+            level = str(question.difficulty or "").strip().lower()
+            by_level.setdefault(level, []).append(question)
+        picked_ids: list[int] = []
+        overflow: list = []
+        for level in DIFFICULTY_ORDER:
+            quota = round(target.get(level, 0.0) * max_questions)
+            layer = sorted(
+                by_level.get(level, []),
+                key=lambda q: (
+                    0 if str(q.answer_markdown or "").strip() else 1,
+                    -(int(q.usage_count or 0)),
+                    q.id,
+                ),
+            )
+            picked_ids.extend(question.id for question in layer[:quota])
+            overflow.extend(layer[quota:])
+        remaining = max_questions - len(picked_ids)
+        if remaining > 0:
+            overflow.sort(
+                key=lambda q: (
+                    0 if str(q.answer_markdown or "").strip() else 1,
+                    -(int(q.usage_count or 0)),
+                    q.id,
+                )
+            )
+            picked_ids.extend(question.id for question in overflow[:remaining])
+        # 保持题库物理顺序，position 稳定可复现
+        picked_ids = sorted(set(picked_ids))
+
+        topic_id = create_topic_with_items(
+            db,
+            title=title or f"标签专题：{'、'.join(tag_codes[:3])}",
+            topic_type=topic_type,
+            description=str(payload.get("description") or ""),
+            question_ids=picked_ids,
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"生成专题失败: {exc}"})
+    return {
+        "status": "success",
+        "data": {
+            "id": topic_id,
+            "question_ids": picked_ids,
+            "candidate_count": len(candidates),
+            "filters": {
+                "tag_dim": tag_dim,
+                "tag_codes": tag_codes,
+                "compulsory": compulsory,
+                "chapter": chapter,
+                "knowledge": knowledge,
+                "max_questions": max_questions,
+            },
+        },
+    }
+
+
+def _chapter_label_map(db: Session, question_ids) -> dict[int, str]:
+    """批量算题目的章节显示标签（chapter_display_label 坍缩多章节标签）。"""
+
+    from mathbank.tags import chapter_display_label
+
+    ids = [int(value) for value in question_ids]
+    if not ids:
+        return {}
+    rows = db.execute(
+        text(
+            "SELECT question_id, code FROM question_tags "
+            "WHERE dim = 'chapter' AND question_id IN :ids"
+        ).bindparams(bindparam("ids", expanding=True)),
+        {"ids": ids},
+    ).fetchall()
+    codes_by_question: dict[int, list[str]] = {}
+    for question_id, code in rows:
+        codes_by_question.setdefault(int(question_id), []).append(str(code))
+    labels: dict[int, str] = {}
+    for question_id in ids:
+        label = chapter_display_label(codes_by_question.get(question_id, []))
+        if not label:
+            question = db.get(Question, question_id)
+            label = str((question.category_chapter if question else "") or "").strip()
+        labels[question_id] = label or "未分章"
+    return labels
+
+
+@app.post("/api/topics/from-paper/{paper_id}")
+def create_topic_from_paper(paper_id: int, payload: dict, db: Session = Depends(get_db)):
+    """试卷 → 专题：主维度=章节；≥6 题且跨题型才按题型二次拆分。
+
+    dry_run=true（默认）只返回草稿簇与 orphans 报告，不落库；
+    dry_run=false 直接为每个合格簇建专题。<3 题的簇进 orphans 不静默建专题。
+    """
+
+    from mathbank.topics import create_topic_with_items, validate_topic_type
+
+    paper = db.get(Paper, paper_id)
+    if paper is None:
+        raise HTTPException(status_code=404, detail="试卷不存在")
+    rows = (
+        db.query(PaperQuestion, Question)
+        .join(Question, Question.id == PaperQuestion.question_id)
+        .filter(PaperQuestion.paper_id == paper_id)
+        .order_by(PaperQuestion.order_index.asc(), PaperQuestion.id.asc())
+        .all()
+    )
+    if not rows:
+        raise HTTPException(status_code=400, detail="试卷内没有题目")
+    question_ids = [question.id for _, question in rows]
+    labels = _chapter_label_map(db, question_ids)
+
+    clusters: dict[str, list] = {}
+    for _, question in rows:
+        clusters.setdefault(labels.get(question.id, "未分章"), []).append(question)
+
+    drafts: list[dict] = []
+    orphans: list[dict] = []
+    for label, questions in clusters.items():
+        if len(questions) >= 6:
+            type_groups: dict[str, list] = {}
+            for question in questions:
+                type_groups.setdefault(str(question.question_type or ""), []).append(question)
+            if len(type_groups) >= 2:
+                for question_type, group in sorted(type_groups.items()):
+                    if len(group) >= 3:
+                        drafts.append(
+                            {
+                                "title": f"{paper.title}·{label}·{question_type or '综合'}",
+                                "chapter": label,
+                                "question_type": question_type,
+                                "question_ids": [question.id for question in group],
+                            }
+                        )
+                    else:
+                        orphans.extend(
+                            {
+                                "question_id": question.id,
+                                "chapter": label,
+                                "reason": "按题型二次拆分后不足 3 题",
+                            }
+                            for question in group
+                        )
+                continue
+        if len(questions) >= 3:
+            drafts.append(
+                {
+                    "title": f"{paper.title}·{label}",
+                    "chapter": label,
+                    "question_type": "",
+                    "question_ids": [question.id for question in questions],
+                }
+            )
+        else:
+            orphans.extend(
+                {
+                    "question_id": question.id,
+                    "chapter": label,
+                    "reason": "该章节簇不足 3 题，未静默建专题",
+                }
+                for question in questions
+            )
+
+    dry_run = payload.get("dry_run", True)
+    if dry_run:
+        return {
+            "status": "success",
+            "data": {
+                "paper_id": paper_id,
+                "paper_title": paper.title,
+                "drafts": drafts,
+                "orphans": orphans,
+            },
+        }
+
+    try:
+        topic_type = validate_topic_type(payload.get("topic_type") or "knowledge")
+        title_prefix = str(payload.get("title_prefix") or "").strip()
+        created = []
+        for draft in drafts:
+            title = f"{title_prefix}{draft['title']}" if title_prefix else draft["title"]
+            topic_id = create_topic_with_items(
+                db,
+                title=title,
+                topic_type=topic_type,
+                description=str(payload.get("description") or ""),
+                question_ids=draft["question_ids"],
+            )
+            created.append({"id": topic_id, "title": title, "question_ids": draft["question_ids"]})
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"反推专题失败: {exc}"})
+    return {
+        "status": "success",
+        "data": {"created": created, "orphans": orphans},
+    }
+
+
+@app.post("/api/topics/from-usage")
+def create_topic_from_usage(payload: dict, db: Session = Depends(get_db)):
+    """低正确率题 → 专题（V2 错题生成的务实降级：无错题本表，从学情聚合）。"""
+
+    from mathbank.topics import (
+        TOPIC_MAX_ITEMS,
+        create_topic_with_items,
+        validate_topic_type,
+    )
+
+    try:
+        threshold = float(payload.get("threshold", 0.4))
+        threshold = min(1.0, max(0.0, threshold))
+        min_sample = int(payload.get("min_sample", 10))
+        limit = max(1, min(int(payload.get("limit", 20)), TOPIC_MAX_ITEMS))
+        rows = db.execute(
+            text(
+                "SELECT s.question_id, s.correct_rate, s.sample_size "
+                "FROM question_usage_stats s "
+                "JOIN (SELECT question_id, MAX(recorded_at) AS latest "
+                "      FROM question_usage_stats GROUP BY question_id) l "
+                "  ON l.question_id = s.question_id AND l.latest = s.recorded_at "
+                "WHERE s.correct_rate IS NOT NULL "
+                "  AND s.correct_rate < :threshold AND s.sample_size >= :min_sample "
+                "ORDER BY s.correct_rate ASC, s.question_id ASC LIMIT :limit"
+            ),
+            {"threshold": threshold, "min_sample": min_sample, "limit": limit},
+        ).fetchall()
+        question_ids = [int(row[0]) for row in rows]
+        if not question_ids:
+            raise ValueError("没有符合低正确率条件的学情记录")
+        topic_type = validate_topic_type(payload.get("topic_type") or "wrong_retry")
+        topic_id = create_topic_with_items(
+            db,
+            title=str(payload.get("title") or "").strip() or "低正确率题再练",
+            topic_type=topic_type,
+            description=str(payload.get("description") or ""),
+            question_ids=question_ids,
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"生成专题失败: {exc}"})
+    return {
+        "status": "success",
+        "data": {
+            "id": topic_id,
+            "question_ids": question_ids,
+            "threshold": threshold,
+            "min_sample": min_sample,
+        },
+    }
+
+
+@app.post("/api/topics/from-curriculum")
+def create_topic_from_curriculum(payload: dict, db: Session = Depends(get_db)):
+    """课程树节点 → 专题（V3 知识图谱生成的务实降级：复用课程索引）。"""
+
+    from mathbank.topics import (
+        TOPIC_MAX_ITEMS,
+        create_topic_with_items,
+        validate_topic_type,
+    )
+
+    try:
+        compulsory = payload.get("compulsory") or None
+        chapter = payload.get("chapter") or None
+        knowledge = payload.get("knowledge") or None
+        if not any((compulsory, chapter, knowledge)):
+            raise ValueError("请至少选择必修、章节或知识点之一")
+        limit = max(1, min(int(payload.get("limit", 12)), TOPIC_MAX_ITEMS))
+        query = db.query(Question)
+        query = apply_curriculum_filters(query, compulsory, chapter, knowledge)
+        # 层内排序与 from-tags 一致：有答案、被多次验证过的题优先
+        candidates = sorted(
+            query.all(),
+            key=lambda q: (
+                0 if str(q.answer_markdown or "").strip() else 1,
+                -(int(q.usage_count or 0)),
+                q.id,
+            ),
+        )[:limit]
+        question_ids = [question.id for question in candidates]
+        if not question_ids:
+            raise ValueError("该课程节点下没有题目")
+        topic_id = create_topic_with_items(
+            db,
+            title=str(payload.get("title") or "").strip()
+            or "课程专题：{}{}{}".format(
+                str(compulsory or ""), str(chapter or ""), str(knowledge or "")
+            ),
+            topic_type=validate_topic_type(payload.get("topic_type") or "knowledge"),
+            description=str(payload.get("description") or ""),
+            question_ids=question_ids,
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"生成专题失败: {exc}"})
+    return {"status": "success", "data": {"id": topic_id, "question_ids": question_ids}}
+
+
+# ---- 专题版本历史 ----
+
+@app.get("/api/topics/{topic_id}/versions")
+def list_topic_versions(topic_id: int, db: Session = Depends(get_db)):
+    """版本列表（version_no 降序）。"""
+
+    if db.get(Topic, topic_id) is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    versions = (
+        db.query(TopicVersion)
+        .filter(TopicVersion.topic_id == topic_id)
+        .order_by(TopicVersion.version_no.desc())
+        .all()
+    )
+    return {"status": "success", "data": [version.to_dict() for version in versions]}
+
+
+@app.post("/api/topics/{topic_id}/versions")
+def save_topic_version_endpoint(topic_id: int, payload: dict, db: Session = Depends(get_db)):
+    """存快照（append-only）。"""
+
+    from mathbank.topics import save_topic_version
+
+    try:
+        version = save_topic_version(db, topic_id, note=str(payload.get("note") or ""))
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"保存版本失败: {exc}"})
+    return {"status": "success", "data": version}
+
+
+@app.post("/api/topics/{topic_id}/versions/{version_no}/restore")
+def restore_topic_version_endpoint(
+    topic_id: int, version_no: int, db: Session = Depends(get_db)
+):
+    """回滚 = 追加新版本：先存当前为新版，再整体替换。"""
+
+    from mathbank.topics import restore_topic_from_snapshot
+
+    try:
+        version = restore_topic_from_snapshot(db, topic_id, version_no)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"恢复版本失败: {exc}"})
+    return {"status": "success", "data": version}
+
+
+@app.delete("/api/topics/{topic_id}/versions/{version_no}")
+def delete_topic_version_endpoint(
+    topic_id: int, version_no: int, db: Session = Depends(get_db)
+):
+    """单版删除（保留至少 1 版）。"""
+
+    version = (
+        db.query(TopicVersion)
+        .filter(TopicVersion.topic_id == topic_id, TopicVersion.version_no == version_no)
+        .first()
+    )
+    if version is None:
+        raise HTTPException(status_code=404, detail="版本不存在")
+    remaining = (
+        db.query(TopicVersion).filter(TopicVersion.topic_id == topic_id).count()
+    )
+    if remaining <= 1:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "至少保留一个版本，无法删除"},
+        )
+    try:
+        db.delete(version)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": f"删除版本失败: {exc}"})
+    return {"status": "success", "message": "版本已删除"}
+
+
+# ---- 专题间关联 ----
+
+@app.get("/api/topics/{topic_id}/links")
+def list_topic_links(topic_id: int, db: Session = Depends(get_db)):
+    """关联列表（含对端专题摘要，双向都返回）。"""
+
+    if db.get(Topic, topic_id) is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    rows = (
+        db.query(TopicLink)
+        .filter(
+            or_(
+                TopicLink.source_topic_id == topic_id,
+                TopicLink.target_topic_id == topic_id,
+            )
+        )
+        .order_by(TopicLink.created_at.asc(), TopicLink.id.asc())
+        .all()
+    )
+    other_ids = {
+        row.target_topic_id if row.source_topic_id == topic_id else row.source_topic_id
+        for row in rows
+    }
+    others = (
+        {topic.id: topic for topic in db.query(Topic).filter(Topic.id.in_(other_ids)).all()}
+        if other_ids
+        else {}
+    )
+    items = []
+    for row in rows:
+        other_id = (
+            row.target_topic_id if row.source_topic_id == topic_id else row.source_topic_id
+        )
+        other = others.get(other_id)
+        if other is None:
+            continue
+        items.append(
+            {
+                **row.to_dict(),
+                "direction": "out" if row.source_topic_id == topic_id else "in",
+                "other_topic": {"id": other.id, "title": other.title, "topic_type": other.topic_type},
+            }
+        )
+    return {"status": "success", "data": items}
+
+
+@app.post("/api/topics/{topic_id}/links")
+def create_topic_link(topic_id: int, payload: dict, db: Session = Depends(get_db)):
+    """建关联：白名单 + custom: 逃生舱 + 禁自连 + IntegrityError 幂等回退。"""
+
+    from sqlalchemy.exc import IntegrityError as SAIntegrityError
+
+    from mathbank.topics import validate_topic_link_code
+
+    if db.get(Topic, topic_id) is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    try:
+        code = validate_topic_link_code(payload.get("link_code"))
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    try:
+        target_topic_id = int(payload.get("target_topic_id"))
+    except (TypeError, ValueError):
+        return JSONResponse(
+            status_code=400, content={"status": "error", "message": "target_topic_id 必须为整数"}
+        )
+    if target_topic_id == int(topic_id):
+        return JSONResponse(
+            status_code=400, content={"status": "error", "message": "不能与自身建立关联"}
+        )
+    target = db.get(Topic, target_topic_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="目标专题不存在")
+
+    label = str(payload.get("link_label") or "").strip()
+    note = str(payload.get("note") or "")
+
+    def _apply_update(row: TopicLink) -> None:
+        if label:
+            row.link_label = label
+        if note:
+            row.note = note
+
+    try:
+        existing = (
+            db.query(TopicLink)
+            .filter(
+                TopicLink.source_topic_id == topic_id,
+                TopicLink.target_topic_id == target_topic_id,
+                TopicLink.link_code == code,
+            )
+            .first()
+        )
+        if existing is not None:
+            _apply_update(existing)
+            link, created = existing, False
+        else:
+            link = TopicLink(
+                source_topic_id=topic_id,
+                target_topic_id=target_topic_id,
+                link_code=code,
+                link_label=label,
+                note=note,
+            )
+            db.add(link)
+            created = True
+        db.commit()
+        db.refresh(link)
+    except SAIntegrityError:
+        db.rollback()
+        existing = (
+            db.query(TopicLink)
+            .filter(
+                TopicLink.source_topic_id == topic_id,
+                TopicLink.target_topic_id == target_topic_id,
+                TopicLink.link_code == code,
+            )
+            .first()
+        )
+        if existing is None:
+            return JSONResponse(
+                status_code=400, content={"status": "error", "message": "建立关联失败"}
+            )
+        _apply_update(existing)
+        db.commit()
+        db.refresh(existing)
+        link, created = existing, False
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(
+            status_code=400, content={"status": "error", "message": f"建立关联失败: {exc}"}
+        )
+    return {"status": "success", "data": {"link_id": link.id, "created": created}}
+
+
+@app.delete("/api/topic-links/{link_id}")
+def delete_topic_link(link_id: int, db: Session = Depends(get_db)):
+    """删关联（级联由 DB 负责，这里只删行）。"""
+
+    link = db.get(TopicLink, link_id)
+    if link is None:
+        raise HTTPException(status_code=404, detail="关联不存在")
+    try:
+        db.delete(link)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": f"删除关联失败: {exc}"})
+    return {"status": "success", "message": "关联已删除"}
+
+
+# ---- 使用记录与学情 ----
+
+@app.post("/api/topics/{topic_id}/usage")
+def record_topic_usage(topic_id: int, payload: dict, db: Session = Depends(get_db)):
+    """记录使用 + 学情批量录入（usage_count+1、last_used_at=now）。
+
+    question_stats: [{question_id, correct_rate?, avg_seconds?, sample_size?, note?}]
+    手工记录为追加式（天然形成「第 1 次 0.4 → 第 2 次 0.8」趋势）。
+    """
+
+    topic = db.get(Topic, topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    question_stats = payload.get("question_stats") or []
+    if not isinstance(question_stats, list):
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "question_stats 必须是数组"},
+        )
+    try:
+        topic.usage_count = int(topic.usage_count or 0) + 1
+        topic.last_used_at = _utcnow_naive()
+        recorded = 0
+        for entry in question_stats:
+            if not isinstance(entry, dict):
+                raise ValueError("question_stats 每项必须是对象")
+            try:
+                question_id = int(entry.get("question_id"))
+            except (TypeError, ValueError):
+                raise ValueError("question_id 必须为整数")
+            if db.get(Question, question_id) is None:
+                raise ValueError(f"题目不存在: {question_id}")
+            correct_rate = entry.get("correct_rate")
+            if correct_rate is not None:
+                correct_rate = float(correct_rate)
+                if not 0.0 <= correct_rate <= 1.0:
+                    raise ValueError("correct_rate 必须在 0 到 1 之间")
+            avg_seconds = entry.get("avg_seconds")
+            if avg_seconds is not None:
+                avg_seconds = int(avg_seconds)
+                if avg_seconds < 0:
+                    raise ValueError("avg_seconds 不能为负")
+            sample_size = int(entry.get("sample_size") or 0)
+            if sample_size < 0:
+                raise ValueError("sample_size 不能为负")
+            db.add(
+                QuestionUsageStat(
+                    question_id=question_id,
+                    topic_id=topic_id,
+                    record_kind=str(entry.get("record_kind") or "manual"),
+                    correct_rate=correct_rate,
+                    avg_seconds=avg_seconds,
+                    sample_size=sample_size,
+                    note=str(entry.get("note") or ""),
+                )
+            )
+            recorded += 1
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"记录失败: {exc}"})
+    return {"status": "success", "data": {"recorded": recorded, "usage_count": topic.usage_count}}
+
+
+@app.get("/api/topics/{topic_id}/usage")
+def list_topic_usage(topic_id: int, db: Session = Depends(get_db)):
+    """事件列表 + 逐题聚合（最近一条 + 历史趋势）。"""
+
+    if db.get(Topic, topic_id) is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    rows = (
+        db.query(QuestionUsageStat)
+        .filter(QuestionUsageStat.topic_id == topic_id)
+        .order_by(QuestionUsageStat.recorded_at.desc(), QuestionUsageStat.id.desc())
+        .limit(200)
+        .all()
+    )
+    by_question: dict[int, list[dict]] = {}
+    for row in rows:
+        by_question.setdefault(int(row.question_id), []).append(row.to_dict())
+    aggregated = [
+        {
+            "question_id": question_id,
+            "latest": entries[0],
+            "history": entries,
+        }
+        for question_id, entries in sorted(by_question.items())
+    ]
+    return {
+        "status": "success",
+        "data": {
+            "usage_count": db.get(Topic, topic_id).usage_count or 0,
+            "last_used_at": (
+                db.get(Topic, topic_id).last_used_at.isoformat() + "Z"
+                if db.get(Topic, topic_id).last_used_at
+                else None
+            ),
+            "events": [row.to_dict() for row in rows],
+            "by_question": aggregated,
+        },
+    }
+
+
+# ---- 智能归纳：推荐 / 洞察 / AI ----
+
+@app.get("/api/topics/{topic_id}/recommendations")
+def topic_recommendations(
+    topic_id: int,
+    limit: int = 5,
+    diversity: bool = True,
+    db: Session = Depends(get_db),
+):
+    """规则引擎推荐：同模型 / 同解法 / 变式（score + reasons 可解释）。"""
+
+    from mathbank.topic_recommender import recommend_questions
+
+    if db.get(Topic, topic_id) is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    limit = max(1, min(int(limit), 20))
+    try:
+        items = recommend_questions(db, topic_id, limit=limit, diversity=diversity)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500, content={"status": "error", "message": f"推荐失败: {exc}"}
+        )
+    return {"status": "success", "data": items}
+
+
+@app.get("/api/topics/{topic_id}/insights")
+def topic_insights(topic_id: int, db: Session = Depends(get_db)):
+    """配比警告 + 题目级触发 + 专题级汇总。"""
+
+    from mathbank.topic_insights import topic_insights_report
+    from mathbank.topics import check_difficulty_balance
+
+    if db.get(Topic, topic_id) is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    try:
+        balance = check_difficulty_balance(db, topic_id)
+        insights = topic_insights_report(db, topic_id)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500, content={"status": "error", "message": f"洞察失败: {exc}"}
+        )
+    return {"status": "success", "data": {"difficulty_balance": balance, **insights}}
+
+
+@app.post("/api/topics/{topic_id}/ai-recommend")
+def topic_ai_recommend(topic_id: int, payload: dict, db: Session = Depends(get_db)):
+    """LLM 推荐（M3 可选）：候选池本地过滤 → 模型只从候选 id 选。
+
+    军规：只发题目 id + 截断题干 + 是否有答案，不发图；输出只是建议；
+    Key 缺失明确报错，不静默降级。
+    """
+
+    import re as _re
+
+    from mathbank.ai_json import parse_ai_json
+    from mathbank.ai_http import post_chat_completion
+    from mathbank.ai_providers import resolve_text_provider
+    from mathbank.prompts import build_topic_recommendation_prompts
+    from mathbank.topic_recommender import recommend_questions
+    from mathbank.topics import TOPIC_TYPE_LABELS
+
+    topic = db.get(Topic, topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    limit = max(1, min(int(payload.get("limit", 5)), 20))
+    teacher_hint = str(payload.get("teacher_hint") or "").strip()
+
+    # 候选池：规则引擎放大 limit 取池，模型只在池内选。
+    pool = recommend_questions(db, topic_id, limit=20, diversity=False)
+    if not pool:
+        return {
+            "status": "success",
+            "data": {"selected": [], "message": "规则引擎未找到候选题目"},
+        }
+    candidate_ids = [entry["question_id"] for entry in pool]
+    candidate_rows = (
+        db.query(Question).filter(Question.id.in_(candidate_ids)).all()
+    )
+    questions_by_id = {question.id: question for question in candidate_rows}
+    candidate_items = []
+    for entry in pool:
+        question = questions_by_id.get(entry["question_id"])
+        if question is None:
+            continue
+        candidate_items.append(
+            {
+                "id": question.id,
+                "question_type": question.question_type or "",
+                "difficulty": question.difficulty or "",
+                "usage_count": int(question.usage_count or 0),
+                "knowledge": question.category_knowledge or "整章定位（待细分）",
+                "tags": question.tags or "",
+                "has_answer": bool(str(question.answer_markdown or "").strip()),
+                "stem_excerpt": _re.sub(r"[\r\n]+", " ", str(question.content or "")[:80]),
+                "rule_reasons": entry["reasons"],
+            }
+        )
+
+    target_model = os.getenv("PREFER_SOLVE_MODEL") or os.getenv("PREFER_PARSE_MODEL") or "deepseek-flash"
+    try:
+        provider = resolve_text_provider(target_model)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": f"AI 模型解析失败: {exc}"},
+        )
+    if not provider.api_key or not provider.api_base:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "message": (
+                    f"指定的 AI 模型 ({target_model}) 未配置有效的 API Key 或 "
+                    f"Base URL（{provider.credential_label}）。AI 推荐为可选功能，"
+                    "请在工作台右上角设置面板进行配置。"
+                ),
+            },
+        )
+
+    system_prompt, user_content = build_topic_recommendation_prompts(
+        topic_title=topic.title,
+        topic_type=TOPIC_TYPE_LABELS.get(topic.topic_type, topic.topic_type),
+        candidates=candidate_items,
+        limit=limit,
+        teacher_hint=teacher_hint,
+    )
+    data = {
+        "model": provider.model_name,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": 0.2,
+    }
+    try:
+        response = post_chat_completion(provider, data, timeout=120)
+        body = response.json()
+        parsed = parse_ai_json(
+            body.get("choices", [{}])[0].get("message", {}).get("content", "")
+        )
+    except Exception as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": f"AI 推荐失败: {exc}"},
+        )
+
+    allowed = set(candidate_ids)
+    selected: list[dict] = []
+    seen: set[int] = set()
+    reasons = parsed.get("reasons") if isinstance(parsed, dict) else {}
+    for raw_id in parsed.get("selected_ids", []) if isinstance(parsed, dict) else []:
+        try:
+            question_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue  # 模型幻觉出的非整数 id 直接丢弃
+        if question_id not in allowed or question_id in seen:
+            continue
+        seen.add(question_id)
+        selected.append(
+            {
+                "question_id": question_id,
+                "reason": str((reasons or {}).get(str(question_id), "")),
+            }
+        )
+        if len(selected) >= limit:
+            break
+    return {
+        "status": "success",
+        "data": {
+            "selected": selected,
+            "ai_analysis": str(parsed.get("ai_analysis", "")) if isinstance(parsed, dict) else "",
+            "candidate_count": len(candidate_items),
+            "note": "AI 输出只是建议，确认后才会入库",
+        },
+    }
+
+
+# ---- 流通：导出 / 导入 ----
+
+TOPIC_EXPORT_FORMAT = "mathbank-topic"
+TOPIC_EXPORT_VERSION = 1
+
+
+@app.get("/api/topics/{topic_id}/export")
+def export_topic(topic_id: int, db: Session = Depends(get_db)):
+    """JSON 导出（本地文件交换；共享/校本库明确不做）。"""
+
+    import datetime as _dt
+
+    topic = db.get(Topic, topic_id)
+    if topic is None:
+        raise HTTPException(status_code=404, detail="专题不存在")
+    groups = (
+        db.query(TopicGroup)
+        .filter(TopicGroup.topic_id == topic_id)
+        .order_by(TopicGroup.position.asc(), TopicGroup.id.asc())
+        .all()
+    )
+    rows = (
+        db.query(TopicItem, Question)
+        .join(Question, Question.id == TopicItem.question_id)
+        .filter(TopicItem.topic_id == topic_id)
+        .order_by(TopicItem.position.asc(), TopicItem.id.asc())
+        .all()
+    )
+    group_title_by_id = {group.id: group.title for group in groups}
+    return {
+        "status": "success",
+        "data": {
+            "format": TOPIC_EXPORT_FORMAT,
+            "version": TOPIC_EXPORT_VERSION,
+            "exported_at": _dt.datetime.now(_dt.timezone.utc)
+            .replace(tzinfo=None)
+            .isoformat()
+            + "Z",
+            "topic": topic.to_dict(),
+            "groups": [group.to_dict() for group in groups],
+            "items": [
+                {
+                    "position": index,
+                    "group_title": group_title_by_id.get(item.group_id, ""),
+                    "note": item.note or "",
+                    "question": {
+                        "id": question.id,
+                        "content": question.content or "",
+                        "question_type": question.question_type or "",
+                        "difficulty": question.difficulty or "",
+                        "answer_markdown": question.answer_markdown or "",
+                        "source": question.source or "",
+                    },
+                }
+                for index, (item, question) in enumerate(rows)
+            ],
+        },
+    }
+
+
+@app.post("/api/topics/import")
+def import_topic(payload: dict, db: Session = Depends(get_db)):
+    """JSON 导入：按题干全文匹配回填 question_id，未匹配进 unresolved。"""
+
+    from mathbank.topics import create_topic_with_items
+
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    if not isinstance(data, dict) or data.get("format") != TOPIC_EXPORT_FORMAT:
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "message": "不是有效的专题导出文件（format 不匹配）"},
+        )
+    topic_data = data.get("topic") or {}
+    items = data.get("items") or []
+    if not isinstance(items, list):
+        return JSONResponse(
+            status_code=400, content={"status": "error", "message": "items 必须是数组"}
+        )
+    try:
+        title = str(topic_data.get("title") or "").strip()
+        # 全文匹配：题干完全相同才回填；空/多匹配都进 unresolved 人工关联。
+        question_ids: list[int] = []
+        notes: dict[int, str] = {}
+        # group_title → 本题库内匹配到的题目 id（按首次出现顺序建分组）。
+        grouped: dict[str, list[int]] = {}
+        unresolved: list[dict] = []
+        for index, entry in enumerate(items):
+            if not isinstance(entry, dict):
+                continue
+            content = str((entry.get("question") or {}).get("content") or "").strip()
+            matched_id = None
+            if content:
+                rows = (
+                    db.query(Question.id)
+                    .filter(Question.content == content)
+                    .limit(2)
+                    .all()
+                )
+                if len(rows) == 1:
+                    matched_id = int(rows[0][0])
+            if matched_id is None:
+                unresolved.append(
+                    {
+                        "index": index,
+                        "content_excerpt": content[:80],
+                        "reason": "未在题库中找到唯一匹配的题干",
+                    }
+                )
+                continue
+            if matched_id in question_ids:
+                unresolved.append(
+                    {
+                        "index": index,
+                        "content_excerpt": content[:80],
+                        "reason": "与已匹配题目重复（同一专题内同题禁重）",
+                    }
+                )
+                continue
+            question_ids.append(matched_id)
+            notes[matched_id] = str(entry.get("note") or "")
+            group_title = str(entry.get("group_title") or "").strip()
+            if group_title:
+                grouped.setdefault(group_title, []).append(matched_id)
+        if not question_ids:
+            raise ValueError("没有可匹配的题目，无法导入（详见 unresolved）")
+        topic_id = create_topic_with_items(
+            db,
+            title=title or "导入的专题",
+            topic_type=str(topic_data.get("topic_type") or "knowledge"),
+            description=str(topic_data.get("description") or ""),
+            view_mode=str(topic_data.get("view_mode") or "linear"),
+            question_ids=question_ids,
+            notes=notes,
+        )
+        # 分组还原：导出 JSON 自带 group_title，按首次出现顺序重建分组，
+        # 让「导出 → 改标题 → 导入」保持 round-trip 忠实度（空标题 = 未分组）。
+        if grouped:
+            new_items = (
+                db.query(TopicItem)
+                .filter(TopicItem.topic_id == topic_id)
+                .order_by(TopicItem.position.asc(), TopicItem.id.asc())
+                .all()
+            )
+            item_by_question = {item.question_id: item for item in new_items}
+            for position, (group_title, members) in enumerate(grouped.items()):
+                group = TopicGroup(
+                    topic_id=topic_id, title=group_title, position=position
+                )
+                db.add(group)
+                db.flush()
+                for question_id in members:
+                    item = item_by_question.get(question_id)
+                    if item is not None:
+                        item.group_id = group.id
+            db.flush()
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(exc)})
+    except Exception as exc:
+        db.rollback()
+        return JSONResponse(status_code=500, content={"status": "error", "message": f"导入失败: {exc}"})
+    return {
+        "status": "success",
+        "data": {
+            "id": topic_id,
+            "matched_count": len(question_ids),
+            "unresolved": unresolved,
+        },
+    }
+
 
 # ----------------- Mount Static Folder last to allow API override -----------------
 app.mount("/static", RetainedUploadStaticFiles(
