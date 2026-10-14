@@ -115,7 +115,7 @@ def main() -> int:
         m = re.search(r"dim='([^']+)'", str(d.get("storage") or ""))
         if m:
             dims.add(m.group(1))
-    check("标签体系为 rja2019-tags-v1", schema.get("schema_version") == "rja2019-tags-v1")
+    check("标签体系为 rja2019-tags-v2", schema.get("schema_version") == "rja2019-tags-v2")
     check("四个多值维度齐备", {"chapter", "thought", "function", "custom"}.issubset(dims), str(sorted(dims)))
 
     # ---- schema v12：功能标签统计的大小写归一（读侧） ----
@@ -127,12 +127,9 @@ def main() -> int:
         str(sorted(ftc)),
     )
 
-    # ---- schema v12：关联类型（新关联单轨）----
+    # ---- 关联类型（新关联单轨；69e77c9 起内置词表精简为 2 项，旧五类降级 LEGACY）----
     EXPECTED_BUILTIN_RELATIONS = [
-        "same_topic",
-        "multi_q_one_solution",
-        "one_method_multi_use",
-        "multi_method_one",
+        "multi_q_unify",
         "one_q_variants",
     ]
     relation_payload = {}
@@ -145,16 +142,16 @@ def main() -> int:
         check("/api/relation-types 返回 items", False, str(exc))
     codes = [item.get("code") for item in relation_items if isinstance(item, dict)]
     check(
-        "内置关联类型 5 项且顺序固定",
-        codes[:5] == EXPECTED_BUILTIN_RELATIONS,
-        str(codes[:5]),
+        "内置关联类型 2 项且顺序固定",
+        codes[:2] == EXPECTED_BUILTIN_RELATIONS,
+        str(codes[:2]),
     )
     check(
         "内置关联类型 builtin=True",
-        all(item.get("builtin") is True for item in relation_items[:5]),
-        str([item.get("builtin") for item in relation_items[:5]]),
+        all(item.get("builtin") is True for item in relation_items[:2]),
+        str([item.get("builtin") for item in relation_items[:2]]),
     )
-    custom_codes = [c for c in codes[5:] if isinstance(c, str)]
+    custom_codes = [c for c in codes[2:] if isinstance(c, str)]
     check(
         "其余关联类型均为 custom: 前缀",
         all(c.startswith("custom:") for c in custom_codes),
