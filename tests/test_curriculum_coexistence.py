@@ -1,14 +1,45 @@
-from main import LOCAL_TOKEN
+import json
+from pathlib import Path
+
+import pytest
+
+from main import LOCAL_TOKEN, METADATA_FILE
 from mathbank.database import QuestionCurriculum, init_db
 
-# 单教材版本定案后的共存契约（get_active_version_code() 固定返回 "A"）：
+# 单教材版本定案后的共存契约（get_active_version_code() 固定返回 "A"，
+# 保存元数据时的版本猜启发式已废弃，源与目标版本码都恒为 A）：
 #   * 题目新增/更新只写入**启用版本 A** 的映射；
-#   * 保存元数据时若检测到非 A 版大纲，会为非启用版本补建历史映射，
-#     并按该版本回填 questions 主表分类字段；
-#   * 非启用版本（B/H/S）的映射是**只读历史归档**，题目更新不会改写它；
-#   * 重新保存 A 版元数据时，主表分类字段由启用版本 A 的映射回填。
-# 历史上本用例曾断言"B 版下更新会写入 B 映射"，该能力随多版本方案废弃
-# 已不再存在，现按上述口径校验映射共存、版本切换回填与更新只写启用版本。
+#   * 保存元数据（哪怕大纲长得像 B 版）也只按 A 版落地：不会创建 B/H/S
+#     映射，questions 主表分类字段由 A 版映射回填；
+#   * 重新保存 A 版元数据时，主表分类字段同样由启用版本 A 的映射回填。
+# 历史上本用例曾断言"保存 B 版大纲会补建 B 映射并按 B 回填主表"，该能力
+# 随多版本方案废弃已不再存在（见 main.py save_metadata_config 内注释：
+# 章节名启发式会误判 B 版并触发全量 UPDATE 覆盖用户已确认的分类），现按
+# 上述单版本口径校验。
+
+@pytest.fixture(autouse=True)
+def isolate_metadata_state():
+    """快照并恢复共享的元数据文件与内存缓存。
+
+    本用例通过 /api/config/metadata 会把测试用大纲写进
+    data_backup/custom_metadata_test.json（IS_TESTING 下的 METADATA_FILE），
+    并原地替换 main.METADATA_CACHE。历史上收尾回退只在用例全绿时才执行，
+    一旦中途失败，B 版风格的大纲就留在磁盘和内存里，把同会话后续用例
+    （乃至下一个 pytest 进程）的课程树全部带偏。因此无论成败都必须还原。
+    """
+    import main
+
+    path = Path(METADATA_FILE)
+    original_file = path.read_text(encoding="utf-8") if path.exists() else None
+    original_cache = main.METADATA_CACHE
+    try:
+        yield
+    finally:
+        main.METADATA_CACHE = original_cache
+        if original_file is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(original_file, encoding="utf-8")
 
 def test_curriculum_coexistence_and_migration(client, db_session):
     # Initialize the test DB index and initial migrations
@@ -80,22 +111,21 @@ def test_curriculum_coexistence_and_migration(client, db_session):
     response = client.post("/api/config/metadata", json=new_metadata_payload, headers=headers)
     assert response.status_code == 200
 
-    # Verify that a 'B' version mapping was automatically created and aligned during metadata save
+    # 单版本定案：保存时不再按章节名猜测版本，源与目标恒为 A，因此不会
+    # 创建任何 B 版映射（历史多版本行为已废弃）。
     mapping_b = db_session.query(QuestionCurriculum).filter_by(
         question_id=question_id, version_code="B"
     ).first()
-    assert mapping_b is not None
-    assert mapping_b.compulsory == "必修三"
-    assert mapping_b.chapter == "第八章 向量的数量积与三角恒等变换"
-    assert mapping_b.knowledge == "" # Leaf knowledge is reset to empty for B
+    assert mapping_b is None
 
-    # Query the question and verify its main category fields are now updated to B-version!
+    # Query the question and verify its main category fields still follow the
+    # active A-version mapping (the B-looking payload must not rewrite them).
     response = client.get(f"/api/questions/{question_id}")
     assert response.status_code == 200
     fetched_q = response.json()
-    assert fetched_q["category_compulsory"] == "必修三"
-    assert fetched_q["category_chapter"] == "第八章 向量的数量积与三角恒等变换"
-    assert fetched_q["category_knowledge"] == ""
+    assert fetched_q["category_compulsory"] == "必修二"
+    assert fetched_q["category_chapter"] == "6. 平面向量及其应用"
+    assert fetched_q["category_knowledge"] == "平面向量的数量积"
 
     # 3. Update the question under the only active version (A).
     # The update must land in the A mapping only; the B mapping stays as a
@@ -117,13 +147,11 @@ def test_curriculum_coexistence_and_migration(client, db_session):
     assert mapping_a_updated.chapter == "6. 平面向量及其应用"
     assert mapping_a_updated.knowledge == "6.1"
 
-    # Verify the non-active B-version mapping is preserved and untouched!
+    # 单版本定案：不存在也不创建非启用版本映射
     mapping_b_preserved = db_session.query(QuestionCurriculum).filter_by(
         question_id=question_id, version_code="B"
     ).first()
-    assert mapping_b_preserved.compulsory == "必修三"
-    assert mapping_b_preserved.chapter == "第八章 向量的数量积与三角恒等变换"
-    assert mapping_b_preserved.knowledge == ""
+    assert mapping_b_preserved is None
 
     # Main category fields follow the submitted (active-version) values
     response = client.get(f"/api/questions/{question_id}")
@@ -150,7 +178,7 @@ def test_curriculum_coexistence_and_migration(client, db_session):
     assert response.status_code == 200
 
     # Query the question and verify its main category fields are re-filled
-    # from the active A-version mapping (both mappings still coexist).
+    # from the active A-version mapping (the only version that exists).
     response = client.get(f"/api/questions/{question_id}")
     assert response.status_code == 200
     reverted_q = response.json()
@@ -165,5 +193,4 @@ def test_curriculum_coexistence_and_migration(client, db_session):
     mapping_b_final = db_session.query(QuestionCurriculum).filter_by(
         question_id=question_id, version_code="B"
     ).first()
-    assert mapping_b_final is not None
-    assert mapping_b_final.chapter == "第八章 向量的数量积与三角恒等变换"
+    assert mapping_b_final is None

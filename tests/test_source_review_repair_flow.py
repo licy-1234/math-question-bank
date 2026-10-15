@@ -5,6 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
+# 这两个导入是给下面 flow 夹具经 request.getfixturevalue(kind + '_state')
+# 按名字取用的：静态检查看不到字符串里的引用，切勿当死导入删掉（9a0efbb 曾误删）。
+from test_docx_source_verify import state as word_state  # noqa: F401
+from test_pdf_source_verify import setup as pdf_state  # noqa: F401
 from mathbank import docx_source_verify as word, pdf_source_verify as pdf
 from mathbank.task_manager import TaskCancelled
 

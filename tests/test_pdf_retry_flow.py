@@ -79,7 +79,10 @@ def test_ordinary_pdf_ocr_uses_same_provider_and_one_retry(monkeypatch, tmp_path
     Image.new("RGB", (16, 16), "white").save(image)
     provider = resolve_ocr_provider("siliconflow", {"SILICONFLOW_API_KEY": "unused"})
     monkeypatch.setattr(main, "resolve_ocr_provider", lambda _engine: provider)
-    monkeypatch.setattr(main, "resolve_ocr_fallbacks", lambda *_a: pytest.fail("No extra provider fallback"))
+    # ocr_pdf_page_image 现在只解析单一 provider，重试预算在 ocr_via_provider
+    # 内部完成，结构上不存在换 provider 的回退分支；下面「两次调用都是同一
+    # provider」即为不回退的行为断言（resolve_ocr_fallbacks 仅存在于
+    # mathbank.ai_providers，main 不再引用它）。
     calls = []
     def post(config, payload, **kwargs):
         calls.append((config, kwargs))
