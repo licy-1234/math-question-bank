@@ -776,7 +776,19 @@
                     <button type="button" class="glass-btn" id="topicInspectorOpenBank" data-question-id="${question.id}"><i class="fa-solid fa-up-right-from-square" aria-hidden="true"></i><span>在题库中打开</span></button>
                 </div>`;
             const body = questionPanel.querySelector('#topicInspectorQuestionBody');
-            body.innerHTML = window.marked ? window.marked.parse(String(question.content || '')) : escapeText(question.content || '');
+            // 复用题库详情的同一条渲染管线（editor.js 的 parseMarkdownWithMath），
+            // 让专题检查器与题库详情对段内单换行、公式、表格、选项的渲染保持一致；
+            // 该管线同时经过 sanitizeRichHtml，比直接 marked.parse 更安全。
+            // editor.js 先于 topic.js 加载，parseMarkdownWithMath 必定已挂到 window。
+            const rawContent = String(question.content || '');
+            if (typeof window.parseMarkdownWithMath === 'function') {
+                body.innerHTML = window.parseMarkdownWithMath(rawContent);
+            } else if (window.marked) {
+                // 兜底：显式开启 GFM 软换行，避免与主管线行为分叉。
+                body.innerHTML = window.marked.parse(rawContent, { breaks: true });
+            } else {
+                body.innerHTML = escapeText(rawContent);
+            }
             renderMath(body);
             const openBank = questionPanel.querySelector('#topicInspectorOpenBank');
             if (openBank) openBank.addEventListener('click', () => openInBank(question.id));

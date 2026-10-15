@@ -13,8 +13,17 @@ from test_math_preview_regressions import run_preview_script
 def test_paragraph_separators_keep_hard_breaks_math_and_block_anchors():
     run_preview_script(r'''
 const paragraphs=html=>(html.match(/mb-preview-paragraph-break/g)||[]).length;
-assert.equal(preprocessFormulaForKaTeX('甲\n乙'),'甲 乙');
+const breaks=html=>(html.match(/<br>/g)||[]).length;
+// 渲染层修复：单个 \n 现在保留为可见换行（<br>），不再折叠成空格，
+// 这样 Word/PDF 解析出的段内分行才不会丢失。
+assert.equal(preprocessFormulaForKaTeX('甲\n乙'),'甲<br>乙');
+assert.equal(breaks(preprocessFormulaForKaTeX('甲\n乙')),1);
+// 单换行与段落分隔混用：1 个段落分隔 + 1 个软换行，且不产生多余空行。
+const mixed=preprocessFormulaForKaTeX('甲\n乙\n\n丙');
+assert.equal(paragraphs(mixed),1); assert.equal(breaks(mixed),1);
 assert.equal(paragraphs(preprocessFormulaForKaTeX('甲\n\n乙\n\n\n丙')),2);
+// \n\n\n 收敛为单个段落分隔，不叠加 <br>。
+assert.equal(breaks(preprocessFormulaForKaTeX('甲\n\n乙\n\n\n丙')),0);
 assert.equal(preprocessFormulaForKaTeX(String.raw`甲\\乙`),'甲<br>乙');
 assert.equal(preprocessFormulaForKaTeX(String.raw`甲\\\\乙`),'甲<br><br>乙');
 const subquestions=preprocessFormulaForKaTeX('解题过程\r\n\r\n(1) 求 $x$。\r\n\r\n(2) 说明理由。');

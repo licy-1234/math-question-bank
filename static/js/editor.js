@@ -3775,10 +3775,13 @@ window.functionTagBadge = functionTagBadge;
                 return (punctuation || '') + paragraphBreak + marker + ' ';
             });
 
-            // 双回车起新段落；单回车仅视为空格；显式 \\\\ 保留为硬换行。
+            // 双回车起新段落；单回车保留为可见换行（渲染层修复：此前被折叠成
+            // 空格，导致 Word/PDF 解析出的段内分行全部丢失）；显式 \\\\ 仍为硬换行。
+            // 单回车落到 <br> 而非空格，可复用下方 3799-3804 既有的
+            // “<br> 与 paragraphBreak 相邻收敛”规则，不会产生多余空行。
             tempText = tempText.replace(/\r\n/g, '\n')
                                .replace(/\n\n+/g, paragraphBreak)
-                               .replace(/\n/g, ' ');
+                               .replace(/\n/g, '<br>');
                                
             // 转换 Markdown 题目插图与配图语法 ![](/static/uploads/xxx.png) 为精美自适应预览图
             tempText = tempText.replace(/!\[(.*?)\]\(([^)]+)\)/g, function(match, alt, src) {
