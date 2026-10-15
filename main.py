@@ -145,6 +145,7 @@ from mathbank.tags import (
 )
 from mathbank.curriculums import (
     build_default_metadata,
+    canonical_category_labels,
     get_curriculum_preset,
     load_curriculum,
 )
@@ -6372,6 +6373,21 @@ def post_process_pdf_parsed_questions(parsed_questions: list, paper_title: str, 
         if q.get("content"):
             q["content"] = (normalize_source_fillin(q["content"], normalize_fillin_macro)
                             if index in preserved else normalize_fillin_macro(q["content"]))
+
+    # 0.1 归位教材分类标签：模型通常能抄对章节名称，却会漏掉目录前的编号
+    # （如 "2. 直线和圆的方程" 被写成 "直线和圆的方程"），导致审查卡片的学段/
+    # 章节下拉框无法预选、题目只能人工逐题补。只要能在当前教材目录中唯一还原，
+    # 就写回精确的目录标签；无法唯一还原时保持原值交给人工。
+    current_curriculum = get_current_curriculum()
+    for q in parsed_questions:
+        resolved = canonical_category_labels(
+            current_curriculum,
+            q.get("category_compulsory", ""),
+            q.get("category_chapter", ""),
+            q.get("category_knowledge") or "",
+        )
+        if resolved is not None:
+            q["category_compulsory"], q["category_chapter"], q["category_knowledge"] = resolved
 
     # 1. 搜集该 PDF 任务在 tmp 文件夹中生成的所有物理裁剪图片，按生成时间（mtime）进行排序
     task_crop_urls = []

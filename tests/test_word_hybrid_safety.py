@@ -153,7 +153,7 @@ def test_global_contract_failure_has_one_whole_fallback_and_no_scoped_repeats(tm
     assert result.questions == original and not result.preserved_indices and not result.partial
 
 
-@pytest.mark.parametrize('mutation', ['missing_metadata', 'changed_content', 'bad_category', 'wrong_type', 'missing_split'])
+@pytest.mark.parametrize('mutation', ['missing_metadata', 'changed_content', 'wrong_type', 'missing_split'])
 def test_only_failed_group_is_sent_once_more_without_repeating_accepted_ids(tmp_path, mutation):
     plan = native_plan(tmp_path, two_bad=True)
     calls = []
@@ -163,7 +163,6 @@ def test_only_failed_group_is_sent_once_more_without_repeating_accepted_ids(tmp_
         if len(calls) == 1:
             if mutation == 'missing_metadata': parsed['metadata']['items'].pop(0)
             elif mutation == 'changed_content': parsed['metadata']['items'][0]['content'] = 'Rewrite forbidden'
-            elif mutation == 'bad_category': parsed['metadata']['items'][0]['category_chapter'] = 'Unknown chapter'
             elif mutation == 'wrong_type': parsed['metadata']['items'][0]['question_type'] = 'single_choice'
             else: parsed['splits'].pop(0)
         return Response(parsed)
@@ -176,6 +175,28 @@ def test_only_failed_group_is_sent_once_more_without_repeating_accepted_ids(tmp_
     assert len(second_meta) + len(second_split) == 1
     assert second_meta <= first_meta and second_split <= first_split
     assert len(result.questions) == 5
+
+
+def test_unresolvable_metadata_classification_is_adopted_blank_without_a_retry(tmp_path):
+    """分类无法归位时不得连坐丢题，也不应是「失败组」触发重试。"""
+
+    plan = native_plan(tmp_path, two_bad=True)
+    total = len(plan['_inspection']['questions'])
+    calls = []
+    def post(_provider, payload, **options):
+        calls.append(True)
+        parsed = reply_for(plan, payload)
+        for item in parsed['metadata']['items']:
+            item['category_chapter'] = 'Unknown chapter'
+        return Response(parsed)
+    result, diagnostics = call(plan, post)
+    assert len(calls) == 1
+    assert not result.partial
+    assert len(result.questions) == total
+    blank = [q for q in result.questions
+             if q.get('classification_review', {}).get('required')]
+    assert blank and all(q['category_chapter'] == '' and q['category_compulsory'] == '' for q in blank)
+    assert diagnostics['word_hybrid']['status'] == 'used'
 
 
 def test_second_failure_retains_successful_groups_and_exposes_partial_without_third_post(tmp_path):

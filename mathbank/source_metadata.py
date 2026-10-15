@@ -23,7 +23,9 @@ from mathbank.content_locks import (
     lock_visible_math, reconcile_visible_math, strip_source_answer_label, _source_style_group_end,
     _is_choice_answer_blank, _next_math_span, _literal_math_scan_source,
 )
-from mathbank.curriculums import DEFAULT_DIFFICULTIES, DEFAULT_QUESTION_TYPES
+from mathbank.curriculums import (
+    DEFAULT_DIFFICULTIES, DEFAULT_QUESTION_TYPES, canonical_category_labels,
+)
 from mathbank.math_markdown import normalize_question_math_markdown
 from mathbank.paper_helper import clean_choice_stem_parentheses
 from mathbank.prompts import CLASSIFICATION_PRIORITY_RULE, build_curriculum_text
@@ -56,6 +58,7 @@ _IMAGE_MARKUP = re.compile(r"!\[[^\]]*\]\([^\n)]*\)|\\includegraphics(?:\[[^]]*\
 _SOURCE_FILLIN_MARKUP = re.compile(r"\\(?:underline|fillin)(?![A-Za-z])")
 _CORRECT_MARKER = "[MATHBANK_ORIGINAL_CORRECT]"
 _ORIGINAL_MARKER = "[EXTRACTED_ORIGINAL]"
+CLASSIFICATION_REVIEW_REASON = "教材分类未能自动确定，请人工选择学段与章节。"
 
 
 class SourceMetadataContractError(ValueError):
@@ -984,6 +987,16 @@ def build_source_metadata_messages(plan: dict, curriculum: dict) -> list[dict]:
 
 def apply_source_metadata_response(parsed: dict, plan: dict, curriculum: dict, *,
                                    normalize_fillin: Callable[[str], str] | None = None) -> list[dict]:
+    """Adopt certified question bodies plus the model's five classification fields.
+
+    Source fidelity and classification are decoupled.  Identity/coverage/field
+    problems and a question-type that contradicts the original structure still
+    fail closed (they are integrity boundaries).  A classification that cannot
+    be resolved to the active catalog is **not** allowed to erase the locally
+    certified question: the question is kept with its five class fields blanked
+    and an explicit manual-classification review flag, so the import never loses
+    a question just because the model named a book/chapter differently.
+    """
     _require_certificate(plan)
     if not isinstance(parsed, dict) or set(parsed) != {"items"} or not isinstance(parsed["items"], list):
         raise SourceMetadataContractError("元数据结果不是完整的 items 对象。")
@@ -994,6 +1007,7 @@ def apply_source_metadata_response(parsed: dict, plan: dict, curriculum: dict, *
     difficulties = {row["value"] for row in DEFAULT_DIFFICULTIES}
     fields = {"id", "question_type", "category_compulsory", "category_chapter", "category_knowledge", "difficulty"}
     supplied = {}
+    unclassified = set()
     for row in parsed["items"]:
         if isinstance(row, dict) and "category_knowledge" not in row:
             # Backward compatibility for providers using the previous schema:
@@ -1004,18 +1018,38 @@ def apply_source_metadata_response(parsed: dict, plan: dict, curriculum: dict, *
         identifier = row["id"]
         if identifier not in known or identifier in supplied:
             raise SourceMetadataContractError("元数据来源标识未知或重复。")
-        if (row["question_type"] not in types or row["difficulty"] not in difficulties
-                or not word_category_allowed(scope, row["category_compulsory"], row["category_chapter"])):
+        # Question type / difficulty / structure fidelity remain a hard boundary:
+        # the model may not contradict the original question.
+        if row["question_type"] not in types or row["difficulty"] not in difficulties:
             raise SourceMetadataContractError("元数据题型、难度或教材分类不在当前支持范围。")
-        allowed_knowledge = curriculum.get(row["category_compulsory"], {}).get(row["category_chapter"], ())
-        if row["category_knowledge"] and row["category_knowledge"] not in allowed_knowledge:
-            raise SourceMetadataContractError("元数据小节不属于所选版本、学段和章节。")
         if known[identifier]["has_choices"] and row["question_type"] not in {"single_choice", "multi_choice"}:
             raise SourceMetadataContractError("元数据题型与原卷选择题结构不一致。")
         explicit_type = known[identifier].get("explicit_question_type")
         if explicit_type and row["question_type"] != explicit_type:
             raise SourceMetadataContractError("元数据题型与原卷明确的分节题型不一致。")
-        supplied[identifier] = row
+        # Classification is best-effort.  Normalize the cosmetic/alias forms a
+        # model or an older row may use ("直线和圆的方程", "第2章 直线和圆的方程",
+        # "选择性必修第一册"); anything still unresolvable is blanked for manual
+        # classification instead of discarding the whole question group.
+        compulsory = row["category_compulsory"]
+        chapter = row["category_chapter"]
+        knowledge = row["category_knowledge"]
+        if scope.allow_outside:
+            if not word_category_allowed(scope, compulsory, chapter):
+                compulsory, chapter, knowledge = "", "", ""
+                unclassified.add(identifier)
+            elif knowledge and knowledge not in curriculum.get(compulsory, {}).get(chapter, ()):
+                # A fabricated 小节 downgrades to the legal "整章待细分" state.
+                knowledge = ""
+        else:
+            resolved = canonical_category_labels(curriculum, compulsory, chapter, knowledge)
+            if resolved is None:
+                compulsory, chapter, knowledge = "", "", ""
+                unclassified.add(identifier)
+            else:
+                compulsory, chapter, knowledge = resolved
+        supplied[identifier] = {**row, "category_compulsory": compulsory,
+                                "category_chapter": chapter, "category_knowledge": knowledge}
     if set(supplied) != set(known):
         raise SourceMetadataContractError("元数据未完整覆盖全部来源题目。")
     questions = []
@@ -1025,9 +1059,18 @@ def apply_source_metadata_response(parsed: dict, plan: dict, curriculum: dict, *
         if original.get("math_normalization_safe"):
             content = normalize_question_math_markdown(content)
         answer = original["answer_markdown"]
-        questions.append({"content": content, "answer_markdown": (_ORIGINAL_MARKER + answer) if answer else "",
+        question = {"content": content, "answer_markdown": (_ORIGINAL_MARKER + answer) if answer else "",
             **{key: metadata[key] for key in fields - {"id"}}, "source": "",
-            "referenced_images": embedded_question_assets(content, answer)})
+            "referenced_images": embedded_question_assets(content, answer)}
+        if original["id"] in unclassified:
+            # Only a classification flag: the question body is locally certified,
+            # so this must NOT be routed through source_review (that channel
+            # gates the paid Word source-vision verification and means something
+            # different).  The blank class fields + the import card's required
+            # 学段/章节 check are what force the teacher to classify manually.
+            question["classification_review"] = {"required": True,
+                                                 "reasons": [CLASSIFICATION_REVIEW_REASON]}
+        questions.append(question)
     return questions
 
 
