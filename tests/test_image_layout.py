@@ -204,7 +204,7 @@ if(images[0].dataset.editorImageKey!=='a.png') throw Error('missing individual c
 if(images[1].dataset.editorImageKey!=='') throw Error('missing trailing group control');
 if(images[1].style.maxHeight!=='240px') throw Error('trailing group size was ignored');
 '''
-    result=subprocess.run([shutil.which('node'),'-e',script],capture_output=True,text=True)
+    result=subprocess.run([shutil.which('node'),'-'],input=script,capture_output=True,text=True)
     assert result.returncode==0,result.stderr
 
 
@@ -247,7 +247,7 @@ console.log(JSON.stringify({{
 '''
     node = shutil.which('node')
     assert node, 'Node.js is required for the frontend executable regression'
-    result = subprocess.run([node, '-e', script], cwd=root, capture_output=True, text=True)
+    result = subprocess.run([node, '-'], input=script, cwd=root, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     rendered = json.loads(result.stdout)
     for name in ('editor', 'paper'):

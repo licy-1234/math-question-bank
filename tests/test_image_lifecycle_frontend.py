@@ -33,6 +33,7 @@ function refreshRelatedDropdown() {}
 function updateQuestionSaveButtonState() {}
 function clearContentOcrPreview() {}
 function clearOcrPreview() {}
+function clearReviewOcrPreview() {}
 function renderParsedCardPreview() {}
 function appendSafeImageBadge() {}
 const elements = {};
@@ -74,8 +75,10 @@ SOURCES = (
 def run_js(checks, sources=SOURCES):
     node = shutil.which('node')
     assert node, 'Node is required for isolated frontend regression checks'
-    result = subprocess.run([node, '-e', COMMON + sources + '\n(async()=>{\n' + checks
-                             + '\n})().catch(error=>{console.error(error);process.exitCode=1;});'],
+    script = (COMMON + sources + '\n(async()=>{\n' + checks
+              + '\n})().catch(error=>{console.error(error);process.exitCode=1;});')
+    # Windows 命令行上限约 32K，整段 harness 必须走 stdin，不能塞进 -e
+    result = subprocess.run([node, '-'], input=script,
                             capture_output=True, text=True, cwd=ROOT)
     assert result.returncode == 0, result.stderr + result.stdout
 

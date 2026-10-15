@@ -168,7 +168,13 @@ def test_single_question_classification_prompt_requests_four_value_question_type
     assert '"question_type"' in prompt
     assert '"difficulty"' in prompt
     assert '"reason"' in prompt
-    assert "包含且仅包含以下四个 key" in prompt
+    # 标签维度（function_tag/thought_codes/strategy_codes/micro_methods）并入后，
+    # 输出 key 已增至 8 个且标签可空，提示词从「包含且仅包含以下四个 key」
+    # 改为「包含以下 key」；此处按当前契约断言，四个必选 key 仍需逐一在位。
+    assert "包含以下 key" in prompt
+    assert "包含且仅包含以下四个 key" not in prompt
+    for tag_key in ('"function_tag"', '"thought_codes"', '"strategy_codes"', '"micro_methods"'):
+        assert tag_key in prompt
     # 必须允许并鼓励输出单选题/多选题
     assert "single_choice" in prompt
     assert "multi_choice" in prompt
@@ -178,9 +184,10 @@ def test_single_question_classification_prompt_requests_four_value_question_type
     # 非选项文本的典型反例必须写进 prompt
     assert "角A、B、C的对边" in prompt
     assert "抛物线C：" in prompt
-    # 难度 rubric 具体化
-    assert "单一步骤" in prompt
-    assert "含参讨论" in prompt
+    # 难度 rubric 具体化（69e77c9 改写 rubric 措辞：步骤数分档取代了旧的
+    # 「单一步骤/含参讨论」表述，断言随当前契约更新）
+    assert "步骤通常不超过三步" in prompt
+    assert "步骤四到六步" in prompt
 
 
 def test_classification_prompt_injects_difficulty_prior_and_section_candidates():

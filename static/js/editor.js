@@ -443,7 +443,8 @@ window.functionTagBadge = functionTagBadge;
                 figure_size: FigureLayoutState.size,
                 image_layouts: JSON.parse(JSON.stringify(FigureLayoutState.imageLayouts || {})),
                 figure_align_custom: FigureLayoutState.customAlign,
-                tags: document.getElementById('editTags') ? document.getElementById('editTags').value : ''
+                tags: document.getElementById('editTags') ? document.getElementById('editTags').value : '',
+                sub_knowledge_by_version: typeof editorSubKnowledgeVersionSnapshot === 'function' ? editorSubKnowledgeVersionSnapshot() : {}
             };
             originalQuestionState = {
                 id: id,
@@ -464,7 +465,13 @@ window.functionTagBadge = functionTagBadge;
                 figure_size: snapshot.figure_size || 'auto',
                 image_layouts: snapshot.image_layouts || {},
                 figure_align_custom: Boolean(snapshot.figure_align_custom),
-                tags: snapshot.tags
+                tags: snapshot.tags,
+                // 只有「本次真正保存下来的版本」才并进基线；其他版本仍待入库的
+                // 细分必须继续算未保存，否则用户保存 A 后会丢掉 B 的待办提醒。
+                sub_knowledge_by_version: requestSnapshot && requestSnapshot.version_code
+                    ? {...(originalQuestionState?.sub_knowledge_by_version || {}),
+                       [requestSnapshot.version_code]: (typeof getEditorSubKnowledge === 'function' ? getEditorSubKnowledge() : [])}
+                    : (snapshot.sub_knowledge_by_version || {})
             };
             if (typeof refreshEditorFeedback === 'function') refreshEditorFeedback();
         }
@@ -582,6 +589,8 @@ window.functionTagBadge = functionTagBadge;
                    currentDifficulty === snapshot.difficulty &&
                    currentSource === snapshot.source &&
                    currentRelatedQuestionId === (snapshot.related_question_id || '') &&
+                   (typeof subKnowledgeVersionsSignature !== 'function' || !snapshot.sub_knowledge_by_version
+                       || subKnowledgeVersionsSignature(editorSubKnowledgeVersionSnapshot()) === subKnowledgeVersionsSignature(snapshot.sub_knowledge_by_version)) &&
                    currentImages === snapshot.image_paths &&
                    currentTikzCode === (snapshot.tikz_code || '') &&
                    currentTikzReferencePath === (snapshot.tikz_reference_image_path || '') &&

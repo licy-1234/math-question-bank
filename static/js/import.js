@@ -1332,6 +1332,9 @@
                     question_type: qtype,
                     difficulty: difficulty,
                     source: source,
+                    version_code: curriculumVersion,
+                    sub_knowledge_by_version: typeof window.editorSubKnowledgeVersionSnapshot === 'function' ? window.editorSubKnowledgeVersionSnapshot() : {},
+                    classification_by_version: typeof window.editorClassificationVersionSnapshot === 'function' ? window.editorClassificationVersionSnapshot() : {},
                     image_paths: JSON.stringify(Array.from(uploadedImages)),
                     tikz_code: tikzCode,
                     tikz_reference_image_path: tikzReferencePath,
@@ -1359,6 +1362,7 @@
                 formData.append('question_type', qtype);
                 formData.append('difficulty', difficulty);
                 formData.append('source', source);
+                if (curriculumVersion) formData.append('expected_version_code', curriculumVersion);
                 formData.append('answer_markdown', answerMarkdown);
                 formData.append('review', review);
                 // 关联只走 /api/questions/{id}/relations 单轨：保存题目不再提交
@@ -1505,9 +1509,11 @@
                             let drafts = getLocalStorageDrafts();
                             const draft = drafts.find(d => d.id === editorSession.draftId);
                             const version = requestBackupSnapshot.version_code;
+                            const savedSubKnowledge = typeof window.getEditorSubKnowledge === 'function'
+                                ? window.getEditorSubKnowledge() : [];
                             const versionPaths = {...(draft?.sub_knowledge_by_version || {}), ...(requestBackupSnapshot.sub_knowledge_by_version || {})};
                             const savedPaths = {...(draft?.saved_sub_knowledge_by_version || originalQuestionState?.sub_knowledge_by_version || {}),
-                                ...(version ? {[version]: subKnowledge} : {})};
+                                ...(version ? {[version]: savedSubKnowledge} : {})};
                             const remaining = typeof window.subKnowledgeSignature === 'function'
                                 ? Object.keys(versionPaths).filter(code => window.subKnowledgeSignature(versionPaths[code]) !== window.subKnowledgeSignature(savedPaths[code])) : [];
                             if (remaining.length) {

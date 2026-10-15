@@ -58,7 +58,7 @@ Object.defineProperty(relationType, 'selectedIndex', {
   }
 });
 elements.editRelationType = relationType;
-elements.editRelationCustom = {value: '', classList: {add() {}, remove() {}}};
+elements.editRelationCustom = {value: '', classList: {add() {}, remove() {}, contains: () => false}};
 const document = {
   getElementById(id) { return elements[id] || null; },
   createElement() {
