@@ -47,6 +47,30 @@ const doubledPeriod=preprocessFormulaForKaTeX('句子..\n(1) 求值。');
 assert.ok(doubledPeriod.includes('句子..<span'),doubledPeriod);
 const mixedBreak=preprocessFormulaForKaTeX(String.raw`甲\\`+'\n\n乙');
 assert.equal(paragraphs(mixedBreak),1); assert.equal(mixedBreak.includes('<br>'),false);
+// 显式硬换行（\\）行尾再跟一个物理换行，只能渲染成一次换行：
+// 单回车已升级为 <br>，若不先吞掉这个换行就会叠成 <br><br>（凭空多一个空行）。
+const hardBreakThenNewline=preprocessFormulaForKaTeX(String.raw`甲\\`+'\n乙');
+assert.equal(breaks(hardBreakThenNewline),1,hardBreakThenNewline);
+assert.equal(paragraphs(hardBreakThenNewline),0,hardBreakThenNewline);
+assert.ok(!hardBreakThenNewline.includes('<br><br>'),hardBreakThenNewline);
+const hardBreakThenSpacedNewline=preprocessFormulaForKaTeX(String.raw`甲\\`+'  \n乙');
+assert.equal(breaks(hardBreakThenSpacedNewline),1,hardBreakThenSpacedNewline);
+// 块级产物（表格/列表/图片/选项）自带外边距：紧贴它的换行不该再变成 <br>，
+// 否则块与正文之间会多出一整行空白。
+for (const [name, source] of [
+  ['table','| a | b |\n|---|---|\n| 1 | 2 |\n正文'],
+  ['table_before','正文\n| a | b |\n|---|---|\n| 1 | 2 |'],
+  ['list','- a\n- b\n正文'],
+  ['image','![](/static/uploads/paragraph.png)\n正文'],
+  ['image_before','正文\n![](/static/uploads/paragraph.png)'],
+  ['choices',String.raw`\begin{choices}\item $1$\item $2$\end{choices}`+'\n正文'],
+]) {
+  const html=preprocessFormulaForKaTeX(source);
+  assert.equal(breaks(html),0,`${name}: ${html}`);
+}
+// 显式硬换行紧邻块级元素时，硬换行本身必须保留（不能连它一起吞掉）。
+const hardBreakBeforeTable=preprocessFormulaForKaTeX(String.raw`甲\\`+'\n| a | b |\n|---|---|\n| 1 | 2 |');
+assert.equal(breaks(hardBreakBeforeTable),1,hardBreakBeforeTable);
 for(const math of ['$$x=1$$',String.raw`\[x=1\]`,String.raw`\begin{equation}x=1\end{equation}`]) {
   const html=preprocessFormulaForKaTeX('前段\n\n'+math+'\n\n后段');
   assert.equal(paragraphs(html),0,html);

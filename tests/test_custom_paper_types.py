@@ -97,7 +97,7 @@ if (getQuestionTypeCn('__proto__') !== '__proto__') throw new Error('prototype l
 if (!isWrittenQuestionType('calculation') || isWrittenQuestionType('fill_in_blank')) throw new Error('layout');
 if (getPaperTypeOrder(present, 'exam_19').length !== 4) throw new Error('exam19');
 """
-    result = subprocess.run([shutil.which("node"), "-e", script], capture_output=True, text=True, timeout=10)
+    result = subprocess.run([shutil.which("node"), "-"], input=script, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
 
 
@@ -222,7 +222,7 @@ window.PaperStore.meta.paper_type='exam';
 window.movePaperSection('calculation','down');
 assert(window.PaperStore.meta.section_order.indexOf('single_choice')<window.PaperStore.meta.section_order.indexOf('calculation'));
 """
-    result = subprocess.run([shutil.which("node"), "-e", script], capture_output=True, text=True, timeout=10)
+    result = subprocess.run([shutil.which("node"), "-"], input=script, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
 
 

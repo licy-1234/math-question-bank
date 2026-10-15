@@ -82,7 +82,8 @@ if (similarlyNamed !== String.raw`\parent`) {
 }
 """
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -168,7 +169,8 @@ if (rendered.includes(String.raw`$\paren$`) || rendered.includes(String.raw`\bol
 }
 '''
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -369,7 +371,8 @@ if (!result.choicesRaw.startsWith(String.raw`\begin{choices}`) || !result.choice
 }
 '''
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -483,7 +486,8 @@ if (firstPageHeadingPages.length !== 2 || firstPageHeadingPages[0].length !== 0 
 }
 """
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -544,7 +548,8 @@ if (!simpleRendered.includes('data-figure-align-qid="43"')) {
 }
 '''
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -615,7 +620,8 @@ if (!rightLarge.includes('max-width: min(100%, 155px)') ||
 }
 '''
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -714,7 +720,8 @@ if (embedded.figAlign !== 'bottom_left' || !embedded.imgHtml.includes('justify-s
 }
 '''
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -903,7 +910,8 @@ if (popoverCount !== 2 || openCount !== 1) {
 }
 '''
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -977,7 +985,8 @@ if (editorState.align !== 'right' || editorState.size !== 'small') {
 }
 '''
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -1144,7 +1153,8 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 });
 '''
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -1510,7 +1520,8 @@ const cases = [
 '''
     for timezone in ("UTC", "Asia/Shanghai", "America/Los_Angeles"):
         result = subprocess.run(
-            [node, "-e", script, str(STATIC_JS_DIR / "dashboard.js")],
+            [node, "-", str(STATIC_JS_DIR / "dashboard.js")],
+            input="process.argv.splice(1, 1);\n" + script,
             env=dict(os.environ, TZ=timezone), text=True, capture_output=True, timeout=10,
         )
         assert result.returncode == 0, f"{timezone}: {result.stderr}"
@@ -2136,7 +2147,8 @@ global.fetch = (url, options = {}) => {
 });
 '''
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -2279,7 +2291,8 @@ global.console = { ...console, error() {} };
 });
 '''
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -2316,7 +2329,7 @@ assert.equal(root.scrollTop, 0);
 '''
     node = shutil.which("node")
     assert node, "Node.js is required for the frontend executable regression"
-    result = subprocess.run([node, "-e", script], text=True, capture_output=True, timeout=10)
+    result = subprocess.run([node, "-"], input=script, text=True, capture_output=True, timeout=10)
     assert result.returncode == 0, result.stderr
 
 
@@ -2586,7 +2599,8 @@ global.fetch = (url) => {
 });
 '''
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -2688,7 +2702,8 @@ if (streamRenders !== 1 || canvasRenders !== 1 ||
 }
 '''
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -2890,7 +2905,7 @@ function deferred() {
               + source[reload_start:reload_end] + scenarios)
     node = shutil.which("node")
     assert node, "Node.js is required for the frontend executable regression"
-    result = subprocess.run([node, "-e", script], text=True, capture_output=True, timeout=15)
+    result = subprocess.run([node, "-"], input=script, text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stderr
     print(result.stdout, end="")
 
@@ -2976,7 +2991,7 @@ global.fetch = async function(url, options) {
     }
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
-    result = subprocess.run([node, "-e", script], cwd=PROJECT_ROOT, text=True, capture_output=True, timeout=15)
+    result = subprocess.run([node, "-"], input=script, cwd=PROJECT_ROOT, text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stderr
 
 

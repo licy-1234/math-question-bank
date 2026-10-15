@@ -3781,6 +3781,22 @@ window.functionTagBadge = functionTagBadge;
             // “<br> 与 paragraphBreak 相邻收敛”规则，不会产生多余空行。
             tempText = tempText.replace(/\r\n/g, '\n')
                                .replace(/\n\n+/g, paragraphBreak)
+                               // 显式硬换行（\\\\ -> <br>）后再跟一个物理换行，只应
+                               // 渲染成一次换行。先吞掉这个换行，否则下面把 \n 也
+                               // 变成 <br> 会得到 <br><br>，即凭空多出一个空行。
+                               // 仅吃紧随其后的单个换行：\n\n+ 上一步已变成段落
+                               // 分隔，此处不可能出现连续换行。
+                               .replace(/(<br>)[ \t]*\n/g, '$1')
+                               // 块级产物（表格/列表/图片/选项）自带外边距，紧贴它的
+                               // 那个换行同样不该再变成 <br>，否则会多出一行的空白。
+                               // 这里在 \n -> <br> 之前处理，所以只影响换行产生的
+                               // <br>，显式 \\\\ 的硬换行不受影响。
+                               .replace(/[ \t]*\n(?=<(?:div|table|ul|ol)\b)/g, '')
+                               .replace(/(<\/(?:div|table|ul|ol)>)[ \t]*\n/g, '$1')
+                               // 图片此刻还是 ![alt](src)，下一句才变成自带外边距的
+                               // <div>，所以这里按 markdown 形态同样吞掉紧贴的换行。
+                               .replace(/(\!\[[^\]\n]*\]\([^\n)]*\))[ \t]*\n/g, '$1')
+                               .replace(/\n(?=!\[[^\]\n]*\]\([^\n)]*\))/g, '')
                                .replace(/\n/g, '<br>');
                                
             // 转换 Markdown 题目插图与配图语法 ![](/static/uploads/xxx.png) 为精美自适应预览图

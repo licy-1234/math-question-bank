@@ -381,6 +381,12 @@ def print_optional_tool_diagnostics():
     )
 
 
+# 凭据体检只需跑一次。start_startup_cleanup() 的两条出口（备份失败提前 return、
+# 正常流程末尾）互斥，本不会重复调度；这个闸门用来保证将来新增调用点也不会
+# 在同一进程里堆出多条探测线程。
+_CREDENTIAL_DIAGNOSTICS_SCHEDULED = False
+
+
 def schedule_model_credential_diagnostics():
     """服务就绪后，用短超时后台探测当前路由的模型凭据。
 
@@ -388,8 +394,10 @@ def schedule_model_credential_diagnostics():
     结果异步打印，异常一律吞掉，绝不阻塞或带崩启动。不打印任何密钥明文。
     """
 
-    if IS_TESTING:
+    global _CREDENTIAL_DIAGNOSTICS_SCHEDULED
+    if IS_TESTING or _CREDENTIAL_DIAGNOSTICS_SCHEDULED:
         return
+    _CREDENTIAL_DIAGNOSTICS_SCHEDULED = True
     try:
         from mathbank.credentials import run_credential_diagnostics
 
@@ -4447,50 +4455,52 @@ def load_or_init_metadata():
     
     if os.path.exists(METADATA_FILE):
         try:
-            with open(METADATA_FILE, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-                # Verify schema
-                if isinstance(loaded, dict) and "question_types" in loaded and "difficulties" in loaded and "curriculum" in loaded:
-                    # Self-heal metadata file (e.g. add 常规题, update simplified book names)
-                    modified = False
-                    # 人教A版固定三级难度：强制统一为 easy / medium / hard。
-                    default_difficulties = build_default_metadata("A")["difficulties"]
-                    current_values = [d.get("value") for d in loaded.get("difficulties", [])]
-                    default_values = [d["value"] for d in default_difficulties]
-                    if current_values != default_values:
-                        loaded["difficulties"] = default_difficulties
-                        modified = True
+            # 读完后必须立刻释放文件句柄：Windows 的 open() 不带 FILE_SHARE_DELETE，
+            # 句柄还在时下面 write_private_text_atomic() 内部的 os.replace() 会失败
+            # （OSError [WinError 5] 拒绝访问），导致元数据自愈每次启动都静默失效。
+            loaded = json.loads(Path(METADATA_FILE).read_text(encoding="utf-8"))
+            # Verify schema
+            if isinstance(loaded, dict) and "question_types" in loaded and "difficulties" in loaded and "curriculum" in loaded:
+                # Self-heal metadata file (e.g. add 常规题, update simplified book names)
+                modified = False
+                # 人教A版固定三级难度：强制统一为 easy / medium / hard。
+                default_difficulties = build_default_metadata("A")["difficulties"]
+                current_values = [d.get("value") for d in loaded.get("difficulties", [])]
+                default_values = [d["value"] for d in default_difficulties]
+                if current_values != default_values:
+                    loaded["difficulties"] = default_difficulties
+                    modified = True
                         
-                    curriculum = loaded.get("curriculum", {})
-                    mappings = {
-                        "选择性必修一": "选修一",
-                        "选择性必修二": "选修二",
-                        "选择性必修三": "选修三",
-                        "必修第一册": "必修一",
-                        "必修第二册": "必修二",
-                        "必修第三册": "必修三",
-                        "必修第四册": "必修四",
-                    }
-                    new_curriculum = {}
-                    for comp, chapters in curriculum.items():
-                        mapped_comp = mappings.get(comp, comp)
-                        if mapped_comp != comp:
-                            modified = True
-                        new_curriculum[mapped_comp] = chapters
-                    if modified:
-                        loaded["curriculum"] = new_curriculum
-                        try:
-                            write_private_text_atomic(
-                                METADATA_FILE,
-                                json.dumps(loaded, ensure_ascii=False, indent=2),
-                            )
-                            print(f"[Metadata Self-Heal] Upgraded {METADATA_FILE} with simplified book names and three-level difficulties.")
-                        except Exception as e:
-                            print(f"[Metadata Self-Heal Error] Failed to write updated metadata: {e}")
+                curriculum = loaded.get("curriculum", {})
+                mappings = {
+                    "选择性必修一": "选修一",
+                    "选择性必修二": "选修二",
+                    "选择性必修三": "选修三",
+                    "必修第一册": "必修一",
+                    "必修第二册": "必修二",
+                    "必修第三册": "必修三",
+                    "必修第四册": "必修四",
+                }
+                new_curriculum = {}
+                for comp, chapters in curriculum.items():
+                    mapped_comp = mappings.get(comp, comp)
+                    if mapped_comp != comp:
+                        modified = True
+                    new_curriculum[mapped_comp] = chapters
+                if modified:
+                    loaded["curriculum"] = new_curriculum
+                    try:
+                        write_private_text_atomic(
+                            METADATA_FILE,
+                            json.dumps(loaded, ensure_ascii=False, indent=2),
+                        )
+                        print(f"[Metadata Self-Heal] Upgraded {METADATA_FILE} with simplified book names and three-level difficulties.")
+                    except Exception as e:
+                        print(f"[Metadata Self-Heal Error] Failed to write updated metadata: {e}")
                     
-                    METADATA_CACHE = loaded
-                    print(f"[Metadata] Loaded custom metadata from {METADATA_FILE}")
-                    return
+                METADATA_CACHE = loaded
+                print(f"[Metadata] Loaded custom metadata from {METADATA_FILE}")
+                return
         except Exception as e:
             print(f"[Metadata Warning] Error loading {METADATA_FILE}: {e}. Overwriting with default.")
             

@@ -187,6 +187,10 @@ const clearPdfCropSelection = () => {};
         section("function loadPdfCropPage(", "function setupPdfCropDrawListeners"),
         section("function submitPdfCropCoordinates()", "function performOrphanedTempCropsCleanup"),
         section("function runAIPaperParse()", "function renderImagesList()"),
+        # runAIPaperParse()/pollPdfTaskStatus() invoke this after a successful
+        # parse; the real body keeps the promise chain intact (its guards make
+        # it inert here) instead of raising ReferenceError mid-chain.
+        section("function scheduleParsedDuplicateAutoPrecheck()", "function duplicateReasonLabel("),
     ])
     checks = r"""
 const pdfScenarios = {
@@ -957,8 +961,8 @@ def test_pdf_layout_ui_behavior(pdf_script, scenario):
     assert node, "Node.js is required for executable frontend regression checks"
     # Linux limits each argv entry to roughly 128 KiB. Feed the complete
     # shipped-code harness through UTF-8 stdin, keeping scenario argv stable.
-    result = subprocess.run([node, "-e", "eval(require('node:fs').readFileSync(0,'utf8'))", scenario],
-                            input=pdf_script, cwd=ROOT, capture_output=True, encoding="utf-8", check=False)
+    result = subprocess.run([node, "-", scenario],
+                            input="process.argv.splice(1, 1);\n" + pdf_script, cwd=ROOT, capture_output=True, encoding="utf-8", check=False)
     assert result.returncode == 0, result.stderr
 
 

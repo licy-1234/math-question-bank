@@ -307,8 +307,8 @@ def test_import_source_review_in_shipped_js(review_script, scenario):
     node = shutil.which("node")
     assert node, "Node.js is required for the frontend executable regression"
     result = subprocess.run(
-        [node, "-e", "eval(require('node:fs').readFileSync(0,'utf8'))", scenario],
-        input=review_script, cwd=ROOT, capture_output=True, encoding="utf-8", check=False,
+        [node, "-", scenario],
+        input="process.argv.splice(1, 1);\n" + review_script, cwd=ROOT, capture_output=True, encoding="utf-8", check=False,
     )
     assert result.returncode == 0, result.stderr
 

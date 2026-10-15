@@ -135,3 +135,27 @@ def test_run_diagnostics_emits_one_line_per_probe():
     assert len(results) == 3
     assert len(lines) == 3
     assert all("✓" in line for line in lines)
+
+
+def test_startup_schedules_credential_probe_at_most_once(monkeypatch):
+    """start_startup_cleanup has two exits; both must not stack probe threads."""
+
+    import main
+
+    started = []
+
+    class _FakeThread:
+        def __init__(self, *, target, name, daemon):
+            self._name = name
+
+        def start(self):
+            started.append(self._name)
+
+    monkeypatch.setattr(main, "IS_TESTING", False)
+    monkeypatch.setattr(main, "_CREDENTIAL_DIAGNOSTICS_SCHEDULED", False)
+    monkeypatch.setattr(main.threading, "Thread", _FakeThread)
+
+    main.schedule_model_credential_diagnostics()
+    main.schedule_model_credential_diagnostics()
+
+    assert started == ["mathbank-model-credential-check"]

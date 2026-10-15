@@ -73,7 +73,8 @@ if (escaped !== '$x&lt;y$ and $y&gt;z$ &lt;not-a-tag&gt;') {{
 """
 
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -118,7 +119,8 @@ function fetch(url) {{
 """
 
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -167,7 +169,8 @@ if (window.reloadCurrentQuestionSilently() !== true || selections !== 1) {{
 """
 
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -244,7 +247,8 @@ if (isAiSolveRequestCurrent(oldSequence, oldController, oldSnapshot)) {{
 """
 
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -300,7 +304,8 @@ if (idleClears !== 0 || toasts !== feedbackAfterAbort) {{
 """
 
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -314,7 +319,9 @@ def test_editor_bound_uploads_reject_old_sessions_in_real_js():
     assert node, "Node.js is required for the frontend executable regression"
 
     ocr_source = _read(STATIC_JS_DIR / "ocr.js")
-    content_upload_start = ocr_source.index("function uploadIllustration(file)")
+    content_upload_start = ocr_source.index(
+        "function uploadIllustration(file, textareaId = 'editContent')"
+    )
     content_upload_end = ocr_source.index("function insertImageTag", content_upload_start)
     answer_upload_start = ocr_source.index("function uploadAnswerImage(file)")
     answer_upload_end = ocr_source.index("function insertAnswerImageTag", answer_upload_start)
@@ -358,7 +365,8 @@ function showToast() {{}}
 """
 
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -423,7 +431,8 @@ if (compileCalls !== 1 || openCalls !== 1 || !workbenchCode.value.includes('tikz
 """
 
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -494,7 +503,8 @@ const EditorState = {{ isCurrent: () => true }};
 """
 
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -630,7 +640,8 @@ const document = {{ getElementById(id) {{ return id.startsWith('parsed-card-') ?
 """
 
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -687,7 +698,8 @@ if (!finishDocumentPoll(newIdentity)) throw new Error('current terminal callback
 """
 
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -872,7 +884,8 @@ if (!isEditorModified()) throw new Error('newer editor-only layout was incorrect
 """
 
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -945,7 +958,8 @@ clearEditor();
 if (confirmCalls !== 1) throw new Error('clear stayed blocked after save settled');
 """
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -1078,7 +1092,8 @@ let peak = 0;
 }})().catch(error => {{ console.error(error); process.exitCode = 1; }});
 """
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,
@@ -1259,7 +1274,8 @@ const document = {{ getElementById(id) {{ return id.startsWith('parsed-card-') ?
 }})().catch(error => {{ console.error(error); process.exitCode = 1; }});
 """
     result = subprocess.run(
-        [node, "-e", script],
+        [node, "-"],
+        input=script,
         cwd=PROJECT_ROOT,
         text=True,
         capture_output=True,

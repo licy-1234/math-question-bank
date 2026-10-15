@@ -28,6 +28,10 @@ def markdown_import_script():
         section("function runAIPaperParse()", "let documentImportTaskGeneration = 0"),
         section("function clearAllImportInputs()", "function resetImportState("),
         section("function extractTitleFromImportSource(", "function extractTitleFromLatex("),
+        # Shipped runner calls this after a successful parse; extract the real
+        # body so the promise chain keeps flowing instead of throwing
+        # ReferenceError. Its guards make it a no-op in this harness.
+        section("function scheduleParsedDuplicateAutoPrecheck()", "function duplicateReasonLabel("),
     ])
     setup = r"""
 const assert = require('node:assert/strict');
@@ -209,7 +213,8 @@ def test_markdown_import_runtime(markdown_import_script, scenario):
     if not node:
         pytest.skip("Node is required for the optional JS regression harness")
     result = subprocess.run(
-        [node, "-e", markdown_import_script, scenario],
+        [node, "-", scenario],
+        input="process.argv.splice(1, 1);\n" + markdown_import_script,
         capture_output=True, text=True, timeout=15,
     )
     assert result.returncode == 0, result.stdout + result.stderr
