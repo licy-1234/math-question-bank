@@ -242,7 +242,7 @@ def generate_markdown_library(questions, filepath: str, *, curriculum_mappings=N
         f.write("## 📊 题库运行数据概览\n")
         f.write(f"- 📈 **总入库题目数量**: {total_count} 题\n")
         f.write(f"- 🕒 **最新同步时间**: {now_str}\n")
-        f.write(f"- 📂 **本地图片存放目录**: `static/uploads/` (在 Git 提交时请包含此目录)\n\n")
+        f.write("- 📂 **本地图片存放目录**: `static/uploads/` (在 Git 提交时请包含此目录)\n\n")
         
         # 目录树
         f.write("## 🗂 目录与知识大纲树\n")

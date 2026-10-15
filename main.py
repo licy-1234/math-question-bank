@@ -575,7 +575,7 @@ def watchdog_loop():
 def clean_orphaned_images():
     """Retain unregistered images recoverably; old browser drafts remain usable."""
     try:
-        from mathbank.database import SessionLocal, Question
+        from mathbank.database import SessionLocal
         db = SessionLocal()
         try:
             referenced_images = _referenced_question_assets(db)
@@ -1267,7 +1267,6 @@ def ocr_formula(
     engine: str = Form(None),
     skip_tikz: bool = Form(False)
 ):
-    import re
     temp_filepath = None
     try:
         # OCR route is synchronous and runs in FastAPI's worker pool.  Stream
@@ -1415,7 +1414,6 @@ def ai_solve(
 ):
     provider = resolve_text_provider(model or os.getenv("PREFER_SOLVE_MODEL") or "deepseek-v4-pro")
     api_key = provider.api_key
-    api_base = provider.api_base
     model_name = provider.model_name
     provider_name = provider.credential_label
 
@@ -5136,7 +5134,6 @@ def ai_classify(content: str = Form(...)):
     
     provider = resolve_text_provider(classify_model)
     api_key = provider.api_key
-    api_base = provider.api_base
     model_name = provider.model_name
     provider_name = provider.credential_label
 
@@ -5383,7 +5380,6 @@ def parse_paper_text_internal(
     parse_model = os.getenv("PREFER_PARSE_MODEL") or os.getenv("DEEPSEEK_PARSE_MODEL", "deepseek-flash")
     provider = resolve_text_provider(parse_model)
     api_key = provider.api_key
-    api_base = provider.api_base
     model_name = provider.model_name
     provider_name = provider.provider_label
 
@@ -5502,7 +5498,6 @@ def ai_parse_paper(
     parse_model = os.getenv("PREFER_PARSE_MODEL") or os.getenv("DEEPSEEK_PARSE_MODEL", "deepseek-flash")
     provider = resolve_text_provider(parse_model)
     api_key = provider.api_key
-    api_base = provider.api_base
     model_name = provider.model_name
     provider_name = provider.provider_label
 
