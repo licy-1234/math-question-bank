@@ -352,6 +352,7 @@ def print_startup_diagnostics():
         print(f"  • 虚拟环境根目录   : {sys.prefix}", flush=True)
     print(f"  • PDF Inspector 引擎: {'🚀 已就绪 (原生矢量试卷毫秒级直提)' if pdf_insp_ok else '⚠️ 未安装 (已自动平滑降级至 VLM 多模态 OCR)'}", flush=True)
     print("  • 可选排版工具   : 服务就绪后后台检测", flush=True)
+    print("  • 模型服务凭据   : 服务就绪后后台检测（短超时，不阻塞就绪）", flush=True)
     print(f"  • SQLite 本地数据库 : {DATABASE_PATH}", flush=True)
     print(f"  • 项目静态与根路径 : {PROJECT_ROOT}", flush=True)
     print("=" * 64, flush=True)
@@ -378,6 +379,31 @@ def print_optional_tool_diagnostics():
         f"pymupdf={pymupdf_status}",
         flush=True,
     )
+
+
+def schedule_model_credential_diagnostics():
+    """服务就绪后，用短超时后台探测当前路由的模型凭据。
+
+    约定对齐面板里"服务就绪后后台检测"的既有风格：起一个 daemon 线程、短超时、
+    结果异步打印，异常一律吞掉，绝不阻塞或带崩启动。不打印任何密钥明文。
+    """
+
+    if IS_TESTING:
+        return
+    try:
+        from mathbank.credentials import run_credential_diagnostics
+
+        threading.Thread(
+            target=run_credential_diagnostics,
+            name="mathbank-model-credential-check",
+            daemon=True,
+        ).start()
+    except Exception as exc:  # noqa: BLE001 - 诊断失败绝不影响启动
+        print(
+            f"[Model Credentials] 凭据体检调度失败（{type(exc).__name__}），已跳过。",
+            flush=True,
+        )
+
 
 def heal_database_curriculum_names():
     """Normalize proven book aliases without deleting stored knowledge labels.
@@ -627,6 +653,7 @@ def start_startup_cleanup():
     except Exception as exc:
         print(f"[Backup Error] 每日完整备份失败: {type(exc).__name__}: {exc}")
         print_optional_tool_diagnostics()
+        schedule_model_credential_diagnostics()
         return
     heal_database_curriculum_names()
     clean_orphaned_images()
@@ -651,6 +678,7 @@ def start_startup_cleanup():
             f"(type={type(exc).__name__}); duplicate checks will report partial coverage."
         )
     print_optional_tool_diagnostics()
+    schedule_model_credential_diagnostics()
 
 
 # Ensure directories exist

@@ -5,7 +5,7 @@
 这是"题库看起来回退"的直接防线。它回答一个问题：
     **用户正在跑的那份程序，和 Git 仓库里的源码，是不是同一份？**
 
-检查四件事：
+检查六件事：
     1. 部署副本的 DEPLOY-INFO.json 记录的来源提交，是否已经是仓库 HEAD；
        落后几个提交，落后者是哪几个（带时间，人对得上"我那天改的没生效"）。
     2. 部署副本磁盘上的运行时文件，是否与仓库工作区逐字节一致（忽略 CRLF/LF）。
@@ -18,13 +18,20 @@
        topic_versions/topic_links/question_usage_stats）必须在位。专题是用户
        原创教学设计，刻意不纳入自愈白名单——缺表不会静默重建，必须在体检中
        暴露，引导从 data_backup 恢复备份。
+    6. .env 配置只读体检：比对仓库与副本 .env 的**键名集合 / 密钥末 4 位 /
+       模型串**。⚠️ 这两份 .env 本来就该不同（PRESERVE_NAMES 刻意保护 .env
+       不同步，副本才是配置唯一事实来源），所以默认**只告警、不影响退出码**；
+       只有显式 `--strict-env` 才把差异计入退出码。输出会指出"仓库这份密钥
+       很可能已失效/N 个键不同/仓库 .env 比副本旧 N 天"，并提示跑
+       `python tools/dev/pull_env_from_copy.py` 从副本单向同步。
 
 数据库全程以 sqlite 只读模式（mode=ro）打开，本脚本不做任何写操作。
 
 退出码：0 = 无漂移；1 = 存在漂移（适合挂到启动器或定时任务里）。
+        `--strict-env` 时，.env 配置差异也会让退出码变为 1。
 
 用法：
-    python tools/deploy/check_drift.py --repo <仓库目录> --dest <部署副本目录> [--json]
+    python tools/deploy/check_drift.py --repo <仓库目录> --dest <部署副本目录> [--json] [--strict-env]
 """
 
 from __future__ import annotations
@@ -42,6 +49,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 # 因此只改这些目录的提交不应被算作"版本漂移"。
 from tools.deploy.sync_release import _is_excluded  # noqa: E402
 from mathbank.db_migrations import LATEST_SCHEMA_VERSION  # noqa: E402
+
+# 复用 pull 工具的"纯解析/脱敏"函数（无重依赖），保证两边对密钥末 4 位、
+# 模型串的展示口径一致。
+from tools.dev.pull_env_from_copy import (  # noqa: E402
+    is_sensitive_key,
+    mask_value,
+    parse_env_assignments,
+)
 
 
 def git(repo: Path, *args: str) -> str:
@@ -62,11 +77,131 @@ def sha(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
+def env_drift(repo: Path, dest: Path) -> dict:
+    """只读比对仓库 .env 与副本 .env（键集合 / 密钥末 4 位 / 模型串）。
+
+    ⚠️ 关键设计约束：.env 在副本与仓库之间**本来就该不同**——sync_release 的
+    PRESERVE_NAMES 刻意保护 .env 不同步。因此本检查只产出**告警**，默认不进入
+    退出码；只有显式 --strict-env 才把它计入。check_drift 退出码 0 是既定交付门禁，
+    不能被配置差异打破。
+
+    全程只读，且输出一律脱敏（密钥只显示末 4 位 + 长度）。
+    """
+
+    repo_env = repo / ".env"
+    dest_env = dest / ".env"
+    result: dict = {
+        "repo_env": str(repo_env),
+        "dest_env": str(dest_env),
+        "repo_env_present": repo_env.exists(),
+        "dest_env_present": dest_env.exists(),
+        "keys_only_in_repo": [],
+        "keys_only_in_dest": [],
+        "changed_values": [],
+        "repo_env_age_days_vs_copy": None,
+        "warnings": [],
+    }
+
+    if not dest_env.exists():
+        result["warnings"].append(
+            "部署副本缺少 .env（副本本应是配置唯一事实来源，请确认是否被误删）"
+        )
+        return result
+    if not repo_env.exists():
+        result["warnings"].append(
+            "仓库缺少 .env（副本是唯一事实来源；可跑 "
+            "python tools/dev/pull_env_from_copy.py 从副本拉取）"
+        )
+        return result
+
+    repo_assign = parse_env_assignments(repo_env.read_text(encoding="utf-8"))
+    dest_assign = parse_env_assignments(dest_env.read_text(encoding="utf-8"))
+
+    only_repo = sorted(set(repo_assign) - set(dest_assign))
+    only_dest = sorted(set(dest_assign) - set(repo_assign))
+    changed = [
+        {
+            "key": key,
+            "repo": mask_value(key, repo_assign[key]),
+            "copy": mask_value(key, dest_assign[key]),
+        }
+        for key in sorted(set(repo_assign) & set(dest_assign))
+        if repo_assign[key] != dest_assign[key]
+    ]
+
+    result["keys_only_in_repo"] = only_repo
+    result["keys_only_in_dest"] = only_dest
+    result["changed_values"] = changed
+
+    try:
+        delta = dest_env.stat().st_mtime - repo_env.stat().st_mtime
+        result["repo_env_age_days_vs_copy"] = round(delta / 86400.0, 1)
+    except OSError:
+        pass
+
+    if only_repo or only_dest:
+        parts = []
+        if only_repo:
+            parts.append(f"仓库多出 {', '.join(only_repo)}")
+        if only_dest:
+            parts.append(f"仓库缺少 {', '.join(only_dest)}")
+        result["warnings"].append(
+            f"仓库 .env 与副本键名集合不一致（{'；'.join(parts)}）"
+        )
+
+    if changed:
+        sensitive = [c for c in changed if is_sensitive_key(c["key"])]
+        models = [c for c in changed if not is_sensitive_key(c["key"])]
+        detail = "；".join(f"{c['key']}={c['repo']} vs 副本 {c['copy']}" for c in changed)
+        message = f"仓库 .env 有 {len(changed)} 个键取值与副本不同（{detail}）"
+        if sensitive:
+            message += (
+                f"。其中 {len(sensitive)} 个是 API 密钥，"
+                "副本为唯一有效来源，仓库这份很可能已失效"
+            )
+        if models:
+            message += f"；另有 {len(models)} 个模型路由键漂移"
+        result["warnings"].append(message)
+
+    age = result["repo_env_age_days_vs_copy"]
+    if age is not None and age > 0.5:
+        result["warnings"].append(f"仓库 .env 比副本旧约 {age:g} 天")
+
+    if result["warnings"]:
+        result["warnings"].append(
+            "同步建议：python tools/dev/pull_env_from_copy.py"
+            "（先加 --check 看差异；副本是配置唯一事实来源）"
+        )
+    return result
+
+
+def resolve_exit_code(
+    problems: list[str], env_warnings: list[str], *, strict_env: bool = False
+) -> int:
+    """决定退出码。
+
+    .env 差异默认是**告警级**：副本与仓库的 .env 本就应不同，不能被它打破
+    "退出码 0 = 可交付"的既定门禁。只有 --strict-env 才把 .env 差异计入。
+    """
+
+    if problems:
+        return 1
+    if strict_env and env_warnings:
+        return 1
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", required=True)
     ap.add_argument("--dest", required=True)
     ap.add_argument("--json", action="store_true", help="以 JSON 输出，便于脚本消费")
+    ap.add_argument(
+        "--strict-env",
+        action="store_true",
+        help="把 .env 配置差异也计入退出码（默认只告警：副本与仓库的 .env 本就"
+             "应当不同，不能被配置差异打破交付门禁）",
+    )
     args = ap.parse_args()
 
     repo = Path(args.repo).resolve()
@@ -251,9 +386,20 @@ def main() -> int:
     report["ok"] = not problems
     report["problems"] = problems
 
+    # ---- 4. .env 配置只读体检（告警级，默认不影响退出码） ----
+    # 副本与仓库的 .env 本来就该不同，因此这里的差异只作告警；只有 --strict-env
+    # 才把它计入退出码，避免配置差异打破"退出码 0 = 可交付"的既定门禁。
+    env_report = env_drift(repo, dest)
+    env_warnings = env_report["warnings"]
+    report["env"] = env_report
+    report["env_ok"] = not env_warnings
+    report["env_warnings"] = env_warnings
+
+    exit_code = resolve_exit_code(problems, env_warnings, strict_env=args.strict_env)
+
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
-        return 0 if not problems else 1
+        return exit_code
 
     print("=" * 66)
     print("  版本漂移体检（仓库 vs 实际运行的部署副本）")
@@ -288,6 +434,14 @@ def main() -> int:
               f"（{info['question_relations']} 条），旧题组残留 {info['legacy_association_group_rows']} 道，"
               f"{topic_note}")
     print()
+    # ---- .env 配置体检（只读、告警级） ----
+    print("  .env 配置体检（只读；副本与仓库的 .env 本就应不同，默认仅告警）：")
+    if not env_warnings:
+        print("      [OK] 仓库 .env 与副本的键集合 / 密钥末 4 位 / 模型串一致。")
+    else:
+        for warning in env_warnings:
+            print(f"      ⚠ {warning}")
+    print()
     if problems:
         print("  结论：存在漂移，页面看到的就是旧版本。")
         for p in problems:
@@ -295,9 +449,14 @@ def main() -> int:
         print("\n  修复：")
         print(f"    python tools/deploy/sync_release.py --repo \"{repo}\" --dest \"{dest}\" --since {deployed_commit or 'HEAD~9'}")
         print(f"    \"{dest}\\python\\python.exe\" tools/deploy/migrate_db.py --project-root \"{dest}\"")
-        return 1
+        return exit_code
+    if env_warnings and args.strict_env:
+        print("  结论：无版本漂移；但 --strict-env 下 .env 配置存在差异（退出码 1）。")
+        return exit_code
     print("  结论：无漂移，实际运行的副本就是仓库里的最新版本。")
-    return 0
+    if env_warnings:
+        print("  提示：仓库 .env 与副本不同——这是预期行为（副本是配置唯一事实来源），未计入退出码。")
+    return exit_code
 
 
 if __name__ == "__main__":
