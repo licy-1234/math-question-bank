@@ -847,7 +847,7 @@ window.functionTagBadge = functionTagBadge;
         let questionEditorRestoreFocus = null;
 
         function switchQuestionEditorPanel(panelId) {
-            const validPanels = ['classification', 'content', 'answer', 'review'];
+            const validPanels = ['classification', 'content', 'answer', 'review', 'ggb'];
             const targetPanel = validPanels.includes(panelId) ? panelId : 'classification';
             document.getElementById('editorSection').dataset.panel = targetPanel;
 
@@ -870,6 +870,16 @@ window.functionTagBadge = functionTagBadge;
 
             const body = document.querySelector('.question-editor-modal-body');
             if (body) body.scrollTop = 0;
+
+            // GGB_START：「动态演示」页签激活时才懒挂载 GeoGebra applet，切走即销毁。
+            if (window.GgbPanel) {
+                if (targetPanel === 'ggb' && typeof window.GgbPanel.mountQuestionPanel === 'function') {
+                    window.GgbPanel.mountQuestionPanel(EditorState.questionId);
+                } else if (typeof window.GgbPanel.unmount === 'function') {
+                    window.GgbPanel.unmount();
+                }
+            }
+            // GGB_END
         }
 
         function setQuestionEditorBackgroundInert(isInert) {
@@ -943,6 +953,11 @@ window.functionTagBadge = functionTagBadge;
             if (window.MathBankFilterHistory && typeof window.MathBankFilterHistory.closePanel === 'function') {
                 window.MathBankFilterHistory.closePanel();
             }
+            // GGB_START：关闭编辑器弹窗时销毁 applet，避免实例泄漏。
+            if (window.GgbPanel && typeof window.GgbPanel.unmount === 'function') {
+                window.GgbPanel.unmount();
+            }
+            // GGB_END
         }
 
         function restoreEditorAfterDiscard() {

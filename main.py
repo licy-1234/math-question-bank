@@ -49,6 +49,8 @@ from mathbank.database import (
     TopicLink,
     TopicVersion,
     QuestionUsageStat,
+    GgbAsset,
+    QuestionGgbLink,
     engine,
     get_db,
     init_db,
@@ -201,6 +203,9 @@ from mathbank.paths import (
     DATABASE_PATH,
     DATA_BACKUP_DIR,
     ENV_FILE,
+    GGB_PREVIEWS_SUBDIR,
+    GGB_UPLOAD_SUBDIR,
+    GGB_VERSIONS_SUBDIR,
     PROJECT_ROOT,
     STATIC_CSS_DIR,
     STATIC_DIR,
@@ -579,6 +584,17 @@ def clean_orphaned_images():
         db = SessionLocal()
         try:
             referenced_images = _referenced_question_assets(db)
+            # GGB 资源（.ggb 版本文件 + 预览图）也登记为"被引用"。它们当前
+            # 落在 uploads/ggb/ 子目录里、本清理器不递归因而扫不到，这一步是
+            # 「万一将来改成递归」的纵深防御（见 GGB 方案 §3.3）。
+            try:
+                from mathbank.ggbs import collect_referenced_ggb_paths
+
+                referenced_images |= collect_referenced_ggb_paths(
+                    db, uploads_dir=UPLOAD_DIR, url_prefix=UPLOAD_DIR_REL
+                )
+            except Exception as ggb_exc:  # noqa: BLE001
+                print(f"[GGB Asset Refs] 引用登记跳过: {type(ggb_exc).__name__}: {ggb_exc}")
                         
             # 2. 遍历本地图片目录及 tmp 子目录
             upload_dir = UPLOAD_DIR
@@ -693,6 +709,14 @@ def start_startup_cleanup():
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 TMP_UPLOAD_DIR = os.path.join(UPLOAD_DIR, "tmp")
 os.makedirs(TMP_UPLOAD_DIR, exist_ok=True)
+
+# GGB 动态演示资源库目录（schema v14）。放在 uploads 子目录里，故启动期的
+# clean_orphaned_images（只枚举 uploads 根与 tmp/，非递归）不会扫到、不会误隔离。
+GGB_UPLOAD_DIR = os.path.join(UPLOAD_DIR, GGB_UPLOAD_SUBDIR)
+GGB_VERSIONS_DIR = os.path.join(GGB_UPLOAD_DIR, GGB_VERSIONS_SUBDIR)
+GGB_PREVIEWS_DIR = os.path.join(GGB_UPLOAD_DIR, GGB_PREVIEWS_SUBDIR)
+for _ggb_dir in (GGB_UPLOAD_DIR, GGB_VERSIONS_DIR, GGB_PREVIEWS_DIR):
+    os.makedirs(_ggb_dir, exist_ok=True)
 
 # Bounded document task manager shared by PDF and Word imports.
 DOCUMENT_TASKS = TaskManager(
@@ -10036,6 +10060,798 @@ def import_topic(payload: dict, db: Session = Depends(get_db)):
             "unresolved": unresolved,
         },
     }
+
+
+# ----------------- GGB 动态演示资源库 API（schema v14） -----------------
+#
+# 风格约定同专题工坊（见上方注释）：payload: dict 收 body；成功
+# {"status":"success","data":...}；参数错 400 / 不存在 404 / 冲突 409 / 意外 500；
+# 同样刻意不调用 schedule_database_export（GGB 不在题库导出载荷内）。
+#
+# ⚠️ 路径声明顺序：静态段 /api/ggb-assets/upload 必须声明在 /api/ggb-assets/{ggb_id}
+#    之前，否则 FastAPI 会把 "upload" 当 ggb_id 解析并返回 422。
+#
+# 磁盘布局（.ggb 全部落在 uploads/ggb/ 子树里，故启动期孤儿清理扫不到）：
+#   uploads/ggb/<uuid>.ggb                       版本 1（上传本体）
+#   uploads/ggb/versions/<ggb_id>/<uuid>.ggb     版本 2 及以后 / 回滚产生的副本
+#   uploads/ggb/previews/<uuid>.png              预览图
+# 每个版本行独占一个文件；asset.file_path 只是"当前版本"的指针镜像。
+
+#: 导出为独立 HTML 的模板。引擎走官方 CDN 绝对地址（导出文件脱离本机服务后
+#: 相对路径必坏）；codebase 钉 5.x 以与教师的 GeoGebra Classic 5 桌面版一致。
+_GGB_EXPORT_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<script src="https://www.geogebra.org/apps/deployggb.js"></script>
+</head>
+<body style="margin:0;background:#ffffff">
+<div id="ggbApplet"></div>
+<script>
+var ggbParams = {
+  appName: "classic",
+  width: window.innerWidth,
+  height: window.innerHeight - 4,
+  showToolBar: __READONLY__ ? false : true,
+  showAlgebraInput: __READONLY__ ? false : true,
+  showMenuBar: false,
+  showResetIcon: true,
+  showAlgebraInputPosition: "right",
+  language: "zh_CN",
+  borderColor: null,
+  ggbBase64: "__B64__"
+};
+var ggbAppletInstance = new GGBApplet(ggbParams, "5.0");
+ggbAppletInstance.setHTML5Codebase("__CODEBASE__");
+window.addEventListener("load", function () { ggbAppletInstance.inject("ggbApplet"); });
+</script>
+<div style="position:fixed;right:10px;bottom:8px;font:12px/1.6 sans-serif;color:#64748b">
+Made with GeoGebra&reg; &middot;
+<a href="https://www.geogebra.org" target="_blank" rel="noopener">geogebra.org</a>
+</div>
+</body>
+</html>
+"""
+
+#: 与前端 static/js/ggb.js 的 GGB_CODEBASE 保持同值（失效时改这两处）。
+_GGB_CODEBASE = "https://www.geogebra.org/apps/5.4.907.0/web3d"
+
+
+def _ggb_error(message: str, status_code: int = 400):
+    return JSONResponse(status_code=status_code, content={"status": "error", "message": message})
+
+
+def _ggb_download_name(title: str, suffix: str = ".ggb") -> str:
+    """清洗成可安全放进 Content-Disposition 的文件名基名。"""
+
+    cleaned = re.sub(r'[/\\?%*:|"<>\r\n\t]', "_", str(title or "")).strip()
+    cleaned = cleaned[:120] or "geogebra"
+    return f"{cleaned}{suffix}"
+
+
+def _ggb_flat_reference(filename: str) -> str:
+    return f"/{UPLOAD_DIR_REL}/{GGB_UPLOAD_SUBDIR}/{filename}"
+
+
+def _ggb_preview_reference(filename: str) -> str:
+    return f"/{UPLOAD_DIR_REL}/{GGB_UPLOAD_SUBDIR}/{GGB_PREVIEWS_SUBDIR}/{filename}"
+
+
+def _ggb_version_dir(ggb_id: int) -> str:
+    directory = os.path.join(GGB_VERSIONS_DIR, str(int(ggb_id)))
+    os.makedirs(directory, exist_ok=True)
+    return directory
+
+
+def _ggb_version_reference(ggb_id: int, filename: str) -> str:
+    return (
+        f"/{UPLOAD_DIR_REL}/{GGB_UPLOAD_SUBDIR}/{GGB_VERSIONS_SUBDIR}/"
+        f"{int(ggb_id)}/{filename}"
+    )
+
+
+def _ggb_write_bytes(absolute_path: str, data: bytes) -> None:
+    """先写 .part 再 os.replace，避免半截文件被读到。"""
+
+    tmp_path = f"{absolute_path}.part"
+    with open(tmp_path, "wb") as handle:
+        handle.write(data)
+    os.replace(tmp_path, absolute_path)
+
+
+def _ggb_remove_quietly(absolute_path: str) -> None:
+    try:
+        if absolute_path and os.path.isfile(absolute_path):
+            os.remove(absolute_path)
+    except OSError:
+        pass
+
+
+def _ggb_resolve_or_404(reference: str):
+    """把库里的相对路径解析为受管绝对路径；越界/符号链接/非 .ggb 一律 404。"""
+
+    from mathbank.ggb_security import resolve_ggb_file
+
+    try:
+        return resolve_ggb_file(reference, uploads_dir=UPLOAD_DIR, url_prefix=UPLOAD_DIR_REL)
+    except AssetSecurityError as exc:
+        raise HTTPException(status_code=404, detail=f"文件不可用: {exc}") from exc
+
+
+def _ggb_store_preview(preview_image) -> tuple[str, str]:
+    """归一化并落盘预览图（复用现有图片管线），返回 (绝对路径, 相对引用)。"""
+
+    if preview_image is None or not getattr(preview_image, "filename", ""):
+        return "", ""
+    raw = read_stream_limited(preview_image.file, MAX_SINGLE_IMAGE_BYTES)
+    normalized = normalize_raster_image(raw)
+    filename = f"{uuid.uuid4().hex}{normalized.extension}"
+    absolute_path = os.path.join(GGB_PREVIEWS_DIR, filename)
+    _ggb_write_bytes(absolute_path, normalized.data)
+    return absolute_path, _ggb_preview_reference(filename)
+
+
+def _ggb_store_archive(raw: bytes, *, directory: str, reference_builder) -> tuple[str, str]:
+    """落盘一个 .ggb，返回 (绝对路径, 相对引用)。文件名由服务端生成。"""
+
+    from mathbank.ggb_security import build_ggb_storage_filename
+
+    filename = build_ggb_storage_filename()
+    absolute_path = os.path.join(directory, filename)
+    _ggb_write_bytes(absolute_path, raw)
+    return absolute_path, reference_builder(filename)
+
+
+@app.get("/api/config/ggb-link-types")
+def list_ggb_link_types(db: Session = Depends(get_db)):
+    """关联类型 / 标签维度 / 动态类型 / 难度 / 状态 白名单（照 /api/config/topic-types）。"""
+
+    from mathbank.ggbs import (
+        GGB_DYNAMIC_TYPES,
+        GGB_DYNAMIC_TYPE_LABELS,
+        GGB_LEVELS,
+        GGB_LEVEL_LABELS,
+        GGB_LINK_CODES,
+        GGB_LINK_LABELS,
+        GGB_STATUSES,
+        GGB_TAG_DIMS,
+        GGB_TAG_DIM_LABELS,
+    )
+
+    used_custom_codes = [
+        row[0]
+        for row in db.query(QuestionGgbLink.link_code)
+        .filter(QuestionGgbLink.link_code.like("custom:%"))
+        .distinct()
+        .all()
+    ]
+    return {
+        "status": "success",
+        "data": {
+            "link_codes": [
+                {"code": code, "label": GGB_LINK_LABELS.get(code, code)}
+                for code in GGB_LINK_CODES
+            ]
+            + [{"code": code, "label": code} for code in used_custom_codes],
+            "tag_dims": [
+                {"code": dim, "label": GGB_TAG_DIM_LABELS.get(dim, dim)}
+                for dim in GGB_TAG_DIMS
+            ],
+            "dynamic_types": [
+                {"code": code, "label": GGB_DYNAMIC_TYPE_LABELS.get(code, code)}
+                for code in GGB_DYNAMIC_TYPES
+            ],
+            "levels": [
+                {"code": code, "label": GGB_LEVEL_LABELS.get(code, code)}
+                for code in GGB_LEVELS
+            ],
+            "statuses": [{"code": code, "label": code} for code in GGB_STATUSES],
+        },
+    }
+
+
+@app.get("/api/ggb-assets")
+def list_ggb_assets(
+    q: str = Query("", max_length=200),
+    status: str = Query(""),
+    dim: str = Query(""),
+    code: str = Query(""),
+    sort: str = Query("updated"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(60, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """资源列表（关键字 / 状态 / 标签筛选 + 分页）。"""
+
+    from mathbank.ggbs import list_ggb_assets as domain_list
+
+    try:
+        data = domain_list(
+            db, q=q, status=status or None, dim=dim or None, code=code or None,
+            sort=sort, page=page, page_size=page_size,
+        )
+    except ValueError as exc:
+        return _ggb_error(str(exc))
+    return {"status": "success", "data": data}
+
+
+@app.post("/api/ggb-assets/upload")
+def upload_ggb_asset(
+    file: UploadFile = File(...),
+    title: str = Form(""),
+    description: str = Form(""),
+    dynamic_type: str = Form(""),
+    tags_json: str = Form(""),
+    preview_image: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    """上传 .ggb（zip 安全通道）+ 可选预览图，并建立资源与版本 1。"""
+
+    import json as _json
+
+    from mathbank.ggb_security import (
+        GgbSecurityError,
+        GgbTooLargeError,
+        MAX_GGB_BYTES,
+        hash_bytes,
+        read_ggb_stream_limited,
+        validate_ggb_archive,
+    )
+    from mathbank import ggbs
+
+    written: list[str] = []
+    try:
+        raw = read_ggb_stream_limited(file.file, MAX_GGB_BYTES)
+        archive = validate_ggb_archive(raw)
+
+        tags = None
+        if str(tags_json or "").strip():
+            try:
+                tags = _json.loads(tags_json)
+            except ValueError as exc:
+                return _ggb_error(f"tags_json 不是合法 JSON: {exc}")
+        # tags_json 兼容对象 / 字符串数组 / 对象数组三种形状（见 ggbs._coerce_tag_payload）。
+        dynamic = str(dynamic_type or "").strip()
+        if dynamic:
+            if isinstance(tags, dict):
+                tags = {**tags, "dynamic_type": [dynamic]}
+            elif isinstance(tags, list):
+                tags = [*tags, {"tag_code": dynamic, "tag_dim": "dynamic_type"}]
+            else:
+                tags = {"dynamic_type": [dynamic]}
+
+        preview_abs, preview_ref = _ggb_store_preview(preview_image)
+        if preview_abs:
+            written.append(preview_abs)
+
+        ggb_abs, ggb_ref = _ggb_store_archive(
+            raw, directory=GGB_UPLOAD_DIR, reference_builder=_ggb_flat_reference,
+        )
+        written.append(ggb_abs)
+
+        try:
+            asset_id = ggbs.create_ggb_asset(
+                db,
+                title=title or os.path.splitext(os.path.basename(file.filename or ""))[0],
+                file_path=ggb_ref,
+                file_size=len(raw),
+                file_sha256=archive.get("sha256") or hash_bytes(raw),
+                description=description,
+                preview_image_path=preview_ref,
+                tags=tags,
+                entry_count=archive.get("entry_count"),
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            for path in written:
+                _ggb_remove_quietly(path)
+            raise
+    except (GgbTooLargeError, UploadTooLargeError):
+        for path in written:
+            _ggb_remove_quietly(path)
+        return _ggb_error(f".ggb 文件过大，上限 {MAX_GGB_BYTES // (1024 * 1024)} MB。", 413)
+    except (GgbSecurityError, InvalidImageError) as exc:
+        for path in written:
+            _ggb_remove_quietly(path)
+        return _ggb_error(f"上传失败: {exc}")
+    except ValueError as exc:
+        for path in written:
+            _ggb_remove_quietly(path)
+        return _ggb_error(str(exc))
+    except Exception as exc:  # noqa: BLE001
+        for path in written:
+            _ggb_remove_quietly(path)
+        print(f"[GGB Upload Error] {type(exc).__name__}: {exc}")
+        return _ggb_error("上传 .ggb 失败，请检查文件后重试。", 500)
+
+    asset = db.get(GgbAsset, asset_id)
+    return {
+        "status": "success",
+        "data": {
+            "asset": asset.to_dict(),
+            "tags": ggbs.get_ggb_tags(db, asset_id),
+            "file_url": f"/api/ggb-assets/{asset_id}/file",
+            "ignored_members": archive.get("ignored_members") or [],
+        },
+    }
+
+
+@app.post("/api/ggb-assets")
+def create_ggb_asset_from_base64(payload: dict, db: Session = Depends(get_db)):
+    """JSON 建资源（可选 ggb_base64）——「另存副本」用。"""
+
+    import base64 as _base64
+
+    from mathbank.ggb_security import (
+        GgbSecurityError,
+        hash_bytes,
+        validate_ggb_archive,
+    )
+    from mathbank import ggbs
+
+    encoded = str((payload or {}).get("ggb_base64") or "").strip()
+    if not encoded:
+        return _ggb_error("缺少 ggb_base64（本接口用于已有演示的另存，不建空资源）")
+    try:
+        raw = _base64.b64decode(encoded, validate=True)
+    except Exception:  # noqa: BLE001
+        return _ggb_error("ggb_base64 不是合法的 base64 内容")
+
+    written: list[str] = []
+    try:
+        archive = validate_ggb_archive(raw)
+        ggb_abs, ggb_ref = _ggb_store_archive(
+            raw, directory=GGB_UPLOAD_DIR, reference_builder=_ggb_flat_reference,
+        )
+        written.append(ggb_abs)
+        try:
+            asset_id = ggbs.create_ggb_asset(
+                db,
+                title=(payload or {}).get("title") or "",
+                file_path=ggb_ref,
+                file_size=len(raw),
+                file_sha256=archive.get("sha256") or hash_bytes(raw),
+                description=str((payload or {}).get("description") or ""),
+                tags=(payload or {}).get("tags"),
+                entry_count=archive.get("entry_count"),
+                note="另存副本",
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            for path in written:
+                _ggb_remove_quietly(path)
+            raise
+    except GgbSecurityError as exc:
+        for path in written:
+            _ggb_remove_quietly(path)
+        return _ggb_error(f"保存失败: {exc}")
+    except ValueError as exc:
+        for path in written:
+            _ggb_remove_quietly(path)
+        return _ggb_error(str(exc))
+    return {"status": "success", "data": {"id": asset_id}}
+
+
+@app.get("/api/ggb-assets/{ggb_id}")
+def get_ggb_asset_detail(ggb_id: int, db: Session = Depends(get_db)):
+    """资源详情：资产 + 标签 + 版本列表 + 被哪些题关联。"""
+
+    from mathbank import ggbs
+
+    try:
+        data = ggbs.get_ggb_detail(db, ggb_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@app.put("/api/ggb-assets/{ggb_id}")
+def update_ggb_asset(ggb_id: int, payload: dict, db: Session = Depends(get_db)):
+    """改元信息（标题 / 说明 / 归档状态 / 标签）。"""
+
+    from mathbank import ggbs
+
+    if db.get(GgbAsset, ggb_id) is None:
+        raise HTTPException(status_code=404, detail="GGB 资源不存在")
+    try:
+        data = ggbs.update_ggb_asset(db, ggb_id, payload or {})
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return _ggb_error(str(exc))
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        return _ggb_error(f"更新资源失败: {exc}", 500)
+    return {"status": "success", "data": data}
+
+
+@app.put("/api/ggb-assets/{ggb_id}/tags")
+def replace_ggb_tags(ggb_id: int, payload: dict, db: Session = Depends(get_db)):
+    """整体替换标签（四维）。"""
+
+    from mathbank import ggbs
+
+    if db.get(GgbAsset, ggb_id) is None:
+        raise HTTPException(status_code=404, detail="GGB 资源不存在")
+    try:
+        ggbs.sync_ggb_tags(db, ggb_id, (payload or {}).get("tags"))
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return _ggb_error(str(exc))
+    return {"status": "success", "data": ggbs.get_ggb_tags(db, ggb_id)}
+
+
+@app.delete("/api/ggb-assets/{ggb_id}")
+def delete_ggb_asset(
+    ggb_id: int,
+    force: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """删资源。仍被题目关联且未 force=true 时返回 409。"""
+
+    import shutil
+
+    from mathbank import ggbs
+
+    if db.get(GgbAsset, ggb_id) is None:
+        raise HTTPException(status_code=404, detail="GGB 资源不存在")
+    try:
+        removed = ggbs.delete_ggb_asset(db, ggb_id, force=bool(force))
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        message = str(exc)
+        status = 409 if "force=true" in message else 400
+        return _ggb_error(message, status)
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        return _ggb_error(f"删除资源失败: {exc}", 500)
+
+    for reference in removed["file_paths"]:
+        try:
+            _ggb_remove_quietly(str(_ggb_resolve_or_404(reference)))
+        except HTTPException:
+            continue
+    if removed["preview_image_path"]:
+        try:
+            _ggb_remove_quietly(str(_ggb_resolve_or_404(removed["preview_image_path"])))
+        except HTTPException:
+            pass
+    shutil.rmtree(os.path.join(GGB_VERSIONS_DIR, str(ggb_id)), ignore_errors=True)
+    return {"status": "success", "message": "资源已删除", "data": removed}
+
+
+@app.get("/api/ggb-assets/{ggb_id}/file")
+def download_ggb_file(
+    ggb_id: int,
+    inline: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    """下载当前 .ggb（也是前端嵌入取数来源）。
+
+    GET 不校验 X-Local-Token（全库惯例）：GeoGebra applet 取文件时无法附加
+    自定义请求头，强制校验会同时打断"嵌入加载"与"点链接下载"两条主路径。
+    """
+
+    asset = db.get(GgbAsset, ggb_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="GGB 资源不存在")
+    if not asset.file_path:
+        raise HTTPException(status_code=404, detail="该资源尚未上传 .ggb 文件")
+    path = _ggb_resolve_or_404(asset.file_path)
+    return FileResponse(
+        path,
+        filename=_ggb_download_name(asset.title),
+        media_type="application/octet-stream",
+        content_disposition_type="inline" if inline else "attachment",
+    )
+
+
+@app.post("/api/ggb-assets/{ggb_id}/file")
+def replace_ggb_file(
+    ggb_id: int,
+    file: UploadFile = File(...),
+    note: str = Form(""),
+    preview_image: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    """替换当前 .ggb（在线编辑保存）：追加一个新版本并移动当前指针。"""
+
+    from mathbank.ggb_security import (
+        GgbSecurityError,
+        GgbTooLargeError,
+        MAX_GGB_BYTES,
+        hash_bytes,
+        read_ggb_stream_limited,
+        validate_ggb_archive,
+    )
+    from mathbank import ggbs
+
+    asset = db.get(GgbAsset, ggb_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="GGB 资源不存在")
+
+    written: list[str] = []
+    try:
+        raw = read_ggb_stream_limited(file.file, MAX_GGB_BYTES)
+        archive = validate_ggb_archive(raw)
+        ggb_abs, ggb_ref = _ggb_store_archive(
+            raw, directory=_ggb_version_dir(ggb_id),
+            reference_builder=lambda name: _ggb_version_reference(ggb_id, name),
+        )
+        written.append(ggb_abs)
+
+        new_preview_abs = ""
+        if preview_image is not None and getattr(preview_image, "filename", ""):
+            new_preview_abs, preview_ref = _ggb_store_preview(preview_image)
+            written.append(new_preview_abs)
+            asset.preview_image_path = preview_ref
+
+        try:
+            version = ggbs.replace_ggb_file(
+                db, ggb_id,
+                file_path=ggb_ref, file_size=len(raw),
+                file_sha256=archive.get("sha256") or hash_bytes(raw),
+                note=str(note or "") or "更新文件",
+                entry_count=archive.get("entry_count"),
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            for path in written:
+                _ggb_remove_quietly(path)
+            raise
+    except (GgbTooLargeError, UploadTooLargeError):
+        for path in written:
+            _ggb_remove_quietly(path)
+        return _ggb_error(f".ggb 文件过大，上限 {MAX_GGB_BYTES // (1024 * 1024)} MB。", 413)
+    except (GgbSecurityError, InvalidImageError) as exc:
+        for path in written:
+            _ggb_remove_quietly(path)
+        return _ggb_error(f"上传失败: {exc}")
+    except ValueError as exc:
+        for path in written:
+            _ggb_remove_quietly(path)
+        return _ggb_error(str(exc))
+
+    return {
+        "status": "success",
+        "data": {"version": version, "asset": db.get(GgbAsset, ggb_id).to_dict()},
+    }
+
+
+@app.get("/api/ggb-assets/{ggb_id}/versions")
+def list_ggb_versions(ggb_id: int, db: Session = Depends(get_db)):
+    from mathbank import ggbs
+
+    try:
+        data = ggbs.list_ggb_versions(db, ggb_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@app.get("/api/ggb-assets/{ggb_id}/versions/{version_no}/file")
+def download_ggb_version_file(ggb_id: int, version_no: int, db: Session = Depends(get_db)):
+    """按版本下载 .ggb。"""
+
+    from mathbank import ggbs
+
+    asset = db.get(GgbAsset, ggb_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="GGB 资源不存在")
+    try:
+        version = ggbs.get_ggb_version(db, ggb_id, version_no)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    path = _ggb_resolve_or_404(version.file_path)
+    return FileResponse(
+        path,
+        filename=_ggb_download_name(asset.title, f"_v{int(version_no)}.ggb"),
+        media_type="application/octet-stream",
+        content_disposition_type="attachment",
+    )
+
+
+@app.post("/api/ggb-assets/{ggb_id}/versions/{version_no}/restore")
+def restore_ggb_version(ggb_id: int, version_no: int, db: Session = Depends(get_db)):
+    """回滚（append-only）：复制目标版本字节为新文件，再追加一条新版本。"""
+
+    from mathbank.ggb_security import hash_bytes
+    from mathbank import ggbs
+
+    if db.get(GgbAsset, ggb_id) is None:
+        raise HTTPException(status_code=404, detail="GGB 资源不存在")
+
+    new_abs = ""
+    try:
+        source = ggbs.get_ggb_version(db, ggb_id, version_no)
+        source_path = _ggb_resolve_or_404(source.file_path)
+        raw = source_path.read_bytes()
+        new_abs, new_ref = _ggb_store_archive(
+            raw, directory=_ggb_version_dir(ggb_id),
+            reference_builder=lambda name: _ggb_version_reference(ggb_id, name),
+        )
+        try:
+            version = ggbs.restore_ggb_version(
+                db, ggb_id, version_no,
+                file_path=new_ref, file_size=len(raw), file_sha256=hash_bytes(raw),
+                entry_count=None,
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            _ggb_remove_quietly(new_abs)
+            raise
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        if new_abs:
+            _ggb_remove_quietly(new_abs)
+        return _ggb_error(str(exc))
+    except OSError as exc:
+        if new_abs:
+            _ggb_remove_quietly(new_abs)
+        return _ggb_error(f"读取目标版本失败: {exc}", 500)
+
+    return {"status": "success", "data": {"version": version, "asset": db.get(GgbAsset, ggb_id).to_dict()}}
+
+
+@app.delete("/api/ggb-assets/{ggb_id}/versions/{version_no}")
+def delete_ggb_version(ggb_id: int, version_no: int, db: Session = Depends(get_db)):
+    """删单个版本（至少保留一个），并清理其独占的磁盘文件。"""
+
+    from mathbank import ggbs
+
+    if db.get(GgbAsset, ggb_id) is None:
+        raise HTTPException(status_code=404, detail="GGB 资源不存在")
+    try:
+        removed = ggbs.delete_ggb_version(db, ggb_id, version_no)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return _ggb_error(str(exc))
+    try:
+        _ggb_remove_quietly(str(_ggb_resolve_or_404(removed["released_file_path"])))
+    except HTTPException:
+        pass
+    return {"status": "success", "data": removed}
+
+
+@app.get("/api/ggb-assets/{ggb_id}/export.html")
+def export_ggb_html(ggb_id: int, db: Session = Depends(get_db)):
+    """导出独立 HTML（内嵌该 .ggb 的 base64 + 官方 CDN 引擎，需联网打开）。"""
+
+    import base64 as _base64
+    import html as _html
+    from urllib.parse import quote
+
+    asset = db.get(GgbAsset, ggb_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="GGB 资源不存在")
+    if not asset.file_path:
+        raise HTTPException(status_code=404, detail="该资源尚未上传 .ggb 文件")
+    path = _ggb_resolve_or_404(asset.file_path)
+    try:
+        encoded = _base64.b64encode(path.read_bytes()).decode("ascii")
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail=f"文件不可用: {exc}") from exc
+
+    html = (
+        _GGB_EXPORT_HTML_TEMPLATE
+        .replace("__TITLE__", _html.escape(asset.title or "GeoGebra 动态演示"))
+        .replace("__B64__", encoded)
+        .replace("__CODEBASE__", _GGB_CODEBASE)
+        .replace("__READONLY__", "true")
+    )
+    filename = _ggb_download_name(asset.title, ".html")
+    return Response(
+        content=html,
+        media_type="text/html; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"geogebra.html\"; "
+                f"filename*=utf-8''{quote(filename, safe='')}"
+            )
+        },
+    )
+
+
+@app.get("/api/questions/{question_id}/ggb-links")
+def list_question_ggb_links(question_id: int, db: Session = Depends(get_db)):
+    """某题关联的 GGB 列表（带资源元信息，供题目卡片展示）。"""
+
+    from mathbank import ggbs
+
+    if db.get(Question, question_id) is None:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    return {"status": "success", "data": ggbs.list_question_ggb_links(db, question_id)}
+
+
+@app.post("/api/questions/{question_id}/ggb-links")
+def create_question_ggb_link(question_id: int, payload: dict, db: Session = Depends(get_db)):
+    """建立题目↔GGB 关联；同题同资源同类型重复时 409。"""
+
+    from mathbank import ggbs
+
+    if db.get(Question, question_id) is None:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    payload = payload or {}
+    ggb_id = payload.get("ggb_id")
+    if ggb_id in (None, ""):
+        return _ggb_error("缺少 ggb_id")
+    try:
+        link = ggbs.add_ggb_link(
+            db,
+            question_id=question_id,
+            ggb_id=ggb_id,
+            link_code=payload.get("link_code"),
+            link_label=str(payload.get("link_label") or ""),
+            note=str(payload.get("note") or ""),
+            is_default=bool(payload.get("is_default")),
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        message = str(exc)
+        status = 409 if "已存在同类型关联" in message else 400
+        if message == "GGB 资源不存在":
+            status = 404
+        return _ggb_error(message, status)
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        return _ggb_error(f"建立关联失败: {exc}", 500)
+    return {"status": "success", "data": link}
+
+
+@app.put("/api/ggb-links/{link_id}")
+def update_question_ggb_link(link_id: int, payload: dict, db: Session = Depends(get_db)):
+    from mathbank import ggbs
+
+    try:
+        link = ggbs.update_ggb_link(db, link_id, payload or {})
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        message = str(exc)
+        status = 404 if message == "关联不存在" else 400
+        return _ggb_error(message, status)
+    return {"status": "success", "data": link}
+
+
+@app.put("/api/questions/{question_id}/ggb-links/order")
+def reorder_question_ggb_links(question_id: int, payload: dict, db: Session = Depends(get_db)):
+    """按 ordered_ids 重排某题的关联顺序。"""
+
+    from mathbank import ggbs
+
+    if db.get(Question, question_id) is None:
+        raise HTTPException(status_code=404, detail="题目不存在")
+    try:
+        ggbs.reorder_ggb_links(db, question_id, (payload or {}).get("ordered_ids"))
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return _ggb_error(str(exc))
+    return {"status": "success", "data": ggbs.list_question_ggb_links(db, question_id)}
+
+
+@app.delete("/api/ggb-links/{link_id}")
+def delete_question_ggb_link(link_id: int, db: Session = Depends(get_db)):
+    from mathbank import ggbs
+
+    try:
+        ggbs.remove_ggb_link(db, link_id)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        return _ggb_error(str(exc), 404)
+    return {"status": "success", "message": "关联已删除"}
 
 
 # ----------------- Mount Static Folder last to allow API override -----------------

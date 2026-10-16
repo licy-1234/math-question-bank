@@ -4821,4 +4821,29 @@
         document.documentElement.classList.remove('init-ws-dashboard', 'init-ws-paper');
     });
 
+    // --- GGB_START ---
+    // 演示资源库：照 topic 分支同一模式，在包装链上「再包一层」追加 ggb 分支。
+    // 不覆盖也不改动上方 originalSelectWorkspace 包装体；ggb.js 在 paper.js 之后加载，
+    // 故此处只做「渲染器是否已就绪」的守卫。innerWrapper 不知道 ggbWorkspaceSection
+    // 的存在，所以隐藏 / 显示由本层补齐。
+    const ggbInnerSelectWorkspace = window.selectWorkspace;
+    window.selectWorkspace = function (workspaceId, workspaceName) {
+        // innerWrapper 会在调用中改写 activeWorkspace，故离开判定必须在此之前取。
+        const previousWorkspace = window.PaperStore.activeWorkspace || 'dashboard';
+        if (typeof ggbInnerSelectWorkspace === 'function') {
+            ggbInnerSelectWorkspace(workspaceId, workspaceName);
+        }
+        const ggbSec = document.getElementById('ggbWorkspaceSection');
+        if (ggbSec && workspaceId !== 'ggb') ggbSec.classList.add('hidden');
+        if (workspaceId === 'ggb') {
+            if (ggbSec) ggbSec.classList.remove('hidden');
+            if (typeof window.renderGgbWorkspace === 'function') window.renderGgbWorkspace();
+        } else if (previousWorkspace === 'ggb'
+                && window.GgbPanel && typeof window.GgbPanel.unmount === 'function') {
+            // 离开演示资源库时销毁 applet，避免实例残留在隐藏工作区。
+            window.GgbPanel.unmount();
+        }
+    };
+    // --- GGB_END ---
+
 })();

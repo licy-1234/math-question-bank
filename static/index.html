@@ -112,6 +112,12 @@
                 <span>专题工坊</span>
             </button>
             <!-- TOPIC_END -->
+            <!-- GGB_START -->
+            <button type="button" id="appNavGgb" class="app-nav-item" data-app-nav-target="ggb" onclick="selectWorkspace('ggb', '演示资源库')">
+                <i class="fa-solid fa-chart-area" aria-hidden="true"></i>
+                <span>演示资源库</span>
+            </button>
+            <!-- GGB_END -->
             <!-- QA_START -->
             <button type="button" id="appNavQa" class="app-nav-item" data-app-nav-target="qa" onclick="selectWorkspace('qa', 'QA · 常见问题')">
                 <i class="fa-regular fa-circle-question" aria-hidden="true"></i>
@@ -179,6 +185,12 @@
                         <i class="fa-solid fa-check text-[10px] text-brand-600 dark:text-brand-500 hidden" id="ws-check-topic"></i>
                     </button>
                     <!-- TOPIC_END -->
+                    <!-- GGB_START -->
+                    <button type="button" onclick="selectWorkspace('ggb', '演示资源库')" class="glass-dropdown-item w-full px-3.5 py-2.5 text-xs text-left flex items-center justify-between rounded-xl" id="ws-btn-ggb">
+                        <span>演示资源库</span>
+                        <i class="fa-solid fa-check text-[10px] text-brand-600 dark:text-brand-500 hidden" id="ws-check-ggb"></i>
+                    </button>
+                    <!-- GGB_END -->
                     <!-- QA_START -->
                     <button type="button" onclick="selectWorkspace('qa', 'QA · 常见问题')" class="glass-dropdown-item w-full px-3.5 py-2.5 text-xs text-left flex items-center justify-between rounded-xl" id="ws-btn-qa">
                         <span>QA · 常见问题</span>
@@ -551,6 +563,11 @@
                 <button type="button" class="question-editor-step" data-editor-panel-target="review" onclick="switchQuestionEditorPanel('review')">
                     <span>4</span><strong>评述与关联</strong><small>评注、配图与关联</small>
                 </button>
+                <!-- GGB_START -->
+                <button type="button" class="question-editor-step" data-editor-panel-target="ggb" onclick="switchQuestionEditorPanel('ggb')">
+                    <span>5</span><strong>动态演示</strong><small>GeoGebra 演示挂载</small>
+                </button>
+                <!-- GGB_END -->
             </nav>
 
             <div class="question-editor-modal-body bank-editor-content p-6 max-w-4xl mx-auto w-full">
@@ -1232,6 +1249,18 @@
                     </div>
                 </div>
 
+                <!-- GGB_START -->
+                <!-- 5. Dynamic Demonstration (GeoGebra) - lazily mounted when the tab activates -->
+                <div id="ggbQuestionPanel" class="bank-editor-panel glass-panel p-5 rounded-2xl space-y-4 hidden" data-editor-panel="ggb">
+                    <h3 class="text-sm font-semibold text-slate-500 flex items-center space-x-2">
+                        <i class="fa-solid fa-chart-area text-slate-400"></i>
+                        <span>动态演示</span>
+                    </h3>
+                    <p class="ggb-form-hint">为本题目挂载 GeoGebra 动态演示；切换到本页签时才会加载组件，切走即销毁。</p>
+                    <div id="ggbQuestionPanelBody"><!-- Rendered by ggb.js --></div>
+                </div>
+                <!-- GGB_END -->
+
             </div>
           </div>
         </section>
@@ -1470,6 +1499,60 @@
         </section>
         <!-- TOPIC_END -->
         <!-- End of Topic Workspace Section -->
+
+        <!-- GGB_START -->
+        <!-- Workspace: GeoGebra Dynamic Demonstration Library -->
+        <section id="ggbWorkspaceSection" class="ggb-workspace hidden w-full h-full overflow-hidden" aria-labelledby="ggbWorkspaceTitle">
+            <h1 class="sr-only">演示资源库</h1>
+            <header class="ggb-workspace-header">
+                <div class="workspace-context-heading ggb-workspace-heading">
+                    <span class="ggb-workspace-heading-icon" aria-hidden="true"><i class="fa-solid fa-chart-area"></i></span>
+                    <div>
+                        <h2 id="ggbWorkspaceTitle">演示资源库</h2>
+                        <p>集中管理 GeoGebra 动态演示（.ggb），按维度检索、预览与挂载到题目</p>
+                    </div>
+                </div>
+                <div class="ggb-workspace-actions">
+                    <button type="button" class="glass-btn" id="ggbUploadBtn" onclick="window.GgbPanel && window.GgbPanel.openUploadModal()">
+                        <i class="fa-solid fa-upload" aria-hidden="true"></i><span>上传 .ggb</span>
+                    </button>
+                </div>
+            </header>
+            <div class="ggb-workspace-body">
+                <aside class="ggb-list-panel" aria-label="演示资源列表">
+                    <div class="ggb-list-filters" id="ggbListFilters"><!-- Rendered by ggb.js --></div>
+                    <div class="ggb-list-container custom-scrollbar" id="ggbListContainer">
+                        <div class="ui-state ui-state-loading" role="status" aria-live="polite">
+                            <span class="ui-state-icon" aria-hidden="true"><i class="fa-solid fa-spinner fa-spin"></i></span>
+                            <strong class="ui-state-title">正在载入演示资源</strong>
+                            <span class="ui-state-description">演示资源列表加载完成后会显示在这里。</span>
+                        </div>
+                    </div>
+                </aside>
+                <section class="ggb-detail-panel" aria-label="演示资源详情">
+                    <div class="ggb-detail-empty" id="ggbDetailEmpty">
+                        <span class="ui-state-icon" aria-hidden="true"><i class="fa-solid fa-chart-area"></i></span>
+                        <strong class="ui-state-title">还没有选择演示资源</strong>
+                        <span class="ui-state-description">从左侧列表选择一个资源查看预览、标签与版本，或上传新的 .ggb。</span>
+                    </div>
+                    <div class="ggb-detail-content hidden" id="ggbDetailContent">
+                        <header class="ggb-detail-header" id="ggbDetailHeader"><!-- Rendered by ggb.js --></header>
+                        <div class="ggb-detail-scroll custom-scrollbar" id="ggbDetailScroll"><!-- Rendered by ggb.js --></div>
+                    </div>
+                </section>
+                <aside class="ggb-inspector-panel" aria-label="检查器">
+                    <div class="ggb-inspector-section" id="ggbInspectorTags"><!-- Rendered by ggb.js --></div>
+                    <div class="ggb-inspector-section" id="ggbInspectorVersions"><!-- Rendered by ggb.js --></div>
+                    <div class="ggb-inspector-section" id="ggbInspectorLinks"><!-- Rendered by ggb.js --></div>
+                </aside>
+            </div>
+            <div class="ggb-mobile-switch" role="tablist" aria-label="演示资源库视图">
+                <button type="button" role="tab" aria-selected="true" data-ggb-pane="list" onclick="window.setGgbMobilePane && window.setGgbMobilePane('list')">资源</button>
+                <button type="button" role="tab" aria-selected="false" data-ggb-pane="detail" onclick="window.setGgbMobilePane && window.setGgbMobilePane('detail')">详情</button>
+                <button type="button" role="tab" aria-selected="false" data-ggb-pane="inspector" onclick="window.setGgbMobilePane && window.setGgbMobilePane('inspector')">检查器</button>
+            </div>
+        </section>
+        <!-- GGB_END -->
 
         <!-- Workspace 3: Saved paper records -->
         <section id="recordsWorkspaceSection" class="records-workspace hidden w-full h-full overflow-hidden" aria-labelledby="recordsWorkspaceTitle">
@@ -2567,6 +2650,9 @@
     <!-- TOPIC_START（必须在 paper.js 之后加载：selectWorkspace 的 topic 分支在 paper.js 中） -->
     <script src="/static/js/topic.js"></script>
     <!-- TOPIC_END -->
+    <!-- GGB_START（必须在 paper.js 之后加载：selectWorkspace 的 ggb 分支在 paper.js 中） -->
+    <script src="/static/js/ggb.js"></script>
+    <!-- GGB_END -->
     <script src="/static/js/dashboard.js"></script>
     <!-- QA_START -->
     <script src="/static/js/qa-data.js"></script>

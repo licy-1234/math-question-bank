@@ -16,6 +16,13 @@ STATIC_CSS_DIR = STATIC_DIR / "css"
 UPLOADS_DIR = STATIC_DIR / "uploads"
 TEST_UPLOADS_DIR = STATIC_DIR / "test_uploads"
 
+#: GGB 动态演示资源库（schema v14）的上传子目录名。刻意放在 uploads 的**子目录**
+#: 里：启动期的孤儿清理只枚举 uploads 根目录与 tmp/（非递归），子目录天然免疫；
+#: 见 mathbank/db_migrations.py 的 GGB_TABLES 与 main.py 的 clean_orphaned_images。
+GGB_UPLOAD_SUBDIR = "ggb"
+GGB_VERSIONS_SUBDIR = "versions"
+GGB_PREVIEWS_SUBDIR = "previews"
+
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 DATA_BACKUP_DIR = PROJECT_ROOT / "data_backup"
 FULL_BACKUP_DIR = DATA_BACKUP_DIR / "snapshots"

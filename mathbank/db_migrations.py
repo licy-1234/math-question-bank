@@ -19,7 +19,7 @@ from mathbank.paths import SCHEMA_SNAPSHOT_DIR
 from mathbank.sub_knowledge import normalize_sub_knowledge
 
 
-LATEST_SCHEMA_VERSION = 13
+LATEST_SCHEMA_VERSION = 14
 LEGACY_REQUIRED_TABLES = {
     "questions",
     "question_curriculums",
@@ -37,6 +37,10 @@ REQUIRED_TABLES = LEGACY_REQUIRED_TABLES | {
     "topic_versions",
     "topic_links",
     "question_usage_stats",
+    "ggb_assets",
+    "ggb_tags",
+    "question_ggb_links",
+    "ggb_versions",
 }
 
 #: 专题工坊六表（v13）。刻意不纳入 SELF_HEALING_TABLES：这些表存用户原创
@@ -49,6 +53,16 @@ TOPIC_TABLES = (
     "topic_versions",
     "topic_links",
     "question_usage_stats",
+)
+
+#: GGB 动态演示资源库四表（v14）。与 TOPIC_TABLES 同策略，刻意不纳入
+#: SELF_HEALING_TABLES：这些表存教师自制的 .ggb 课件与题目关联，等同 papers，
+#: 不是可从其他表派生的索引；缺表时重建空表等于静默数据丢失，必须 fail-closed。
+GGB_TABLES = (
+    "ggb_assets",
+    "ggb_tags",
+    "question_ggb_links",
+    "ggb_versions",
 )
 
 V6_QUESTION_FINGERPRINT_COLUMNS = {
@@ -1039,6 +1053,151 @@ _TOPIC_TABLE_CHECK_CONSTRAINTS = {
 }
 
 
+#: v14 GGB 动态演示资源库建表语句（纯增量；与 database.py 的 ORM 模型逐列对齐）。
+#: 单机单教师场景下刻意不建 scope/creator/modified_by 等"无判定主体"的列。
+_GGB_TABLE_DDL = {
+    "ggb_assets": """
+        CREATE TABLE ggb_assets (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            title VARCHAR(200) NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            file_path VARCHAR(500) NOT NULL DEFAULT '',
+            file_size INTEGER NOT NULL DEFAULT 0,
+            file_sha256 VARCHAR(64) NOT NULL DEFAULT '',
+            preview_image_path VARCHAR(500) NOT NULL DEFAULT '',
+            status VARCHAR(20) NOT NULL DEFAULT 'active',
+            current_version_no INTEGER NOT NULL DEFAULT 1,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT ck_ggb_asset_file_size CHECK (file_size >= 0),
+            CONSTRAINT ck_ggb_asset_version_no CHECK (current_version_no >= 1),
+            CONSTRAINT ck_ggb_asset_status CHECK (status IN ('active', 'archived'))
+        )
+    """,
+    "ggb_tags": """
+        CREATE TABLE ggb_tags (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            ggb_id INTEGER NOT NULL,
+            dim VARCHAR(20) NOT NULL,
+            code VARCHAR(120) NOT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_ggb_tag UNIQUE (ggb_id, dim, code),
+            CONSTRAINT fk_ggb_tags_asset FOREIGN KEY(ggb_id) REFERENCES ggb_assets(id) ON DELETE CASCADE
+        )
+    """,
+    "question_ggb_links": """
+        CREATE TABLE question_ggb_links (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            question_id INTEGER NOT NULL,
+            ggb_id INTEGER NOT NULL,
+            link_code VARCHAR(60) NOT NULL,
+            link_label VARCHAR(120) NOT NULL DEFAULT '',
+            note TEXT NOT NULL DEFAULT '',
+            is_default BOOLEAN NOT NULL DEFAULT 0,
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_question_ggb_link UNIQUE (question_id, ggb_id, link_code),
+            CONSTRAINT ck_qggb_position CHECK (position >= 0),
+            CONSTRAINT fk_qggb_question FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE,
+            CONSTRAINT fk_qggb_asset FOREIGN KEY(ggb_id) REFERENCES ggb_assets(id) ON DELETE CASCADE
+        )
+    """,
+    "ggb_versions": """
+        CREATE TABLE ggb_versions (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            ggb_id INTEGER NOT NULL,
+            version_no INTEGER NOT NULL,
+            file_path VARCHAR(500) NOT NULL,
+            file_size INTEGER NOT NULL DEFAULT 0,
+            file_sha256 VARCHAR(64) NOT NULL DEFAULT '',
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            note TEXT NOT NULL DEFAULT '',
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_ggb_version_no UNIQUE (ggb_id, version_no),
+            CONSTRAINT ck_ggb_version_no_positive CHECK (version_no >= 1),
+            CONSTRAINT ck_ggb_version_file_size CHECK (file_size >= 0),
+            CONSTRAINT fk_ggb_versions_asset FOREIGN KEY(ggb_id) REFERENCES ggb_assets(id) ON DELETE CASCADE
+        )
+    """,
+}
+
+#: 每张 GGB 表的普通索引（不含 UNIQUE 约束自建索引与部分唯一索引）。
+_GGB_TABLE_INDEXES = {
+    "ggb_assets": {
+        "idx_ggb_assets_status": ("status",),
+        "idx_ggb_assets_sha256": ("file_sha256",),
+        "idx_ggb_assets_updated": ("updated_at",),
+    },
+    "ggb_tags": {
+        "idx_ggb_tags_dim_code": ("dim", "code"),
+        "idx_ggb_tags_ggb": ("ggb_id",),
+    },
+    "question_ggb_links": {
+        "idx_qggb_question": ("question_id",),
+        "idx_qggb_ggb": ("ggb_id",),
+        "idx_qggb_code": ("link_code",),
+    },
+    "ggb_versions": {
+        "idx_ggb_versions_ggb": ("ggb_id",),
+    },
+}
+
+#: GGB 表没有部分唯一索引（题目↔GGB 关联不启用 position 唯一约束，见设计说明）。
+_GGB_TABLE_PARTIAL_INDEXES: dict[str, dict[str, tuple[tuple[str, ...], str]]] = {}
+
+#: 每张 GGB 表的列集合（id 之外全部 NOT NULL）。
+_GGB_TABLE_COLUMNS = {
+    "ggb_assets": (
+        "id", "title", "description", "file_path", "file_size", "file_sha256",
+        "preview_image_path", "status", "current_version_no", "created_at", "updated_at",
+    ),
+    "ggb_tags": ("id", "ggb_id", "dim", "code", "created_at"),
+    "question_ggb_links": (
+        "id", "question_id", "ggb_id", "link_code", "link_label",
+        "note", "is_default", "position", "created_at",
+    ),
+    "ggb_versions": (
+        "id", "ggb_id", "version_no", "file_path", "file_size",
+        "file_sha256", "snapshot_json", "note", "created_at",
+    ),
+}
+
+#: 每张 GGB 表允许为 NULL 的列（其余非 id 列必须 NOT NULL）。
+_GGB_TABLE_NULLABLE_COLUMNS = {
+    "ggb_assets": (),
+    "ggb_tags": (),
+    "question_ggb_links": (),
+    "ggb_versions": (),
+}
+
+#: 每张 GGB 表必须存在的外键动作：(table, from_column) -> (parent_table, parent_column, on_delete)。
+_GGB_TABLE_FOREIGN_KEYS = {
+    "ggb_assets": {},
+    "ggb_tags": {("ggb_tags", "ggb_id"): ("ggb_assets", "id", "CASCADE")},
+    "question_ggb_links": {
+        ("question_ggb_links", "question_id"): ("questions", "id", "CASCADE"),
+        ("question_ggb_links", "ggb_id"): ("ggb_assets", "id", "CASCADE"),
+    },
+    "ggb_versions": {("ggb_versions", "ggb_id"): ("ggb_assets", "id", "CASCADE")},
+}
+
+#: 每张 GGB 表必须存在的 UNIQUE 约束列组（含顺序）。
+_GGB_TABLE_UNIQUE_CONSTRAINTS = {
+    "ggb_assets": (),
+    "ggb_tags": (("ggb_id", "dim", "code"),),
+    "question_ggb_links": (("question_id", "ggb_id", "link_code"),),
+    "ggb_versions": (("ggb_id", "version_no"),),
+}
+
+#: 每张 GGB 表必须存在的 CHECK 约束名（防手改库把约束抹掉）。
+_GGB_TABLE_CHECK_CONSTRAINTS = {
+    "ggb_assets": ("ck_ggb_asset_file_size", "ck_ggb_asset_version_no", "ck_ggb_asset_status"),
+    "ggb_tags": (),
+    "question_ggb_links": ("ck_qggb_position",),
+    "ggb_versions": ("ck_ggb_version_no_positive", "ck_ggb_version_file_size"),
+}
+
+
 def _ensure_topic_tables(connection) -> dict[str, int]:
     """v13 adds the six topic-studio tables; purely additive, no backfill."""
 
@@ -1160,6 +1319,136 @@ def _validate_topic_tables(connection) -> None:
             "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
         ).scalar() or "")
         for constraint_name in _TOPIC_TABLE_CHECK_CONSTRAINTS[table]:
+            if constraint_name not in table_sql:
+                raise RuntimeError(f"数据库表 {table} 缺少 CHECK 约束 {constraint_name}")
+
+        violations = connection.exec_driver_sql(f"PRAGMA foreign_key_check({table})").fetchall()
+        if violations:
+            raise RuntimeError(f"数据库表 {table} 存在外键异常: {violations[:3]}")
+
+
+def _ensure_ggb_tables(connection) -> dict[str, int]:
+    """v14 adds the four GGB studio tables; purely additive, no backfill."""
+
+    stats: dict[str, int] = {}
+    for table, ddl in _GGB_TABLE_DDL.items():
+        exists = bool(connection.exec_driver_sql(
+            f"SELECT 1 FROM sqlite_master WHERE type='table' AND name='{table}'"
+        ).first())
+        if not exists:
+            connection.exec_driver_sql(ddl)
+            stats[f"added_{table}"] = 1
+        for index_name, columns in _GGB_TABLE_INDEXES[table].items():
+            connection.exec_driver_sql(
+                f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({', '.join(columns)})"
+            )
+        for index_name, (columns, where_clause) in _GGB_TABLE_PARTIAL_INDEXES.get(table, {}).items():
+            connection.exec_driver_sql(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table} "
+                f"({', '.join(columns)}) WHERE {where_clause}"
+            )
+    _validate_ggb_tables(connection)
+    return stats
+
+
+def _validate_ggb_tables(connection) -> None:
+    """Fail closed when any GGB table is missing, damaged or drifted."""
+
+    table_names = {
+        row[0]
+        for row in connection.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    missing_tables = [table for table in GGB_TABLES if table not in table_names]
+    if missing_tables:
+        raise RuntimeError(
+            "检测到 GGB 资源表缺失: " + ", ".join(missing_tables)
+            + "。教师自制的 .ggb 课件与题目关联为用户原创内容，不会自动重建；"
+            "请从 data_backup 恢复备份后重启。"
+        )
+
+    for table in GGB_TABLES:
+        info = {
+            row[1]: row
+            for row in connection.exec_driver_sql(f'PRAGMA table_info("{table}")').fetchall()
+        }
+        expected_columns = set(_GGB_TABLE_COLUMNS[table])
+        if set(info) != expected_columns:
+            raise RuntimeError(
+                f"数据库表 {table} 字段集合与 v14 结构不符: "
+                f"缺少 {sorted(expected_columns - set(info))}，多出 {sorted(set(info) - expected_columns)}"
+            )
+        for column in _GGB_TABLE_COLUMNS[table]:
+            if column == "id":
+                if int(info[column][5]) != 1:
+                    raise RuntimeError(f"{table} 主键结构异常")
+                continue
+            if int(info[column][5]) != 0:
+                raise RuntimeError(f"{table} 字段 {column} 不应当主键")
+            if column in _GGB_TABLE_NULLABLE_COLUMNS[table]:
+                continue
+            if int(info[column][3]) != 1:
+                raise RuntimeError(f"数据库表 {table} 字段 {column} 缺少 NOT NULL 约束")
+
+        foreign_keys = connection.exec_driver_sql(
+            f'PRAGMA foreign_key_list("{table}")'
+        ).fetchall()
+        for (from_table, from_column), (parent_table, parent_column, action) in (
+            _GGB_TABLE_FOREIGN_KEYS[table].items()
+        ):
+            if not any(
+                row[2] == parent_table
+                and row[3] == from_column
+                and row[4] == parent_column
+                and str(row[6]).upper() == action
+                for row in foreign_keys
+            ):
+                raise RuntimeError(
+                    f"数据库表 {table} 缺少外键 {from_column} -> "
+                    f"{parent_table}.{parent_column} ON DELETE {action}"
+                )
+
+        index_rows = connection.exec_driver_sql(f'PRAGMA index_list("{table}")').fetchall()
+        index_columns = {
+            tuple(
+                entry[2]
+                for entry in connection.exec_driver_sql(
+                    f'PRAGMA index_info("{row[1]}")'
+                ).fetchall()
+            ): row
+            for row in index_rows
+        }
+        for columns in _GGB_TABLE_UNIQUE_CONSTRAINTS[table]:
+            row = index_columns.get(columns)
+            if row is None or int(row[2]) != 1 or str(row[3]).upper() != "U":
+                raise RuntimeError(
+                    f"数据库表 {table} 缺少唯一约束 {columns}"
+                )
+        for index_name, columns in _GGB_TABLE_INDEXES[table].items():
+            row = index_columns.get(columns)
+            if row is None:
+                raise RuntimeError(f"数据库表 {table} 缺少索引 {index_name}")
+            if int(row[2]) == 1 and str(row[3]).upper() == "U":
+                raise RuntimeError(f"数据库表 {table} 索引 {index_name} 不应当唯一")
+        for index_name, (columns, where_clause) in (
+            _GGB_TABLE_PARTIAL_INDEXES.get(table, {}).items()
+        ):
+            row = index_columns.get(columns)
+            if row is None:
+                raise RuntimeError(f"数据库表 {table} 缺少部分唯一索引 {index_name}")
+            if int(row[2]) != 1 or len(row) < 5 or int(row[4]) != 1:
+                raise RuntimeError(f"数据库表 {table} 部分唯一索引 {index_name} 结构异常")
+            actual_where = connection.exec_driver_sql(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (index_name,)
+            ).scalar()
+            if not actual_where or where_clause not in str(actual_where):
+                raise RuntimeError(f"数据库表 {table} 部分唯一索引 {index_name} 条件不符")
+
+        table_sql = str(connection.exec_driver_sql(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).scalar() or "")
+        for constraint_name in _GGB_TABLE_CHECK_CONSTRAINTS[table]:
             if constraint_name not in table_sql:
                 raise RuntimeError(f"数据库表 {table} 缺少 CHECK 约束 {constraint_name}")
 
@@ -1304,6 +1593,7 @@ def _rebuild_relationship_tables(engine: Engine) -> dict[str, int]:
             tag_stats = _ensure_question_tags_table(connection)
             relation_stats = _ensure_question_relations_table(connection)
             topic_stats = _ensure_topic_tables(connection)
+            ggb_stats = _ensure_ggb_tables(connection)
             _validate_figure_layout_schema(connection)
 
             violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
@@ -1323,6 +1613,7 @@ def _rebuild_relationship_tables(engine: Engine) -> dict[str, int]:
                 **relation_stats,
                 **sub_knowledge_stats,
                 **topic_stats,
+                **ggb_stats,
             }
         except Exception:
             if transaction_started:
@@ -1353,6 +1644,7 @@ def _upgrade_derived_schema(engine: Engine) -> dict[str, int]:
             stats.update(_ensure_question_tags_table(connection))
             stats.update(_ensure_question_relations_table(connection))
             stats.update(_ensure_topic_tables(connection))
+            stats.update(_ensure_ggb_tables(connection))
             _validate_figure_layout_schema(connection)
             connection.exec_driver_sql(f"PRAGMA user_version={LATEST_SCHEMA_VERSION}")
             connection.exec_driver_sql("COMMIT")
@@ -1426,6 +1718,7 @@ def _upgrade_v6_or_v7_fingerprint_schema(
             relation_stats = _ensure_question_relations_table(connection)
             sub_knowledge_stats = _ensure_sub_knowledge_columns(connection)
             topic_stats = _ensure_topic_tables(connection)
+            ggb_stats = _ensure_ggb_tables(connection)
             _validate_figure_layout_schema(connection)
             connection.exec_driver_sql(f"PRAGMA user_version={LATEST_SCHEMA_VERSION}")
             connection.exec_driver_sql("COMMIT")
@@ -1439,6 +1732,7 @@ def _upgrade_v6_or_v7_fingerprint_schema(
                 **relation_stats,
                 **sub_knowledge_stats,
                 **topic_stats,
+                **ggb_stats,
             }
         except Exception:
             if transaction_started:
@@ -1484,12 +1778,20 @@ def migrate_database(
                     "检测到专题表缺失: " + missing
                     + "。专题数据为用户原创教学内容，不会自动重建；请从 data_backup 恢复备份后重启。"
                 )
+            ggb_missing = sorted(set(missing.split(", ")) & set(GGB_TABLES))
+            if ggb_missing:
+                raise RuntimeError(
+                    "检测到 GGB 资源表缺失: " + ", ".join(ggb_missing)
+                    + "。教师自制的 .ggb 课件与题目关联为用户原创内容，不会自动重建；"
+                    "请从 data_backup 恢复备份后重启。"
+                )
             raise RuntimeError(f"数据库结构不完整，缺少必要数据表: {missing}")
         with engine.connect() as connection:
             _validate_question_fingerprint_schema(connection)
             _validate_figure_layout_schema(connection)
             _validate_sub_knowledge_schema(connection)
             _validate_topic_tables(connection)
+            _validate_ggb_tables(connection)
         return {"from_version": current, "to_version": current, "backup": None}
 
     if not table_names:
@@ -1501,6 +1803,18 @@ def migrate_database(
     if not LEGACY_REQUIRED_TABLES.issubset(table_names):
         missing = ", ".join(sorted(LEGACY_REQUIRED_TABLES - table_names))
         raise RuntimeError(f"数据库结构不完整，缺少必要数据表: {missing}")
+
+    # 专题工坊六表自 v13 引入。一个自报 v13 及以上的库若缺这些表，说明数据已经
+    # 丢了，绝不能走 _upgrade_derived_schema 的"静默补建"路径——那会把一次数据
+    # 丢失伪装成正常升级。必须 fail-closed 引导用户从 data_backup 恢复。
+    # （v14 引入的 GGB 四表由下方 current == LATEST 分支的同款检查覆盖。）
+    if current >= 13:
+        missing_topic_tables = sorted(set(TOPIC_TABLES) - table_names)
+        if missing_topic_tables:
+            raise RuntimeError(
+                "检测到专题表缺失: " + ", ".join(missing_topic_tables)
+                + "。专题数据为用户原创教学内容，不会自动重建；请从 data_backup 恢复备份后重启。"
+            )
 
     backup = pre_migration_backup or create_pre_migration_backup(
         engine, from_version=current, to_version=LATEST_SCHEMA_VERSION

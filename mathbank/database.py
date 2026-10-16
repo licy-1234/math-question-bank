@@ -902,6 +902,142 @@ class QuestionUsageStat(Base):
                 "recorded_at": (self.recorded_at.isoformat() + "Z") if self.recorded_at else None}
 
 
+# ----------------- GGB 动态演示资源库（schema v14） -----------------
+
+class GgbAsset(Base):
+    """GeoGebra 动态演示资源：教师自制的 .ggb 课件（单机资源库主表）。
+
+    单机单教师场景下刻意不建 scope / creator 等"无判定主体"的列；也不建操作
+    记录表（不做 V3/V4）。详见 GGB 实施方案文档。
+    """
+
+    __tablename__ = "ggb_assets"
+    __table_args__ = (
+        CheckConstraint("file_size >= 0", name="ck_ggb_asset_file_size"),
+        CheckConstraint("current_version_no >= 1", name="ck_ggb_asset_version_no"),
+        CheckConstraint("status IN ('active', 'archived')", name="ck_ggb_asset_status"),
+        Index("idx_ggb_assets_status", "status"),
+        Index("idx_ggb_assets_sha256", "file_sha256"),
+        Index("idx_ggb_assets_updated", "updated_at"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=False, default="", server_default=text("''"))
+    file_path = Column(String(500), nullable=False, default="", server_default=text("''"))
+    file_size = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    file_sha256 = Column(String(64), nullable=False, default="", server_default=text("''"))
+    preview_image_path = Column(String(500), nullable=False, default="", server_default=text("''"))
+    status = Column(String(20), nullable=False, default="active", server_default=text("'active'"))
+    current_version_no = Column(Integer, nullable=False, default=1, server_default=text("1"))
+    created_at = Column(DateTime, default=_utcnow_naive, server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+    updated_at = Column(DateTime, default=_utcnow_naive, onupdate=_utcnow_naive,
+                        server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+
+    # 依赖 DB 级 ON DELETE CASCADE，避免 ORM 删父行前预先加载子行。
+    tags = relationship("GgbTag", passive_deletes=True)
+    versions = relationship("GgbVersion", passive_deletes=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "title": self.title, "description": self.description or "",
+            "file_path": self.file_path or "", "file_size": self.file_size or 0,
+            "file_sha256": self.file_sha256 or "",
+            "preview_image_path": self.preview_image_path or "",
+            "status": self.status or "active",
+            "current_version_no": self.current_version_no or 0,
+            "created_at": (self.created_at.isoformat() + "Z") if self.created_at else None,
+            "updated_at": (self.updated_at.isoformat() + "Z") if self.updated_at else None,
+        }
+
+
+class GgbTag(Base):
+    """GGB 分类标签窄表（照 question_tags）：dim ∈ knowledge/dynamic_type/difficulty/custom."""
+
+    __tablename__ = "ggb_tags"
+    __table_args__ = (
+        UniqueConstraint("ggb_id", "dim", "code", name="uq_ggb_tag"),
+        Index("idx_ggb_tags_dim_code", "dim", "code"),
+        Index("idx_ggb_tags_ggb", "ggb_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    ggb_id = Column(Integer, ForeignKey("ggb_assets.id", ondelete="CASCADE"), nullable=False)
+    dim = Column(String(20), nullable=False)
+    code = Column(String(120), nullable=False)
+    created_at = Column(DateTime, default=_utcnow_naive, server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "ggb_id": self.ggb_id, "dim": self.dim, "code": self.code}
+
+
+class QuestionGgbLink(Base):
+    """题目↔GGB 有类型关联（照 question_relations）。
+
+    与 question_relations 的两点刻意差异：跨类型主键无规范序，故不设 CHECK 序；
+    单题关联通常 1–5 条，故不设 UNIQUE(question_id, position)（也就不需要
+    topic_items 那套 position 压缩逻辑）。
+    """
+
+    __tablename__ = "question_ggb_links"
+    __table_args__ = (
+        UniqueConstraint("question_id", "ggb_id", "link_code", name="uq_question_ggb_link"),
+        CheckConstraint("position >= 0", name="ck_qggb_position"),
+        Index("idx_qggb_question", "question_id"),
+        Index("idx_qggb_ggb", "ggb_id"),
+        Index("idx_qggb_code", "link_code"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    question_id = Column(Integer, ForeignKey("questions.id", ondelete="CASCADE"), nullable=False)
+    ggb_id = Column(Integer, ForeignKey("ggb_assets.id", ondelete="CASCADE"), nullable=False)
+    link_code = Column(String(60), nullable=False)
+    link_label = Column(String(120), nullable=False, default="", server_default=text("''"))
+    note = Column(Text, nullable=False, default="", server_default=text("''"))
+    is_default = Column(Boolean, nullable=False, default=False, server_default="0")
+    position = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    created_at = Column(DateTime, default=_utcnow_naive, server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+
+    question = relationship("Question", passive_deletes=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "question_id": self.question_id, "ggb_id": self.ggb_id,
+            "link_code": self.link_code, "link_label": self.link_label or "",
+            "note": self.note or "", "is_default": bool(self.is_default),
+            "position": self.position,
+        }
+
+
+class GgbVersion(Base):
+    """GGB 版本快照：append-only；大文件外置到版本目录，snapshot_json 只存小摘要。"""
+
+    __tablename__ = "ggb_versions"
+    __table_args__ = (
+        UniqueConstraint("ggb_id", "version_no", name="uq_ggb_version_no"),
+        CheckConstraint("version_no >= 1", name="ck_ggb_version_no_positive"),
+        CheckConstraint("file_size >= 0", name="ck_ggb_version_file_size"),
+        Index("idx_ggb_versions_ggb", "ggb_id"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    ggb_id = Column(Integer, ForeignKey("ggb_assets.id", ondelete="CASCADE"), nullable=False)
+    version_no = Column(Integer, nullable=False)
+    file_path = Column(String(500), nullable=False)
+    file_size = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    file_sha256 = Column(String(64), nullable=False, default="", server_default=text("''"))
+    snapshot_json = Column(Text, nullable=False, default="{}", server_default=text("'{}'"))
+    note = Column(Text, nullable=False, default="", server_default=text("''"))
+    created_at = Column(DateTime, default=_utcnow_naive, server_default=text("CURRENT_TIMESTAMP"), nullable=False)
+
+    def to_dict(self) -> dict:
+        return {
+            "version_no": self.version_no, "file_size": self.file_size or 0,
+            "file_sha256": self.file_sha256 or "", "note": self.note or "",
+            "created_at": (self.created_at.isoformat() + "Z") if self.created_at else None,
+        }
+
+
 # Dependency to get db session
 def get_db():
     db = SessionLocal()
@@ -965,6 +1101,17 @@ def init_db():
                         raise RuntimeError(
                             "检测到专题表缺失: " + ", ".join(topic_missing)
                             + "。专题数据为用户原创教学内容，不会自动重建；"
+                            "请从 data_backup 恢复备份后重启。"
+                        )
+                    ggb_missing = sorted(
+                        set(missing) & {
+                            "ggb_assets", "ggb_tags", "question_ggb_links", "ggb_versions",
+                        }
+                    )
+                    if ggb_missing:
+                        raise RuntimeError(
+                            "检测到 GGB 资源表缺失: " + ", ".join(ggb_missing)
+                            + "。教师自制的 .ggb 课件与题目关联为用户原创内容，不会自动重建；"
                             "请从 data_backup 恢复备份后重启。"
                         )
                     raise RuntimeError(

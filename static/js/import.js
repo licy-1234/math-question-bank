@@ -1034,6 +1034,11 @@
                 return;
             }
             EditorState.beginTransition();
+            // GGB_START：切换题目时先销毁上一题的 GeoGebra applet，把实例数压在 0–1 个。
+            if (window.GgbPanel && typeof window.GgbPanel.unmount === 'function') {
+                window.GgbPanel.unmount();
+            }
+            // GGB_END
             const loadSequence = ++questionDetailLoadSequence;
             const figureLayoutRevisionAtRequest = typeof window.getFigureLayoutMutationRevision === 'function'
                 ? window.getFigureLayoutMutationRevision(requestedQuestionId)
@@ -1186,6 +1191,13 @@
          
                     // Backup the original loaded question state directly from the DOM!
                     backupEditorState(fullItem.id, null);
+                    // GGB_START：若「动态演示」页签当前处于激活状态，为新题目重新懒挂载。
+                    const ggbEditorModal = document.getElementById('editorSection');
+                    if (ggbEditorModal && ggbEditorModal.dataset.panel === 'ggb'
+                            && window.GgbPanel && typeof window.GgbPanel.mountQuestionPanel === 'function') {
+                        window.GgbPanel.mountQuestionPanel(fullItem.id);
+                    }
+                    // GGB_END
                     if (typeof window.setQuestionDetailEditAvailability === 'function') {
                         window.setQuestionDetailEditAvailability(true);
                     }
