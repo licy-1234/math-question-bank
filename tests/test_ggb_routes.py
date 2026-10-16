@@ -575,11 +575,11 @@ def test_export_html_embeds_base64_and_uses_official_cdn(client, uploaded):
     assert '"PK"' not in html
 
 
-def test_export_html_sets_5x_codebase(client, uploaded):
+def test_export_html_pins_the_modern_engine_build(client, uploaded):
     asset_id, _ = uploaded
     html = client.get(f"/api/ggb-assets/{asset_id}/export.html").text
     assert "setHTML5Codebase" in html
-    assert "/apps/5.4." in html, "未钉住 Classic 5 分支，会默认拿到 GeoGebra 6"
+    assert "/apps/5.4.932.1/web3d" in html, "未钉住 Classic 6 现代版对应构建 5.4.932.1"
 
 
 # --------------------------------------------------------------------------- #

@@ -10078,7 +10078,7 @@ def import_topic(payload: dict, db: Session = Depends(get_db)):
 # 每个版本行独占一个文件；asset.file_path 只是"当前版本"的指针镜像。
 
 #: 导出为独立 HTML 的模板。引擎走官方 CDN 绝对地址（导出文件脱离本机服务后
-#: 相对路径必坏）；codebase 钉 5.x 以与教师的 GeoGebra Classic 5 桌面版一致。
+#: 相对路径必坏）；codebase 钉在现代构建上，与教师的 GeoGebra Classic 6 桌面版同源。
 _GGB_EXPORT_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -10115,8 +10115,18 @@ Made with GeoGebra&reg; &middot;
 </html>
 """
 
-#: 与前端 static/js/ggb.js 的 GGB_CODEBASE 保持同值（失效时改这两处）。
-_GGB_CODEBASE = "https://www.geogebra.org/apps/5.4.907.0/web3d"
+#: 与前端 static/js/ggb.js 的 GGB_CODEBASE 保持同值（失效时改这两处）；
+#: tests/test_ggb_frontend.py 的同步守卫会强制校验两处一致。
+#:
+#: 版本线说明（2026-10-16 由 Classic 5 迁移到 Classic 6 现代版时确认）：
+#: GeoGebra 有两条版本线——桌面 Calculator Suite / Classic 6 是 6.0.x，
+#: 网页可嵌入引擎（GWT/HTML5 线）是 5.4.x，两者同构建号同步发布。
+#: 5.4.932.1（2026-10-09）即桌面 6.0.932.1 的网页对应构建，与
+#: https://www.geogebra.org/apps/latest/web3d/ 字节级一致
+#: （MD5 1f296cf6c59d0c788ed6b797a8228aa5），即 geogebra.org/classic 当今运行的引擎。
+#: 网页侧不存在 6.x 引擎（已逐一探测，全部 HTTP 403）。
+#: 旧值 5.4.907.0 已被 CDN 下线（HTTP 403），是本次迁移的直接原因。
+_GGB_CODEBASE = "https://www.geogebra.org/apps/5.4.932.1/web3d"
 
 
 def _ggb_error(message: str, status_code: int = 400):

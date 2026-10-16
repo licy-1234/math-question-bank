@@ -7,6 +7,7 @@ goes into ``-e``).
 """
 
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -121,8 +122,10 @@ def test_frozen_namespaces_and_entry_points_are_exposed():
         assert.equal(typeof window.GgbEmbed[key], 'function', 'GgbEmbed.' + key);
       }
       assert.equal(typeof window.GgbEmbed.GGB_CODEBASE, 'string');
-      // 必须钉在 5.x 分支，否则会默认拿到与教师 Classic 5 不一致的 GeoGebra 6。
-      assert.ok(window.GgbEmbed.GGB_CODEBASE.startsWith('https://www.geogebra.org/apps/5.4'),
+      // 必须钉在 Classic 6 现代版对应的具体构建上；否则 deployggb.js 会用它自己的
+      // 默认分支，可能与教师桌面版不一致。整版本号锁死，升级须同步改这里与 main.py。
+      assert.equal(window.GgbEmbed.GGB_CODEBASE,
+        'https://www.geogebra.org/apps/5.4.932.1/web3d',
         window.GgbEmbed.GGB_CODEBASE);
     """)
 
@@ -134,6 +137,27 @@ def test_deployggb_is_injected_lazily_not_statically():
       assert.equal(window.GgbEmbed.isReady(), false);
       assert.equal(typeof window.GgbEmbed.loadEngine, 'function');
     """)
+
+
+def _backend_codebase() -> str:
+    source = (ROOT / "main.py").read_text(encoding="utf-8")
+    match = re.search(r'^_GGB_CODEBASE\s*=\s*"([^"]+)"', source, re.MULTILINE)
+    assert match, "main.py 里找不到 _GGB_CODEBASE 赋值"
+    return match.group(1)
+
+
+def test_backend_and_frontend_codebase_stay_in_sync():
+    """导出模板（后端）与嵌入引擎（前端）必须钉同一个构建，否则两边会各自漂移。"""
+
+    backend = _backend_codebase()
+    frontend = re.search(r"GGB_CODEBASE\s*=\s*'([^']+)'", GGB_SOURCE)
+    assert frontend, "ggb.js 里找不到 GGB_CODEBASE 赋值"
+    assert backend == frontend.group(1), (
+        f"后端 _GGB_CODEBASE={backend!r} 与前端 GGB_CODEBASE={frontend.group(1)!r} 不一致"
+    )
+    assert backend == "https://www.geogebra.org/apps/5.4.932.1/web3d", (
+        "引擎未钉在 Classic 6 现代版对应构建 5.4.932.1 上"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -156,7 +180,7 @@ function freshHost() { const host = document.createElement('div'); return host; 
 """
 
 
-def test_mount_injects_pinned_classic5_readonly_applet_from_base64():
+def test_mount_injects_pinned_classic6_readonly_applet_from_base64():
     run_js(MOUNT_HARNESS + r"""
       const host = freshHost();
       const applet = await window.GgbEmbed.mount({ host, assetId: 7 });
@@ -176,7 +200,7 @@ def test_mount_injects_pinned_classic5_readonly_applet_from_base64():
       assert.equal('filename' in p, false);
       assert.equal(typeof p.ggbBase64, 'string');
       assert.ok(p.ggbBase64.length > 0);
-      // 版本号钉在 5.x codebase 上。
+      // 版本号钉在 Classic 6 现代版对应的具体构建上。
       assert.equal(engineState.codebase, window.GgbEmbed.GGB_CODEBASE);
       assert.ok(engineState.injectedId, 'applet.inject received a container id');
       assert.equal(window.GgbEmbed.isReady(), true);

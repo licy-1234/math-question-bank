@@ -12,10 +12,16 @@
     const safe = window.MathBankSafe;
 
     // === GeoGebra 引擎版本常量（全模块唯一可配置处） ===
-    // 官方文档提示：GeoGebra 版本 911 之后必须使用 5.4 路径，不能用 5.0。
-    // 引擎偶尔会随 CDN 更新，届时「只改这一处」即可整体切换（勿散落到各调用点）。
-    const GGB_CODEBASE = 'https://www.geogebra.org/apps/5.4.907.0/web3d';
+    // 2026-10-16 由 Classic 5 的 5.4.907.0 迁移到 Classic 6 现代版对应构建 5.4.932.1。
+    // 版本线说明：GeoGebra 桌面 Calculator Suite / Classic 6 是 6.0.x，网页可嵌入引擎
+    // （GWT/HTML5 线）是 5.4.x，两者同构建号同步发布——5.4.932.1（2026-10-09）即桌面
+    // 6.0.932.1 的网页对应构建，与 /apps/latest/web3d/ 字节级一致（MD5 1f296cf6…），
+    // 也就是 geogebra.org/classic 当今运行的引擎；网页侧不存在 6.x 引擎（已探测，全 403）。
+    // 旧值 5.4.907.0 已被 CDN 下线（HTTP 403），这是本次必须迁移的直接原因。
+    // 引擎升级时「只改这一处」即可整体切换（勿散落到各调用点）。
+    const GGB_CODEBASE = 'https://www.geogebra.org/apps/5.4.932.1/web3d';
     // deployggb.js 走官方 CDN 动态注入（不在 index.html 里静态引入），带超时与网络失败兜底。
+    // 它是版本无关的官方加载器：实际加载哪个模块由 codebase 路径末段决定（这里是 web3d）。
     const DEPLOYGGB_SRC = 'https://www.geogebra.org/apps/deployggb.js';
     const ENGINE_TIMEOUT_MS = 8000;
 
@@ -283,7 +289,7 @@
             container.innerHTML = `
                 <div class="ggb-embed-fallback" role="status">
                     <span class="ggb-embed-fallback-icon" aria-hidden="true"><i class="fa-solid fa-triangle-exclamation"></i></span>
-                    <span class="ggb-embed-fallback-text">无法加载 GeoGebra 组件（当前网络不可用）。可点「下载 .ggb」用本地 GeoGebra Classic 5 打开。</span>
+                    <span class="ggb-embed-fallback-text">无法加载 GeoGebra 组件（当前网络不可用）。可点「下载 .ggb」用本地 GeoGebra Classic 6 打开。</span>
                     <a class="ggb-embed-fallback-link" href="/api/ggb-assets/${encodeURIComponent(String(assetId || ''))}/file" download><i class="fa-solid fa-download" aria-hidden="true"></i><span>下载 .ggb</span></a>
                 </div>`;
         }
@@ -349,7 +355,8 @@
                 };
                 const applet = new GGBApplet(parameters, true);
                 if (applet && typeof applet.setHTML5Codebase === 'function') {
-                    // 钉住 5.x 分支，避免默认拿到 GeoGebra 6 与教师的 Classic 5 桌面版不一致。
+                    // 钉住具体构建（5.4.932.1 = Classic 6 桌面版的网页对应引擎），
+                    // 避免默认分支漂移导致与教师桌面版不一致。
                     applet.setHTML5Codebase(GGB_CODEBASE);
                 }
                 applet.inject(mountNode.id);
