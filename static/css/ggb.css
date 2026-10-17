@@ -585,6 +585,28 @@
     line-height: var(--ggb-lh-snug);
 }
 
+/* 失败兜底：标题 + 说明 + 重试/下载两条出路（区分超时与访问失败） */
+.ggb-embed-fallback-title {
+    color: var(--ggb-text-strong);
+    font-size: var(--ggb-fs-strong);
+    font-weight: 700;
+}
+
+.ggb-embed-fallback-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: var(--ggb-sp-2);
+}
+
+.ggb-embed-fallback-retry {
+    min-height: 36px;
+    padding: 0 var(--ggb-sp-4);
+    border-radius: var(--ggb-r-sm);
+    font-size: var(--ggb-fs-body);
+}
+
 .ggb-embed-fallback-link {
     display: inline-flex;
     align-items: center;
@@ -663,9 +685,108 @@
 
 /* ---- 右栏：检查器（标签 / 版本 / 关联题目） ---- */
 .ggb-inspector-panel {
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+.ggb-inspector-head {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ggb-sp-1);
+    padding: 8px 8px 6px var(--ggb-sp-3);
+    border-bottom: 1px solid var(--ggb-panel-border);
+}
+
+.ggb-inspector-heading {
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-badge);
+    font-weight: 800;
+    letter-spacing: 0.06em;
+}
+
+.ggb-inspector-toggle {
+    display: inline-flex;
+    width: 24px;
+    height: 24px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ggb-text-muted);
+    cursor: pointer;
+}
+
+.ggb-inspector-toggle:hover {
+    border-color: var(--ggb-panel-border);
+    background: rgba(var(--ggb-skeleton-rgb), 0.6);
+    color: var(--ggb-text-strong);
+}
+
+.ggb-inspector-body {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
     gap: var(--ggb-sp-3);
+    min-height: 0;
     padding: var(--ggb-sp-3);
     overflow-y: auto;
+}
+
+/* 折叠后的竖排导轨：44px，点击整条展开。 */
+.ggb-inspector-rail {
+    display: none;
+    flex: 1 1 auto;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 12px 0;
+    border: 0;
+    background: transparent;
+    color: var(--ggb-text-muted);
+    cursor: pointer;
+}
+
+.ggb-inspector-rail span {
+    font-size: var(--ggb-fs-badge);
+    letter-spacing: 0.2em;
+    writing-mode: vertical-rl;
+}
+
+.ggb-inspector-rail:hover {
+    background: rgba(var(--ggb-skeleton-rgb), 0.4);
+    color: var(--ggb-text-strong);
+}
+
+.ggb-workspace-body {
+    transition: grid-template-columns 0.22s ease;
+}
+
+.ggb-workspace-body.is-inspector-collapsed {
+    grid-template-columns:
+        minmax(232px, var(--ggb-list-track))
+        minmax(0, 1fr)
+        44px;
+}
+
+.ggb-workspace-body.is-inspector-collapsed .ggb-inspector-head,
+.ggb-workspace-body.is-inspector-collapsed .ggb-inspector-body {
+    display: none;
+}
+
+.ggb-workspace-body.is-inspector-collapsed .ggb-inspector-rail {
+    display: flex;
+}
+
+/* 收起太窄时，把「收起」按钮的焦点环留在可视区。 */
+.ggb-inspector-toggle:focus-visible,
+.ggb-inspector-rail:focus-visible {
+    outline: 2px solid rgb(var(--brand-500-rgb));
+    outline-offset: 2px;
 }
 
 .ggb-inspector-section {
@@ -1085,11 +1206,19 @@
     /* 标题行窄屏改为「标题独占一行 + 状态/保存右对齐」，避免控件乱换行。 */
     .ggb-detail-title-row { justify-content: flex-end; }
     .ggb-detail-title-row #ggbTitleInput { flex: 1 1 100%; }
+    .ggb-workspace-body.is-inspector-collapsed {
+        grid-template-columns: 200px minmax(0, 1fr) 44px;
+    }
     .ggb-detail-actions-row .glass-btn { padding: var(--ggb-sp-1) var(--ggb-sp-2); }
 }
 
 /* ---- 响应式：960 以下切单栏 + 底部 pane 切换 ---- */
 @media (max-width: 960px) {
+    /* 单栏 + 底部切换：折叠态在移动端没有意义，强制恢复完整面板。 */
+    .ggb-workspace-body.is-inspector-collapsed .ggb-inspector-head,
+    .ggb-workspace-body.is-inspector-collapsed .ggb-inspector-body { display: flex; }
+    .ggb-workspace-body.is-inspector-collapsed .ggb-inspector-rail { display: none; }
+    .ggb-inspector-toggle { display: none; }
     .ggb-workspace-body { display: flex; flex-direction: column; gap: var(--ggb-sp-2); }
     .ggb-list-panel,
     .ggb-detail-panel,

@@ -28,8 +28,9 @@
     const ENGINE_TIMEOUT_MS = 15000;
     // inject 阶段（约 8 MB 引擎主体下载 + GWT 初始化）的兜底超时。
     // 此前只有 deployggb.js 那 37 KB 有超时，主体阶段一旦卡住就是无限转圈；
-    // 超时后撤占位并走「下载 .ggb 用本地 Classic 6 打开」的既有兜底。
-    const INJECT_TIMEOUT_MS = 60000;
+    // 超时后撤占位并给出「重试 / 下载 .ggb」两条出路。
+    // 60s 对跨境慢网偏紧（8 MB 在 100 KB/s 下需 80s），放宽到 90s。
+    const INJECT_TIMEOUT_MS = 90000;
 
     // ---------------- 词表（本地兜底；后端 /api/config/ggb-link-types 就绪后以其为准） ----------------
 
@@ -436,14 +437,35 @@
             return base64;
         }
 
-        function showLoadFailure(container, assetId) {
+        // 加载失败兜底：区分「超时」与「访问失败」，两种情况都给重试入口。
+        // 旧版统一写「当前网络不可用」——但实际更多是跨境 CDN 慢/被拦，
+        // 用户明明有网却被告知没有网络，这是本次要修的误导。
+        function showLoadFailure(container, assetId, reason) {
             if (!container) return;
+            const host = container.parentNode;
+            const title = reason === 'timeout'
+                ? 'GeoGebra 引擎加载超时'
+                : 'GeoGebra 引擎暂时无法加载';
+            const hint = reason === 'timeout'
+                ? '首次使用需下载约 8 MB 引擎，当前网络较慢或跨境线路不稳定。可重试，或下载 .ggb 用本地 GeoGebra Classic 6 打开。'
+                : '访问 geogebra.org 失败（网络限制、代理或 CDN 不可达），题库本身不受影响。可重试，或下载 .ggb 用本地 GeoGebra Classic 6 打开。';
             container.innerHTML = `
-                <div class="ggb-embed-fallback" role="status">
+                <div class="ggb-embed-fallback" role="alert">
                     <span class="ggb-embed-fallback-icon" aria-hidden="true"><i class="fa-solid fa-triangle-exclamation"></i></span>
-                    <span class="ggb-embed-fallback-text">无法加载 GeoGebra 组件（当前网络不可用）。可点「下载 .ggb」用本地 GeoGebra Classic 6 打开。</span>
-                    <a class="ggb-embed-fallback-link" href="/api/ggb-assets/${encodeURIComponent(String(assetId || ''))}/file" download><i class="fa-solid fa-download" aria-hidden="true"></i><span>下载 .ggb</span></a>
+                    <strong class="ggb-embed-fallback-title">${escapeText(title)}</strong>
+                    <span class="ggb-embed-fallback-text">${escapeText(hint)}</span>
+                    <span class="ggb-embed-fallback-actions">
+                        <button type="button" class="glass-btn ggb-embed-fallback-retry" data-ggb-retry>重试</button>
+                        <a class="ggb-embed-fallback-link" href="/api/ggb-assets/${encodeURIComponent(String(assetId || ''))}/file" download><i class="fa-solid fa-download" aria-hidden="true"></i><span>下载 .ggb</span></a>
+                    </span>
                 </div>`;
+            const retry = container.querySelector('[data-ggb-retry]');
+            if (retry && host) {
+                retry.addEventListener('click', () => {
+                    host.innerHTML = embedPlaceholderHtml(null);
+                    mount({ host, assetId });
+                });
+            }
         }
 
         // 占位文案随真实阶段推进：下载引擎（带百分比）→ 初始化画布 → 移除。
@@ -525,7 +547,7 @@
                 if (!activeMountNode || activeMountNode.parentNode !== host) return;
                 debug.debug('GGB inject timed out', assetId);
                 removeActivePlaceholder();
-                showLoadFailure(mountNode, assetId);
+                showLoadFailure(mountNode, assetId, 'timeout');
             }, INJECT_TIMEOUT_MS);
             // Node 测试环境里别让长定时器拖住进程；浏览器返回数字，无 unref。
             if (injectTimer && typeof injectTimer.unref === 'function') injectTimer.unref();
@@ -686,7 +708,8 @@
                 debug.debug('GGB mount failed:', error && error.message);
                 // 挂载失败也要退订进度，否则监听器会随每次失败累积（泄漏）。
                 if (activeProgressUnsubscribe) { activeProgressUnsubscribe(); activeProgressUnsubscribe = null; }
-                showLoadFailure(mountNode, assetId);
+                const message = String((error && error.message) || '');
+                showLoadFailure(mountNode, assetId, /超时|timeout/i.test(message) ? 'timeout' : 'network');
                 return null;
             }
         }
@@ -1716,8 +1739,59 @@
         });
     }
 
+    // ---------------- 检查器抽屉（桌面端可收起为 44px 导轨） ----------------
+
+    const INSPECTOR_COLLAPSED_KEY = 'ggb-inspector-collapsed';
+
+    function readInspectorCollapsed() {
+        try {
+            return window.localStorage.getItem(INSPECTOR_COLLAPSED_KEY) === '1';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    // 折叠只改一处状态：body 上的 class。宽度由 grid 轨道过渡，
+    // 移动端（≤960，flex 单栏）由 CSS 强制恢复完整面板。
+    function applyInspectorCollapsed(collapsed, options = {}) {
+        const body = document.querySelector('.ggb-workspace-body');
+        const panel = document.querySelector('.ggb-inspector-panel');
+        if (!body || !panel) return;
+        const on = !!collapsed;
+        body.classList.toggle('is-inspector-collapsed', on);
+        const toggle = panel.querySelector('.ggb-inspector-toggle');
+        const content = panel.querySelector('.ggb-inspector-body');
+        if (toggle) {
+            toggle.setAttribute('aria-expanded', on ? 'false' : 'true');
+            toggle.setAttribute('title', on ? '展开检查器' : '收起检查器');
+        }
+        if (content) content.setAttribute('aria-hidden', on ? 'true' : 'false');
+        if (options.persist) {
+            try {
+                window.localStorage.setItem(INSPECTOR_COLLAPSED_KEY, on ? '1' : '0');
+            } catch (e) { /* 隐私模式忽略 */ }
+        }
+        // 画布可用宽度变了：让 GGB 重新测量（宿主 ResizeObserver 也会兜底）。
+        requestAnimationFrame(() => GgbEmbed.resize());
+    }
+
+    function bindInspectorDrawer() {
+        const panel = document.querySelector('.ggb-inspector-panel');
+        if (!panel || panel.dataset.drawerBound === '1') return;
+        panel.dataset.drawerBound = '1';
+        panel.addEventListener('click', (event) => {
+            if (event.target.closest('.ggb-inspector-toggle')) {
+                applyInspectorCollapsed(true, { persist: true });
+            } else if (event.target.closest('.ggb-inspector-rail')) {
+                applyInspectorCollapsed(false, { persist: true });
+            }
+        });
+    }
+
     async function renderGgbWorkspace() {
         debug.debug('renderGgbWorkspace');
+        bindInspectorDrawer();
+        applyInspectorCollapsed(readInspectorCollapsed());
         // 打开工作区即并行预热引擎（不 await：与列表/配置请求同时进行）。
         // 用户从列表点开一个资源通常要一两秒，足够引擎下完一大半。
         if (window.GgbEmbed && typeof window.GgbEmbed.prewarm === 'function') window.GgbEmbed.prewarm();

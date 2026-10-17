@@ -1543,9 +1543,22 @@
                     </div>
                 </section>
                 <aside class="ggb-inspector-panel" aria-label="检查器">
-                    <div class="ggb-inspector-section" id="ggbInspectorTags"><!-- Rendered by ggb.js --></div>
-                    <div class="ggb-inspector-section" id="ggbInspectorVersions"><!-- Rendered by ggb.js --></div>
-                    <div class="ggb-inspector-section" id="ggbInspectorLinks"><!-- Rendered by ggb.js --></div>
+                    <div class="ggb-inspector-head">
+                        <span class="ggb-inspector-heading">检查器</span>
+                        <button type="button" class="ggb-inspector-toggle" aria-expanded="true"
+                                aria-controls="ggbInspectorBody" title="收起检查器">
+                            <i class="fa-solid fa-angles-right" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                    <div class="ggb-inspector-body custom-scrollbar" id="ggbInspectorBody">
+                        <div class="ggb-inspector-section" id="ggbInspectorTags"><!-- Rendered by ggb.js --></div>
+                        <div class="ggb-inspector-section" id="ggbInspectorVersions"><!-- Rendered by ggb.js --></div>
+                        <div class="ggb-inspector-section" id="ggbInspectorLinks"><!-- Rendered by ggb.js --></div>
+                    </div>
+                    <button type="button" class="ggb-inspector-rail" aria-label="展开检查器" title="展开检查器">
+                        <i class="fa-solid fa-angles-left" aria-hidden="true"></i>
+                        <span>检视</span>
+                    </button>
                 </aside>
             </div>
             <div class="ggb-mobile-switch" role="tablist" aria-label="演示资源库视图">

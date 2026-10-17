@@ -268,7 +268,10 @@ def test_network_failure_falls_back_with_download_link():
       const applet = await window.GgbEmbed.mount({ host, assetId: 42 });
       assert.equal(applet, null);
       const html = host.children[0].innerHTML;
-      assert.ok(html.includes('无法加载 GeoGebra 组件'), html);
+      // 文案必须区分「超时 / 访问失败」，不能再笼统地说「当前网络不可用」。
+      assert.ok(html.includes('暂时无法加载'), html);
+      assert.equal(html.includes('当前网络不可用'), false, html);
+      assert.ok(html.includes('重试'), html);
       assert.ok(html.includes('/api/ggb-assets/42/file'), html);
     """)
 
@@ -637,6 +640,30 @@ def test_ggb_inspector_uses_the_tag_normalizer():
     assert "(tags || []).map" not in GGB_SOURCE
     # 编辑标签时已有标签要保留原维度（不能把知识点降级成自定义）。
     assert "dimByCode" in GGB_SOURCE
+
+
+def test_inspector_drawer_collapses_on_desktop_and_restores_on_mobile():
+    """检查器抽屉：桌面可收起为 44px 导轨，状态持久化，移动端必须恢复完整面板。"""
+
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    for marker in ('ggb-inspector-head', 'ggb-inspector-toggle',
+                   'ggb-inspector-body', 'ggb-inspector-rail'):
+        assert marker in html, marker
+
+    assert "applyInspectorCollapsed" in GGB_SOURCE
+    assert "ggb-inspector-collapsed" in GGB_SOURCE, "折叠状态须持久化"
+    assert "bindInspectorDrawer" in GGB_SOURCE
+    assert "bindInspectorDrawer();" in GGB_SOURCE, "渲染工作区时必须重新应用折叠状态"
+
+    css = (ROOT / "static" / "css" / "ggb.css").read_text(encoding="utf-8")
+    assert ".ggb-workspace-body.is-inspector-collapsed" in css
+    assert "44px" in css
+    assert "grid-template-columns 0.22s ease" in css, "展开/折叠需要有宽度过渡"
+    # 移动端（≤960 单栏）不得保留折叠态。
+    mobile_at = css.index("@media (max-width: 960px)")
+    mobile_block = css[mobile_at:css.index("@media (max-width: 768px)", mobile_at)]
+    assert "is-inspector-collapsed .ggb-inspector-rail { display: none; }" in mobile_block
+    assert ".ggb-inspector-toggle { display: none; }" in mobile_block
 
 
 def test_ggb_module_has_no_bare_console_log():
