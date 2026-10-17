@@ -844,6 +844,7 @@
     async function loadAssetDetail(assetId) {
         // 切换资源前先销毁上一个 applet，避免实例泄漏。
         GgbEmbed.unmount();
+        clearVersionPreviewBadge();
         GgbStore.loadingDetail = true;
         renderDetailPanel();
         try {
@@ -899,11 +900,17 @@
                 <textarea id="ggbDescInput" class="glass-input" rows="2" placeholder="演示说明（可选）">${escapeText(asset.description || '')}</textarea>
             </div>
             <div class="ggb-detail-actions-row">
-                <button type="button" class="glass-btn" id="ggbDownloadBtn"><i class="fa-solid fa-download" aria-hidden="true"></i><span>下载 .ggb</span></button>
-                <button type="button" class="glass-btn" id="ggbEditOnlineBtn"><i class="fa-solid fa-pen-to-square" aria-hidden="true"></i><span>在线编辑</span></button>
-                <button type="button" class="glass-btn" id="ggbSaveVersionBtn"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i><span>存新版本</span></button>
-                <button type="button" class="glass-btn" id="ggbDuplicateBtn"><i class="fa-solid fa-clone" aria-hidden="true"></i><span>另存副本</span></button>
-                <button type="button" class="glass-btn glass-btn-danger" id="ggbDeleteBtn"><i class="fa-solid fa-trash-can" aria-hidden="true"></i><span>删除</span></button>
+                <div class="ggb-actions-group" role="group" aria-label="文件操作">
+                    <button type="button" class="glass-btn" id="ggbDownloadBtn"><i class="fa-solid fa-download" aria-hidden="true"></i><span>下载 .ggb</span></button>
+                    <button type="button" class="glass-btn" id="ggbEditOnlineBtn"><i class="fa-solid fa-pen-to-square" aria-hidden="true"></i><span>在线编辑</span></button>
+                </div>
+                <div class="ggb-actions-group" role="group" aria-label="版本操作">
+                    <button type="button" class="glass-btn" id="ggbSaveVersionBtn"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i><span>存新版本</span></button>
+                    <button type="button" class="glass-btn" id="ggbDuplicateBtn"><i class="fa-solid fa-clone" aria-hidden="true"></i><span>另存副本</span></button>
+                </div>
+                <div class="ggb-actions-group ggb-actions-danger" role="group" aria-label="危险操作">
+                    <button type="button" class="glass-btn glass-btn-danger" id="ggbDeleteBtn"><i class="fa-solid fa-trash-can" aria-hidden="true"></i><span>删除</span></button>
+                </div>
             </div>`;
         bindDetailHeader(asset);
 
@@ -1023,6 +1030,7 @@
                             <span class="ggb-version-no">v${escapeText(no)}${current ? ' · 当前' : ''}</span>
                             <span class="ggb-version-note">${escapeText(version.note || formatTime(version.created_at))}</span>
                             <span class="ggb-version-actions">
+                                <button type="button" class="ggb-icon-btn" data-ggb-version-preview="${escapeAttribute(no)}" title="在画布中预览该版本" aria-label="在画布中预览 v${escapeAttribute(no)}"><i class="fa-solid fa-eye" aria-hidden="true"></i></button>
                                 <button type="button" class="ggb-icon-btn" data-ggb-version-download="${escapeAttribute(no)}" title="下载该版本"><i class="fa-solid fa-download" aria-hidden="true"></i></button>
                                 ${current ? '' : `<button type="button" class="ggb-icon-btn" data-ggb-version-restore="${escapeAttribute(no)}" title="回滚到该版本"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i></button>`}
                                 ${versions.length > 1 ? `<button type="button" class="ggb-icon-btn ggb-icon-danger" data-ggb-version-delete="${escapeAttribute(no)}" title="删除该版本"><i class="fa-solid fa-trash-can" aria-hidden="true"></i></button>` : ''}
@@ -1030,6 +1038,9 @@
                         </div>`;
                     }).join('') : '<span class="ggb-inspector-empty">还没有版本记录</span>'}
                 </div>`;
+            versionsBox.querySelectorAll('[data-ggb-version-preview]').forEach(button => {
+                button.addEventListener('click', () => previewVersion(asset, button.dataset.ggbVersionPreview));
+            });
             versionsBox.querySelectorAll('[data-ggb-version-download]').forEach(button => {
                 button.addEventListener('click', () => {
                     const no = button.dataset.ggbVersionDownload;
@@ -1156,6 +1167,47 @@
                 submitBtn.disabled = false;
             }
         });
+    }
+
+    // ---------------- 版本预览（画布切到历史版本，不改变当前版本） ----------------
+
+    // 版本预览：把画布切到指定历史版本。.ggb 按 versionNo 单独取，
+    // base64 缓存以 assetId:versionNo 分键，不会污染当前版本。
+    // 非当前版本时浮出角标「预览 vN · 返回当前版本」，避免与当前版本混淆。
+    function previewVersion(asset, versionNo) {
+        const host = document.getElementById('ggbAssetEmbedHost');
+        if (!host || !asset) return;
+        const no = parseInt(versionNo, 10);
+        if (!Number.isSafeInteger(no) || no <= 0) return;
+        host.innerHTML = embedPlaceholderHtml(asset);
+        GgbEmbed.mount({ host, assetId: asset.id, versionNo: no });
+        if (no === Number(asset.current_version_no || 1)) {
+            clearVersionPreviewBadge();
+            return;
+        }
+        showVersionPreviewBadge(asset, no);
+    }
+
+    function showVersionPreviewBadge(asset, versionNo) {
+        const panel = document.querySelector('.ggb-embed-panel');
+        if (!panel) return;
+        let badge = panel.querySelector('.ggb-version-preview-badge');
+        if (!badge) {
+            badge = document.createElement('button');
+            badge.type = 'button';
+            badge.className = 'ggb-version-preview-badge';
+            panel.appendChild(badge);
+            badge.addEventListener('click', () => previewVersion(asset, asset.current_version_no || 1));
+        }
+        badge.dataset.versionNo = String(versionNo);
+        badge.innerHTML = `<i class="fa-solid fa-eye" aria-hidden="true"></i>`
+            + `<span>预览 v${escapeText(versionNo)}</span>`
+            + `<em>返回当前版本</em>`;
+    }
+
+    function clearVersionPreviewBadge() {
+        const badge = document.querySelector('.ggb-version-preview-badge');
+        if (badge && badge.parentNode) badge.parentNode.removeChild(badge);
     }
 
     // 在线编辑（V2.0）：可编辑 applet + multipart 替换当前文件。本次先接一半（保存回写）。

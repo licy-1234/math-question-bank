@@ -376,7 +376,25 @@
 .ggb-detail-actions-row {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--ggb-sp-2);
+    gap: var(--ggb-sp-3);
+    align-items: center;
+}
+
+/* 操作分组：文件 / 版本 / 危险。用细竖线分隔，危险操作推到最右侧，
+   与常规操作拉开距离——五个同权按钮平铺时最容易被误点的就是删除。 */
+.ggb-actions-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ggb-sp-1);
+    align-items: center;
+    padding-right: var(--ggb-sp-3);
+    border-right: 1px solid var(--ggb-panel-border);
+}
+
+.ggb-actions-group:last-child {
+    padding-right: 0;
+    border-right: 0;
+    margin-left: auto;
 }
 
 /* 主舞台：GGB 嵌入面板占满详情区剩余高度，预览条沉底 */
@@ -399,6 +417,7 @@
 
 /* ---- GGB 嵌入面板（详情区 / 在线编辑 / 题目侧共用） ---- */
 .ggb-embed-panel {
+    position: relative; /* 版本预览角标的定位上下文 */
     flex: 1 1 auto;
     min-height: 0;
     display: flex;
@@ -407,6 +426,37 @@
     border: 1px solid var(--ggb-panel-border);
     border-radius: var(--ggb-r-lg);
     background: var(--apple-bg-elevated);
+}
+
+/* 版本预览角标：明确「画布现在显示的是历史版本」，点击一键回到当前版本。
+   没有它，用户很容易把历史版本误认为当前版本。 */
+.ggb-version-preview-badge {
+    position: absolute;
+    top: var(--ggb-sp-2);
+    left: var(--ggb-sp-2);
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ggb-sp-1);
+    padding: var(--ggb-sp-1) var(--ggb-sp-2);
+    border: 1px solid rgba(var(--brand-600-rgb), 0.35);
+    border-radius: 999px;
+    background: rgba(var(--brand-50-rgb), 0.94);
+    color: rgb(var(--brand-700-rgb));
+    font-size: var(--ggb-fs-badge);
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.ggb-version-preview-badge:hover {
+    background: rgba(var(--brand-100-rgb), 0.98);
+}
+
+.ggb-version-preview-badge em {
+    font-style: normal;
+    opacity: 0.72;
+    padding-left: var(--ggb-sp-1);
+    border-left: 1px solid rgba(var(--brand-600-rgb), 0.25);
 }
 
 /* applet 宿主：position:relative + 内部绝对定位，保证注入时拿到确定像素尺寸 */
@@ -448,7 +498,14 @@
     align-items: center;
     justify-content: center;
     overflow: hidden;
-    background: var(--ggb-skeleton);
+    /* 骨架网格：等待期给出「画布即将出现」的尺度与结构线索。
+       一整块纯色空白在长等待时很像故障，网格能显著降低这种观感（无预览图时尤其明显）。 */
+    background-color: var(--ggb-skeleton);
+    background-image:
+        linear-gradient(to right, rgba(148, 163, 184, 0.16) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(148, 163, 184, 0.16) 1px, transparent 1px);
+    background-size: 28px 28px;
+    background-position: center center;
 }
 
 .ggb-embed-placeholder-image {
@@ -844,8 +901,18 @@
 .ggb-form-hint {
     margin: var(--ggb-sp-2) 0 0;
     color: var(--ggb-text-muted);
-    font-size: var(--ggb-fs-badge);
-    line-height: var(--ggb-lh-snug);
+    font-size: var(--ggb-fs-caption);
+    line-height: 1.6;
+}
+
+/* 在线编辑弹窗：画布区必须有可辨识的底色与边界。
+   白色弹窗 + 白色画布会糊成一片，用户分不清哪里可以画（截图中的弹窗即此观感）。 */
+#ggbOnlineEditModal .ggb-embed-panel {
+    background: var(--ggb-canvas);
+}
+
+#ggbOnlineEditModal .ggb-embed-panel .ggb-embed-host {
+    min-height: clamp(280px, 44vh, 460px);
 }
 
 /* ---- 键盘焦点可见性（与 app.css 的玻璃按钮同一规范） ---- */
@@ -913,6 +980,9 @@
     .ggb-workspace-heading h2 { font-size: var(--ggb-fs-title); }
     .ggb-workspace-actions { width: 100%; }
     .ggb-detail-actions-row { flex-direction: column; align-items: stretch; }
+    /* 单列堆叠时竖向分隔线失去意义，改为不占位。 */
+    .ggb-actions-group { padding-right: 0; border-right: 0; }
+    .ggb-actions-group:last-child { margin-left: 0; }
     .ggb-detail-title-row #ggbTitleInput { flex-basis: 100%; }
     .ggb-question-embed .ggb-embed-host { height: 60vh; }
 }
