@@ -707,6 +707,14 @@
     font-weight: 500;
 }
 
+/* 检查器内的次要动作（编辑标签等）：紧凑、左对齐。
+   面板是 flex column + stretch，按钮会通栏拉伸，视觉重量压过标题。 */
+.ggb-inspector-action {
+    align-self: flex-start;
+    padding: var(--ggb-sp-1) var(--ggb-sp-2);
+    font-size: var(--ggb-fs-badge);
+}
+
 .ggb-version-list,
 .ggb-link-list {
     display: flex;
@@ -1048,9 +1056,9 @@
     /* 笔记本宽度（1080–1100）下三栏会把详情栏挤到 ~288px，GGB 几乎不可用。
        显式收窄两侧轨道并放宽上下限，把空间还给画布。 */
     .ggb-workspace-body {
-        --ggb-list-track: 208px;
-        --ggb-inspector-track: 224px;
-        grid-template-columns: 208px minmax(0, 1fr) 224px;
+        --ggb-list-track: 200px;
+        --ggb-inspector-track: 212px;
+        grid-template-columns: 200px minmax(0, 1fr) 212px;
     }
     .ggb-detail-actions-row .glass-btn { padding: var(--ggb-sp-1) var(--ggb-sp-2); }
 }

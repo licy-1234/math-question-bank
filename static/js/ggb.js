@@ -1042,6 +1042,41 @@
 
     // ---------------- 检查器（标签 / 版本 / 关联题目） ----------------
 
+    // 详情接口的 tags 是「按维度分组的对象」（{knowledge:[], dynamic_type:[],
+    // difficulty:[], custom:[]}），不是数组。前端若直接 .map 会抛 TypeError ——
+    // 这既是「标签永远显示还没有标签」的原因，也是「编辑标签点击无响应」的根因
+    // （事件其实触发了，但 handler 第一行就抛错，弹窗没出来）。
+    // 这里统一成 [{ code, dim }]，并兼容数组 / 字符串数组 / 对象数组三种旧形状。
+    const GGB_TAG_DIM_LABELS = {
+        knowledge: '知识点',
+        dynamic_type: '动态类型',
+        difficulty: '难度',
+        custom: '自定义'
+    };
+
+    function normalizeGgbTags(raw) {
+        if (!raw) return [];
+        if (Array.isArray(raw)) {
+            return raw.reduce((acc, item) => {
+                if (typeof item === 'string') {
+                    if (item) acc.push({ code: item, dim: '' });
+                    return acc;
+                }
+                const code = item && (item.tag_code || item.code || item.label);
+                if (code) acc.push({ code: String(code), dim: item.tag_dim || item.dim || '' });
+                return acc;
+            }, []);
+        }
+        if (typeof raw === 'object') {
+            return Object.keys(raw).reduce((acc, dim) => {
+                const codes = Array.isArray(raw[dim]) ? raw[dim] : [];
+                codes.forEach(code => { if (code) acc.push({ code: String(code), dim }); });
+                return acc;
+            }, []);
+        }
+        return [];
+    }
+
     function renderInspector() {
         const tagsBox = document.getElementById('ggbInspectorTags');
         const versionsBox = document.getElementById('ggbInspectorVersions');
@@ -1054,23 +1089,20 @@
             return;
         }
         const asset = detail.asset || {};
-        const tags = detail.tags || [];
+        const tags = normalizeGgbTags(detail.tags);
         const versions = detail.versions || [];
         const links = detail.links || [];
 
         if (tagsBox) {
             tagsBox.innerHTML = `
-                <h3 class="ggb-inspector-title">标签</h3>
+                <h3 class="ggb-inspector-title">标签${tags.length ? `（${tags.length}）` : ''}</h3>
                 <div class="ggb-tag-list">
                     ${tags.length
-                        ? tags.map((tag) => {
-                            const code = typeof tag === 'string' ? tag : (tag.tag_code || tag.code || tag.label || '');
-                            const dim = typeof tag === 'string' ? '' : (tag.tag_dim || tag.dim || '');
-                            return `<span class="ggb-tag-chip">${escapeText(code)}${dim ? `<em>${escapeText(dim)}</em>` : ''}</span>`;
-                        }).join('')
+                        ? tags.map(tag => `<span class="ggb-tag-chip">${escapeText(tag.code)}`
+                            + `${tag.dim ? `<em>${escapeText(GGB_TAG_DIM_LABELS[tag.dim] || tag.dim)}</em>` : ''}</span>`).join('')
                         : '<span class="ggb-inspector-empty">还没有标签</span>'}
                 </div>
-                <button type="button" class="glass-btn" id="ggbEditTagsBtn"><i class="fa-solid fa-tags" aria-hidden="true"></i><span>编辑标签</span></button>`;
+                <button type="button" class="glass-btn ggb-inspector-action" id="ggbEditTagsBtn"><i class="fa-solid fa-tags" aria-hidden="true"></i><span>编辑标签</span></button>`;
             const tagBtn = tagsBox.querySelector('#ggbEditTagsBtn');
             if (tagBtn) tagBtn.addEventListener('click', () => editTags(asset, tags));
         }
@@ -1435,10 +1467,13 @@
     }
 
     function editTags(asset, tags) {
-        const current = (tags || []).map(tag => typeof tag === 'string' ? tag : (tag.tag_code || tag.code || tag.label || '')).filter(Boolean);
+        const normalized = normalizeGgbTags(tags);
+        const current = normalized.map(tag => tag.code);
+        // 已有标签保留原维度，新输入的才按 custom 存——不能把知识点标签改写成自定义。
+        const dimByCode = new Map(normalized.map(tag => [tag.code, tag.dim || 'custom']));
         const modal = ensureModalShell('ggbTagsModal', '编辑标签', `
             <label class="ggb-form-field ggb-form-full">
-                <span>标签（逗号分隔，整体替换）</span>
+                <span>标签（逗号分隔，整体替换；已有标签保留原维度）</span>
                 <input id="ggbTagsInput" type="text" class="glass-input" value="${escapeAttribute(current.join(', '))}">
             </label>`, `
             <button type="button" class="glass-btn" data-ggb-modal-close="ggbTagsModal">取消</button>
@@ -1446,7 +1481,7 @@
         openModal('ggbTagsModal');
         modal.querySelector('#ggbTagsSubmitBtn').addEventListener('click', async () => {
             const entries = modal.querySelector('#ggbTagsInput').value.split(',').map(s => s.trim()).filter(Boolean);
-            const payload = entries.map(tag => ({ tag_code: tag, tag_dim: 'custom' }));
+            const payload = entries.map(code => ({ tag_code: code, tag_dim: dimByCode.get(code) || 'custom' }));
             try {
                 await api(`/api/ggb-assets/${asset.id}/tags`, { method: 'PUT', json: { tags: payload } });
                 toast('标签已保存', 'success');
@@ -1715,6 +1750,7 @@
         downloadAsset,
         selectAsset,
         loadAssetList,
+        normalizeGgbTags,
         setMobilePane: setGgbMobilePane
     };
     window.renderGgbWorkspace = renderGgbWorkspace;

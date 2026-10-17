@@ -605,6 +605,40 @@ def test_inner_select_workspace_reserves_a_ggb_branch():
     assert ggb_at < bank_fallback_at, "ggb 占位分支必须排在 bank 兜底 else 之前"
 
 
+def test_ggb_tags_normalize_grouped_object_and_arrays():
+    """/api/ggb-assets/{id} 的 tags 是按维度分组的对象，前端必须归一化后才能用。
+
+    回归背景：前端曾把它当数组 .map，抛 TypeError，导致标签区永远显示
+    「还没有标签」，且「编辑标签」点击后 handler 第一行就抛错、弹窗不出现。
+    """
+
+    run_js(r"""
+      const grouped = window.GgbPanel.normalizeGgbTags({
+        knowledge: ['二次函数'], dynamic_type: ['轨迹'], difficulty: [], custom: ['重点']
+      });
+      assert.deepEqual(grouped, [
+        { code: '二次函数', dim: 'knowledge' },
+        { code: '轨迹', dim: 'dynamic_type' },
+        { code: '重点', dim: 'custom' }
+      ]);
+      assert.deepEqual(window.GgbPanel.normalizeGgbTags(['a', 'b']),
+        [{ code: 'a', dim: '' }, { code: 'b', dim: '' }]);
+      assert.deepEqual(window.GgbPanel.normalizeGgbTags([{ tag_code: 'x', tag_dim: 'custom' }]),
+        [{ code: 'x', dim: 'custom' }]);
+      assert.deepEqual(window.GgbPanel.normalizeGgbTags(null), []);
+      assert.deepEqual(window.GgbPanel.normalizeGgbTags('nope'), []);
+    """)
+
+
+def test_ggb_inspector_uses_the_tag_normalizer():
+    # 渲染与编辑都必须走归一化，不能再出现「把对象当数组」的老写法。
+    assert "const tags = normalizeGgbTags(detail.tags);" in GGB_SOURCE
+    assert "normalizeGgbTags(tags)" in GGB_SOURCE
+    assert "(tags || []).map" not in GGB_SOURCE
+    # 编辑标签时已有标签要保留原维度（不能把知识点降级成自定义）。
+    assert "dimByCode" in GGB_SOURCE
+
+
 def test_ggb_module_has_no_bare_console_log():
     for lineno, line in enumerate(GGB_SOURCE.splitlines(), start=1):
         assert "console.log(" not in line, f"ggb.js:{lineno} uses a bare console.log"
