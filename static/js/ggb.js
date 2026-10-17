@@ -48,6 +48,9 @@
         return PREFER_LOCAL_ENGINE ? (GGB_LOCAL_BASE + '/deployggb.js') : DEPLOYGGB_SRC;
     }
 
+    // 预览图大小上限（与后端 asset_security.MAX_SINGLE_IMAGE_BYTES 保持一致）。
+    const MAX_PREVIEW_IMAGE_BYTES = 10 * 1024 * 1024;
+
     // ---------------- 词表（本地兜底；后端 /api/config/ggb-link-types 就绪后以其为准） ----------------
 
     const LINK_LABELS = {
@@ -989,6 +992,10 @@
         header.innerHTML = `
             <div class="ggb-detail-title-row">
                 <input id="ggbTitleInput" class="glass-input" value="${escapeAttribute(asset.title || '')}" aria-label="演示标题" maxlength="200">
+                <select id="ggbDemoTypeSelect" class="glass-select" aria-label="演示类型">
+                    <option value="">不指定</option>
+                    ${dynamicTypeOptions().map(type => `<option value="${escapeAttribute(type.code)}">${escapeText(type.label)}</option>`).join('')}
+                </select>
                 <select id="ggbStatusSelect" class="glass-select" aria-label="资源状态">
                     ${['active', 'archived', 'draft'].map(s => `<option value="${s}" ${s === asset.status ? 'selected' : ''}>${STATUS_LABELS[s] || s}</option>`).join('')}
                 </select>
@@ -1032,8 +1039,15 @@
                         <span class="ggb-preview-strip-title">${escapeText(asset.title || '未命名演示')}</span>
                         <span class="ggb-preview-strip-meta">${escapeText(formatBytes(asset.file_size))} · v${escapeText(asset.current_version_no || 1)} · ${escapeText(formatTime(asset.updated_at))}</span>
                     </span>
+                    <span class="ggb-preview-strip-actions">
+                        <button type="button" class="ggb-icon-btn" id="ggbPreviewReplaceBtn" title="更换预览图" aria-label="更换预览图"><i class="fa-solid fa-image" aria-hidden="true"></i></button>
+                        <button type="button" class="ggb-icon-btn ggb-icon-danger" id="ggbPreviewRemoveBtn" title="移除预览图" aria-label="移除预览图"><i class="fa-solid fa-trash-can" aria-hidden="true"></i></button>
+                        <input type="file" id="ggbPreviewFileInput" class="hidden" accept="image/png,image/jpeg,image/gif,image/webp">
+                    </span>
                 </div>
             </div>`;
+
+        bindPreviewStripActions(asset);
 
         const host = document.getElementById('ggbAssetEmbedHost');
         if (host) {
@@ -1049,13 +1063,16 @@
             saveBtn.addEventListener('click', async () => {
                 const title = document.getElementById('ggbTitleInput').value.trim();
                 if (!title) { toast('标题不能为空', 'info'); return; }
+                if (title.length > 200) { toast('标题不能超过 200 字。', 'error'); return; }
+                const demoSelect = document.getElementById('ggbDemoTypeSelect');
                 try {
                     await api(`/api/ggb-assets/${asset.id}`, {
                         method: 'PUT',
                         json: {
                             title,
                             description: document.getElementById('ggbDescInput').value,
-                            status: document.getElementById('ggbStatusSelect').value
+                            status: document.getElementById('ggbStatusSelect').value,
+                            tags: buildTagsPayloadWithDemoType(demoSelect ? demoSelect.value : '')
                         }
                     });
                     toast('演示信息已保存', 'success');
@@ -1065,6 +1082,13 @@
                     toast(error.message || '保存失败', 'error');
                 }
             });
+        }
+        // 演示类型回显：与标签共用存储（tags.dynamic_type 维度），取第一个即当前类型。
+        const demoSelect = document.getElementById('ggbDemoTypeSelect');
+        if (demoSelect) {
+            const current = normalizeGgbTags(GgbStore.detail && GgbStore.detail.tags)
+                .find(tag => tag.dim === 'dynamic_type');
+            demoSelect.value = current ? current.code : '';
         }
         const downloadBtn = document.getElementById('ggbDownloadBtn');
         if (downloadBtn) downloadBtn.addEventListener('click', () => downloadAsset(asset));
@@ -1080,6 +1104,48 @@
 
         const deleteBtn = document.getElementById('ggbDeleteBtn');
         if (deleteBtn) deleteBtn.addEventListener('click', () => deleteAsset(asset));
+    }
+
+    // 预览图编辑（上传后仍可改）：更换=选文件即传，移除=清空。
+    // 走与上传阶段同一个后端管线（PUT /{id}/preview → normalize_raster_image），
+    // 成功后刷新列表与详情，卡片缩略图与预览条随之更新。
+    function bindPreviewStripActions(asset) {
+        const replaceBtn = document.getElementById('ggbPreviewReplaceBtn');
+        const removeBtn = document.getElementById('ggbPreviewRemoveBtn');
+        const input = document.getElementById('ggbPreviewFileInput');
+        if (!replaceBtn || !removeBtn || !input) return;
+        replaceBtn.addEventListener('click', () => input.click());
+        input.addEventListener('change', async () => {
+            const file = input.files && input.files[0];
+            input.value = '';
+            if (!file) return;
+            if (file.size > MAX_PREVIEW_IMAGE_BYTES) {
+                toast('预览图不能超过 10 MB。', 'error');
+                return;
+            }
+            const formData = new FormData();
+            formData.append('preview_image', file, file.name);
+            try {
+                await apiForm(`/api/ggb-assets/${asset.id}/preview`, formData, 'PUT');
+                toast('预览图已更新', 'success');
+                await loadAssetList();
+                await loadAssetDetail(asset.id);
+            } catch (error) {
+                toast(error.message || '更换预览图失败', 'error');
+            }
+        });
+        removeBtn.addEventListener('click', async () => {
+            if (!asset.preview_image_path) { toast('当前没有预览图。', 'info'); return; }
+            if (!confirm('确定移除预览图吗？')) return;
+            try {
+                await apiForm(`/api/ggb-assets/${asset.id}/preview`, new FormData(), 'PUT');
+                toast('预览图已移除', 'success');
+                await loadAssetList();
+                await loadAssetDetail(asset.id);
+            } catch (error) {
+                toast(error.message || '移除预览图失败', 'error');
+            }
+        });
     }
 
     // ---------------- 检查器（标签 / 版本 / 关联题目） ----------------
@@ -1117,6 +1183,21 @@
             }, []);
         }
         return [];
+    }
+
+    // 「演示类型」与标签共用一份存储（tags.dynamic_type 维度）：
+    // 保存信息时只替换 dynamic_type 维度，其余维度原样保留——
+    // 与上传阶段的写入路径（dynamic_type 合入 tags）保持同一语义。
+    function buildTagsPayloadWithDemoType(demoType) {
+        const payload = {};
+        normalizeGgbTags(GgbStore.detail && GgbStore.detail.tags).forEach(tag => {
+            if (tag.dim === 'dynamic_type') return;
+            const dim = tag.dim || 'custom';
+            (payload[dim] = payload[dim] || []).push(tag.code);
+        });
+        const type = String(demoType || '').trim();
+        if (type) payload.dynamic_type = [type];
+        return payload;
     }
 
     function renderInspector() {

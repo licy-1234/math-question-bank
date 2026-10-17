@@ -642,6 +642,24 @@
     background: var(--ggb-panel-bg);
 }
 
+/* 预览图编辑动作：贴右缘，hover 前低存在感。 */
+.ggb-preview-strip-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ggb-sp-1);
+    margin-left: auto;
+    flex: 0 0 auto;
+}
+
+.ggb-preview-strip-actions .ggb-icon-btn {
+    opacity: 0.65;
+}
+
+.ggb-preview-strip:hover .ggb-preview-strip-actions .ggb-icon-btn,
+.ggb-preview-strip-actions .ggb-icon-btn:focus-visible {
+    opacity: 1;
+}
+
 .ggb-preview-strip-thumb {
     display: inline-flex;
     width: 76px;

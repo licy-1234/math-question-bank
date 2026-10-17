@@ -283,6 +283,55 @@ def _tiny_png() -> bytes:
 
 
 # --------------------------------------------------------------------------- #
+# 1.1 上传后编辑：更换 / 清除预览图
+# --------------------------------------------------------------------------- #
+
+def test_replace_preview_updates_asset(client, uploaded, ggb_upload_root):
+    asset_id, _ = uploaded
+    response = client.put(
+        f"/api/ggb-assets/{asset_id}/preview",
+        files={"preview_image": ("new.png", _tiny_png(), "image/png")},
+        headers=_token(),
+    )
+    assert response.status_code == 200, response.text
+    reference = response.json()["data"]["preview_image_path"]
+    assert reference.startswith("/static/test_uploads/ggb/previews/")
+    detail = client.get(f"/api/ggb-assets/{asset_id}")
+    assert detail.json()["data"]["asset"]["preview_image_path"] == reference
+
+
+def test_replace_preview_without_file_clears_it(client, uploaded, ggb_upload_root):
+    asset_id, _ = uploaded
+    first = client.put(
+        f"/api/ggb-assets/{asset_id}/preview",
+        files={"preview_image": ("a.png", _tiny_png(), "image/png")},
+        headers=_token(),
+    )
+    assert first.status_code == 200, first.text
+    second = client.put(f"/api/ggb-assets/{asset_id}/preview", headers=_token())
+    assert second.status_code == 200, second.text
+    assert second.json()["data"]["preview_image_path"] == ""
+    detail = client.get(f"/api/ggb-assets/{asset_id}")
+    assert detail.json()["data"]["asset"]["preview_image_path"] == ""
+
+
+def test_replace_preview_rejects_non_image_400(client, uploaded, ggb_upload_root):
+    asset_id, _ = uploaded
+    response = client.put(
+        f"/api/ggb-assets/{asset_id}/preview",
+        files={"preview_image": ("fake.png", b"definitely not an image", "image/png")},
+        headers=_token(),
+    )
+    assert response.status_code == 400, response.text
+
+
+def test_replace_preview_requires_local_token(client, uploaded):
+    asset_id, _ = uploaded
+    response = client.put(f"/api/ggb-assets/{asset_id}/preview")
+    assert response.status_code == 403
+
+
+# --------------------------------------------------------------------------- #
 # 2. 列表 / 详情 / 标签
 # --------------------------------------------------------------------------- #
 

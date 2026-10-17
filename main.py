@@ -10496,6 +10496,46 @@ def replace_ggb_tags(ggb_id: int, payload: dict, db: Session = Depends(get_db)):
     return {"status": "success", "data": ggbs.get_ggb_tags(db, ggb_id)}
 
 
+@app.put("/api/ggb-assets/{ggb_id}/preview")
+def replace_ggb_preview(
+    ggb_id: int,
+    preview_image: UploadFile | None = File(None),
+    db: Session = Depends(get_db),
+):
+    """上传后更换/清除预览图。
+
+    * 带图片文件 → 走与上传阶段**完全相同**的归一化管线
+      （``normalize_raster_image`` 重编码、大小/像素上限一致），生成新的
+      uuid 文件名并更新 ``preview_image_path``；
+    * 不带文件（空请求体）→ 清除预览图（``preview_image_path = ""``）；
+    * 旧预览图文件保留在磁盘上（版本快照可能仍引用），不做物理删除。
+    """
+
+    if db.get(GgbAsset, ggb_id) is None:
+        raise HTTPException(status_code=404, detail="GGB 资源不存在")
+
+    from mathbank.ggb_security import GgbTooLargeError
+
+    try:
+        preview_abs, preview_ref = _ggb_store_preview(preview_image)
+        asset = db.get(GgbAsset, ggb_id)
+        asset.preview_image_path = preview_ref  # 空文件/未传 → 清除预览图
+        db.commit()
+    except (GgbTooLargeError, UploadTooLargeError):
+        db.rollback()
+        return _ggb_error(
+            f"预览图过大，上限 {MAX_SINGLE_IMAGE_BYTES // (1024 * 1024)} MB。", 413
+        )
+    except InvalidImageError as exc:
+        db.rollback()
+        return _ggb_error(f"预览图无效: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        print(f"[GGB Preview Error] {type(exc).__name__}: {exc}")
+        return _ggb_error("更换预览图失败，请重试。", 500)
+    return {"status": "success", "data": {"preview_image_path": preview_ref}}
+
+
 @app.delete("/api/ggb-assets/{ggb_id}")
 def delete_ggb_asset(
     ggb_id: int,

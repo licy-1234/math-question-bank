@@ -666,6 +666,22 @@ def test_inspector_drawer_collapses_on_desktop_and_restores_on_mobile():
     assert ".ggb-inspector-toggle { display: none; }" in mobile_block
 
 
+def test_asset_meta_editor_covers_demo_type_and_preview():
+    """上传后仍可编辑「方框信息」：演示类型下拉 + 预览图更换/移除。"""
+
+    # 演示类型与标签共用 tags.dynamic_type 维度；保存时只替换该维度、其余保留。
+    assert 'id="ggbDemoTypeSelect"' in GGB_SOURCE
+    assert "buildTagsPayloadWithDemoType" in GGB_SOURCE
+    assert "if (tag.dim === 'dynamic_type') return;" in GGB_SOURCE
+    assert "demoSelect.value = current ? current.code : '';" in GGB_SOURCE
+    # 预览图编辑入口在预览条上，走与上传阶段同一后端管线（PUT /{id}/preview）。
+    assert 'id="ggbPreviewReplaceBtn"' in GGB_SOURCE
+    assert 'id="ggbPreviewRemoveBtn"' in GGB_SOURCE
+    assert 'id="ggbPreviewFileInput"' in GGB_SOURCE
+    assert "/preview`, formData, 'PUT'" in GGB_SOURCE
+    assert "MAX_PREVIEW_IMAGE_BYTES = 10 * 1024 * 1024" in GGB_SOURCE
+
+
 def test_ggb_module_has_no_bare_console_log():
     for lineno, line in enumerate(GGB_SOURCE.splitlines(), start=1):
         assert "console.log(" not in line, f"ggb.js:{lineno} uses a bare console.log"
