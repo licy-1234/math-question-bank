@@ -592,10 +592,14 @@
         function resize() {
             const node = activeMountNode;
             if (!node) return;
+            // 关键：必须量宿主，不能量挂载节点。GGB 会给 .ggb-applet-host 写内联
+            // width/height（旧尺寸），量它就会一直按旧值 setSize，形成死循环
+            // （实测最大化后画布卡在 1096×534）。
+            const host = node.parentNode;
+            const target = (host && typeof host.getBoundingClientRect === 'function') ? host : node;
             let rect = null;
             try {
-                rect = typeof node.getBoundingClientRect === 'function'
-                    ? node.getBoundingClientRect() : null;
+                rect = target.getBoundingClientRect();
             } catch (e) { rect = null; }
             const width = rect ? Math.round(rect.width) : 0;
             const height = rect ? Math.round(rect.height) : 0;
