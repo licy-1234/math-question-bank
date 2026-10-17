@@ -442,6 +442,9 @@
         // 用户明明有网却被告知没有网络，这是本次要修的误导。
         function showLoadFailure(container, assetId, reason) {
             if (!container) return;
+            // 占位层里的 .ui-state 带 z-index:1，会压住兜底卡片（重试按钮点不到）；
+            // 失败态必须先把占位撤掉。
+            removeActivePlaceholder();
             const host = container.parentNode;
             const title = reason === 'timeout'
                 ? 'GeoGebra 引擎加载超时'
