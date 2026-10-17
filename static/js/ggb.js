@@ -561,6 +561,24 @@
             return activeApplet != null;
         }
 
+        // 容器尺寸变化后让 GGB 重新测量（弹窗最大化/还原时用）。
+        // GGB 只在 window resize 时自适应，纯容器变化它感知不到。
+        function resize() {
+            const node = activeMountNode;
+            if (!node) return;
+            try {
+                const rect = typeof node.getBoundingClientRect === 'function'
+                    ? node.getBoundingClientRect() : null;
+                if (rect && rect.width > 0 && rect.height > 0
+                    && activeApplet && typeof activeApplet.setSize === 'function') {
+                    activeApplet.setSize(Math.round(rect.width), Math.round(rect.height));
+                }
+            } catch (error) {
+                debug.debug('GGB resize failed:', error && error.message);
+            }
+            try { window.dispatchEvent(new Event('resize')); } catch (e) { /* ignore */ }
+        }
+
         async function mount(options = {}) {
             const host = options.host;
             const assetId = options.assetId;
@@ -636,7 +654,7 @@
 
         return {
             loadEngine, prewarm, prewarmEngineBody, isEngineReady, isEngineBodyReady,
-            mount, unmount, getBase64, isReady, GGB_CODEBASE
+            mount, unmount, getBase64, isReady, resize, GGB_CODEBASE
         };
     })();
     window.GgbEmbed = GgbEmbed;
@@ -1210,22 +1228,86 @@
         if (badge && badge.parentNode) badge.parentNode.removeChild(badge);
     }
 
-    // 在线编辑（V2.0）：可编辑 applet + multipart 替换当前文件。本次先接一半（保存回写）。
+    // 关闭编辑器后恢复工作区预览：GgbEmbed 是单例，编辑器挂载时会先销毁
+    // 工作区里的 applet；不恢复的话，关掉弹窗后工作区画布会一直是空的。
+    function restoreWorkspacePreview() {
+        const host = document.getElementById('ggbAssetEmbedHost');
+        const asset = GgbStore.detail && GgbStore.detail.asset;
+        if (!host || !asset) return;
+        host.innerHTML = embedPlaceholderHtml(asset);
+        GgbEmbed.mount({ host, assetId: asset.id });
+    }
+
+    // 在线编辑（V2.0）：大画布 + 可最大化 + 明确的信息层级。
+    // 旧版是固定 max-w-2xl（672px）的小弹窗，画布只占中间一条，长内容编辑很局促。
     function openOnlineEditor(asset) {
         if (!asset || !asset.id) return;
         const modal = ensureModalShell('ggbOnlineEditModal', `在线编辑 · ${asset.title || ''}`, `
-            <div class="ggb-embed-panel">
+            <div class="ggb-editor-meta">
+                <span class="ggb-editor-chip"><i class="fa-solid fa-file" aria-hidden="true"></i><span>${escapeText(formatBytes(asset.file_size))}</span></span>
+                <span class="ggb-editor-chip"><span>v${escapeText(asset.current_version_no || 1)}</span></span>
+                <span class="ggb-editor-chip"><i class="fa-solid fa-clock" aria-hidden="true"></i><span>${escapeText(formatTime(asset.updated_at))}</span></span>
+                <span class="ggb-editor-hint">编辑后点「保存为新文件」导出 .ggb 并替换当前文件</span>
+            </div>
+            <div class="ggb-embed-panel ggb-editor-panel">
                 <div class="ggb-embed-host" id="ggbOnlineEditHost" role="region" aria-label="GeoGebra 在线编辑"></div>
                 ${attributionHtml()}
-            </div>
-            <p class="ggb-form-hint">编辑后点击「保存为新文件」会把当前画布导出为 .ggb 并替换当前文件（后端替换接口就绪后生效）。</p>`, `
+            </div>`, `
+            <span class="ggb-editor-footnote">画布工具条与代数区均可编辑</span>
             <button type="button" class="glass-btn" data-ggb-modal-close="ggbOnlineEditModal">关闭</button>
             <button type="button" class="glass-btn-primary rounded-xl" id="ggbOnlineEditSaveBtn">保存为新文件</button>`);
+
+        // 弹窗壳改造：默认大尺寸（min(1440px,94vw) × min(920px,90vh)），可一键最大化。
+        const shell = modal.querySelector('.glass-modal');
+        const body = modal.querySelector('[data-ggb-modal-body]');
+        if (shell) {
+            shell.classList.remove('max-w-2xl', 'max-h-[85vh]');
+            shell.classList.add('ggb-editor-modal');
+        }
+        if (body) body.classList.add('ggb-editor-body');
+        const header = modal.querySelector('header');
+        const closeBtn = modal.querySelector('[data-ggb-modal-close]');
+        if (shell && header && closeBtn) {
+            const expandBtn = document.createElement('button');
+            expandBtn.type = 'button';
+            expandBtn.className = 'ggb-editor-expand';
+            expandBtn.setAttribute('aria-label', '切换最大化');
+            expandBtn.title = '切换最大化（偏好会被记住）';
+            header.insertBefore(expandBtn, closeBtn);
+            let expanded = false;
+            try { expanded = window.localStorage.getItem('ggb-editor-expanded') === '1'; } catch (e) { expanded = false; }
+            const applyExpanded = (on) => {
+                shell.classList.toggle('is-expanded', on);
+                expandBtn.innerHTML = on
+                    ? '<i class="fa-solid fa-compress" aria-hidden="true"></i>'
+                    : '<i class="fa-solid fa-expand" aria-hidden="true"></i>';
+                expandBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+            };
+            applyExpanded(expanded);
+            expandBtn.addEventListener('click', () => {
+                const on = !shell.classList.contains('is-expanded');
+                applyExpanded(on);
+                try { window.localStorage.setItem('ggb-editor-expanded', on ? '1' : '0'); } catch (e) { /* 隐私模式忽略 */ }
+                // 容器变了，GGB 需要重新测量；过渡中与结束后各触发一次。
+                requestAnimationFrame(() => GgbEmbed.resize());
+                setTimeout(() => GgbEmbed.resize(), 280);
+            });
+        }
+
         openModal('ggbOnlineEditModal');
         const host = modal.querySelector('#ggbOnlineEditHost');
         host.innerHTML = embedPlaceholderHtml(asset);
         // 可编辑 applet（showToolBar / showAlgebraInput 等全开）。
         GgbEmbed.mount({ host, assetId: asset.id, editable: true });
+
+        // 关闭/点遮罩后把工作区预览挂回来。
+        modal.addEventListener('click', (event) => {
+            const isOverlay = event.target === modal;
+            const isCloser = event.target.closest
+                && event.target.closest('[data-ggb-modal-close="ggbOnlineEditModal"]');
+            if (!isOverlay && !isCloser) return;
+            setTimeout(restoreWorkspacePreview, 320);
+        });
 
         modal.querySelector('#ggbOnlineEditSaveBtn').addEventListener('click', async () => {
             const exportUrl = window.__ggbExportBase64;

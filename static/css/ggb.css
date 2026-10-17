@@ -905,14 +905,110 @@
     line-height: 1.6;
 }
 
-/* 在线编辑弹窗：画布区必须有可辨识的底色与边界。
-   白色弹窗 + 白色画布会糊成一片，用户分不清哪里可以画（截图中的弹窗即此观感）。 */
-#ggbOnlineEditModal .ggb-embed-panel {
+/* ---- 在线编辑弹窗：大画布 + 可最大化 + 信息层级 ----
+   旧版固定 max-w-2xl（672px），画布只能拿到中间一条，长内容编辑很局促。
+   新版：默认 min(1440px,94vw) × min(920px,90vh)，画布吃满剩余高度；
+   最大化按钮把弹窗推到 96vw × 94vh，并把偏好记在 localStorage。 */
+.glass-modal.ggb-editor-modal {
+    width: min(1440px, 94vw);
+    max-width: 94vw;
+    height: min(920px, 90vh);
+    max-height: 92vh;
+    transition: width 0.22s ease, height 0.22s ease,
+        max-width 0.22s ease, max-height 0.22s ease;
+}
+
+.glass-modal.ggb-editor-modal.is-expanded {
+    width: 96vw;
+    max-width: 96vw;
+    height: 94vh;
+    max-height: 94vh;
+}
+
+.ggb-editor-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ggb-sp-3);
+    min-height: 0;
+    overflow: hidden;
+    padding: var(--ggb-sp-4);
+}
+
+.ggb-editor-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ggb-sp-2);
+    flex: 0 0 auto;
+}
+
+.ggb-editor-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ggb-sp-1);
+    padding: 2px var(--ggb-sp-2);
+    border: 1px solid var(--ggb-panel-border);
+    border-radius: 999px;
+    background: rgba(var(--ggb-skeleton-rgb), 0.55);
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-badge);
+    line-height: 1.6;
+    white-space: nowrap;
+}
+
+.ggb-editor-chip i {
+    font-size: var(--ggb-fs-badge);
+    opacity: 0.8;
+}
+
+.ggb-editor-hint {
+    margin-left: auto;
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-badge);
+    line-height: 1.5;
+}
+
+.ggb-editor-panel {
+    flex: 1 1 auto;
+    min-height: 320px;
     background: var(--ggb-canvas);
 }
 
-#ggbOnlineEditModal .ggb-embed-panel .ggb-embed-host {
-    min-height: clamp(280px, 44vh, 460px);
+/* 高度交给 flex 链决定：宿主不再用视口高度兜底，避免小窗口下溢出。 */
+#ggbOnlineEditModal .ggb-editor-panel .ggb-embed-host {
+    min-height: 0;
+}
+
+.ggb-editor-expand {
+    display: inline-flex;
+    width: 2rem;
+    height: 2rem;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    border-radius: var(--ggb-r-sm);
+    background: transparent;
+    color: var(--ggb-text-muted);
+    cursor: pointer;
+}
+
+.ggb-editor-expand:hover {
+    border-color: var(--ggb-panel-border);
+    background: rgba(var(--ggb-skeleton-rgb), 0.6);
+    color: var(--ggb-text-strong);
+}
+
+.ggb-editor-footnote {
+    margin-right: auto;
+    align-self: center;
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-badge);
+}
+
+@media (max-width: 768px) {
+    .ggb-editor-hint,
+    .ggb-editor-footnote { display: none; }
+    .ggb-editor-panel { min-height: 260px; }
 }
 
 /* ---- 键盘焦点可见性（与 app.css 的玻璃按钮同一规范） ---- */

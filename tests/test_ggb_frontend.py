@@ -122,7 +122,8 @@ def test_frozen_namespaces_and_entry_points_are_exposed():
       assert.equal(window.GgbPanel.render, window.renderGgbWorkspace);
       assert.equal(typeof window.GgbEmbed, 'object');
       for (const key of ['mount', 'unmount', 'getBase64', 'isReady', 'loadEngine',
-                         'prewarm', 'prewarmEngineBody', 'isEngineReady', 'isEngineBodyReady']) {
+                         'prewarm', 'prewarmEngineBody', 'isEngineReady', 'isEngineBodyReady',
+                         'resize']) {
         assert.equal(typeof window.GgbEmbed[key], 'function', 'GgbEmbed.' + key);
       }
       assert.equal(typeof window.GgbEmbed.GGB_CODEBASE, 'string');
@@ -607,3 +608,30 @@ def test_inner_select_workspace_reserves_a_ggb_branch():
 def test_ggb_module_has_no_bare_console_log():
     for lineno, line in enumerate(GGB_SOURCE.splitlines(), start=1):
         assert "console.log(" not in line, f"ggb.js:{lineno} uses a bare console.log"
+
+
+def test_online_editor_modal_is_large_and_expandable():
+    """在线编辑弹窗：大画布 + 最大化（偏好记忆）+ 三段式信息层级。"""
+
+    # 弹窗壳：去掉固定 max-w-2xl，换成可最大化的 ggb-editor-modal。
+    assert "ensureModalShell('ggbOnlineEditModal'" in GGB_SOURCE
+    assert "shell.classList.remove('max-w-2xl'" in GGB_SOURCE
+    assert "'ggb-editor-modal'" in GGB_SOURCE
+    assert "is-expanded" in GGB_SOURCE
+    assert "ggb-editor-expanded" in GGB_SOURCE, "最大化偏好须持久化"
+    # 结构：元信息 chips → 画布主体 → 底部按钮。
+    for marker in ('ggb-editor-meta', 'ggb-editor-chip', 'ggb-editor-panel',
+                   'ggb-editor-footnote', 'ggb-editor-expand'):
+        assert marker in GGB_SOURCE, marker
+    # 容器尺寸变化后必须让 GGB 重新测量（否则最大化后画布不跟着变）。
+    assert "GgbEmbed.resize()" in GGB_SOURCE
+    assert "activeApplet.setSize" in GGB_SOURCE
+    # 关闭编辑器后工作区预览要挂回来（mount 是单例，编辑器会销毁工作区 applet）。
+    assert "restoreWorkspacePreview" in GGB_SOURCE
+
+    css = (ROOT / "static" / "css" / "ggb.css").read_text(encoding="utf-8")
+    assert ".ggb-editor-modal" in css
+    assert "min(1440px, 94vw)" in css
+    assert "is-expanded" in css and "96vw" in css
+    assert ".ggb-editor-body" in css and "flex-direction: column" in css
+    assert ".ggb-editor-panel" in css
