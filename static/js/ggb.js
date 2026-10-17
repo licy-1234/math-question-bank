@@ -1274,6 +1274,25 @@
 
     // 关闭编辑器后恢复工作区预览：GgbEmbed 是单例，编辑器挂载时会先销毁
     // 工作区里的 applet；不恢复的话，关掉弹窗后工作区画布会一直是空的。
+    // 延迟 320ms 等关闭动画跑完——期间若又打开编辑器必须取消，
+    // 否则这次补挂会把编辑器刚创建的 applet 顶掉（单例竞态）。
+    let restorePreviewTimer = null;
+
+    function scheduleRestoreWorkspacePreview() {
+        cancelRestoreWorkspacePreview();
+        restorePreviewTimer = setTimeout(() => {
+            restorePreviewTimer = null;
+            restoreWorkspacePreview();
+        }, 320);
+    }
+
+    function cancelRestoreWorkspacePreview() {
+        if (restorePreviewTimer) {
+            clearTimeout(restorePreviewTimer);
+            restorePreviewTimer = null;
+        }
+    }
+
     function restoreWorkspacePreview() {
         const host = document.getElementById('ggbAssetEmbedHost');
         const asset = GgbStore.detail && GgbStore.detail.asset;
@@ -1289,6 +1308,8 @@
     // 旧版是固定 max-w-2xl（672px）的小弹窗，画布只占中间一条，长内容编辑很局促。
     function openOnlineEditor(asset) {
         if (!asset || !asset.id) return;
+        // 上一次关闭时的补挂还没执行就重新打开：取消它，避免顶掉新的 applet。
+        cancelRestoreWorkspacePreview();
         const modal = ensureModalShell('ggbOnlineEditModal', `在线编辑 · ${asset.title || ''}`, `
             <div class="ggb-embed-panel ggb-editor-panel">
                 <div class="ggb-embed-host" id="ggbOnlineEditHost" role="region" aria-label="GeoGebra 在线编辑"></div>
@@ -1358,7 +1379,7 @@
             const isCloser = event.target.closest
                 && event.target.closest('[data-ggb-modal-close="ggbOnlineEditModal"]');
             if (!isOverlay && !isCloser) return;
-            setTimeout(restoreWorkspacePreview, 320);
+            scheduleRestoreWorkspacePreview();
         });
 
         modal.querySelector('#ggbOnlineEditSaveBtn').addEventListener('click', async () => {

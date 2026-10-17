@@ -630,6 +630,9 @@ def test_online_editor_modal_is_large_and_expandable():
     assert "applet_scaler" in GGB_SOURCE
     # 关闭编辑器后工作区预览要挂回来（mount 是单例，编辑器会销毁工作区 applet）。
     assert "restoreWorkspacePreview" in GGB_SOURCE
+    # 补挂必须可取消：否则「关闭→300ms 内重开」会把编辑器新建的 applet 顶掉。
+    assert "scheduleRestoreWorkspacePreview" in GGB_SOURCE
+    assert "cancelRestoreWorkspacePreview" in GGB_SOURCE
 
     css = (ROOT / "static" / "css" / "ggb.css").read_text(encoding="utf-8")
     assert ".ggb-editor-modal" in css
