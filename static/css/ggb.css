@@ -910,36 +910,44 @@
    新版：默认 min(1440px,94vw) × min(920px,90vh)，画布吃满剩余高度；
    最大化按钮把弹窗推到 96vw × 94vh，并把偏好记在 localStorage。 */
 .glass-modal.ggb-editor-modal {
-    width: min(1440px, 94vw);
-    max-width: 94vw;
-    height: min(920px, 90vh);
-    max-height: 92vh;
+    width: min(1520px, 96vw);
+    max-width: 96vw;
+    height: min(980px, 94vh);
+    max-height: 94vh;
     transition: width 0.22s ease, height 0.22s ease,
         max-width 0.22s ease, max-height 0.22s ease;
 }
 
 .glass-modal.ggb-editor-modal.is-expanded {
-    width: 96vw;
-    max-width: 96vw;
-    height: 94vh;
-    max-height: 94vh;
+    width: 97.5vw;
+    max-width: 97.5vw;
+    height: 96.5vh;
+    max-height: 96.5vh;
+}
+
+/* 标题栏收元信息 chips：省掉一整行，把纵向空间让给画布。 */
+.ggb-editor-modal > header {
+    padding-top: 9px;
+    padding-bottom: 9px;
 }
 
 .ggb-editor-body {
     display: flex;
     flex-direction: column;
-    gap: var(--ggb-sp-3);
     min-height: 0;
     overflow: hidden;
-    padding: var(--ggb-sp-4);
+    padding: var(--ggb-sp-3);
 }
 
 .ggb-editor-meta {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
-    gap: var(--ggb-sp-2);
-    flex: 0 0 auto;
+    gap: var(--ggb-sp-1);
+    margin-left: var(--ggb-sp-3);
+    margin-right: auto;
+    min-width: 0;
+    overflow: hidden;
 }
 
 .ggb-editor-chip {
@@ -959,13 +967,6 @@
 .ggb-editor-chip i {
     font-size: var(--ggb-fs-badge);
     opacity: 0.8;
-}
-
-.ggb-editor-hint {
-    margin-left: auto;
-    color: var(--ggb-text-muted);
-    font-size: var(--ggb-fs-badge);
-    line-height: 1.5;
 }
 
 .ggb-editor-panel {
@@ -1005,10 +1006,26 @@
     font-size: var(--ggb-fs-badge);
 }
 
+/* 页脚压缩：按钮区只需要一行高度。 */
+.ggb-editor-modal > footer {
+    padding-top: 7px;
+    padding-bottom: 7px;
+}
+
+@media (max-width: 900px) {
+    .ggb-editor-meta .ggb-editor-chip:last-child { display: none; }
+}
+
 @media (max-width: 768px) {
-    .ggb-editor-hint,
+    .ggb-editor-meta,
     .ggb-editor-footnote { display: none; }
     .ggb-editor-panel { min-height: 260px; }
+}
+
+/* 矮窗口（如 612 高的笔记本）：先牺牲元信息，保证画布高度。 */
+@media (max-height: 620px) {
+    .ggb-editor-meta { display: none; }
+    .ggb-editor-panel { min-height: 220px; }
 }
 
 /* ---- 键盘焦点可见性（与 app.css 的玻璃按钮同一规范） ---- */

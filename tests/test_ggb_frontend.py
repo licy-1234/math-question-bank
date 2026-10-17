@@ -633,7 +633,7 @@ def test_online_editor_modal_is_large_and_expandable():
 
     css = (ROOT / "static" / "css" / "ggb.css").read_text(encoding="utf-8")
     assert ".ggb-editor-modal" in css
-    assert "min(1440px, 94vw)" in css
+    assert "min(1520px, 96vw)" in css
     assert "is-expanded" in css and "96vw" in css
     assert ".ggb-editor-body" in css and "flex-direction: column" in css
     assert ".ggb-editor-panel" in css

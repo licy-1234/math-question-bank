@@ -245,7 +245,6 @@
         let prewarmPromise = null;
         let activeApplet = null;
         let activeMountNode = null;
-        let activeBase64 = null;
         let activePlaceholder = null;
         let activePlaceholderStage = null;
         let canvasObserver = null;
@@ -542,7 +541,6 @@
             const node = activeMountNode;
             activeApplet = null;
             activeMountNode = null;
-            activeBase64 = null;
             activePlaceholder = null;
             activePlaceholderStage = null;
             if (applet && typeof applet.remove === 'function') {
@@ -655,7 +653,6 @@
                     loadEngine()
                 ]);
                 if (activeMountNode !== mountNode) return null; // 已被后续 mount 取代
-                activeBase64 = base64;
                 // 已进入初始化阶段：进度订阅到此为止（避免迟到的进度把文案改回下载态）。
                 if (activeProgressUnsubscribe) { activeProgressUnsubscribe(); activeProgressUnsubscribe = null; }
                 setPlaceholderStage('init', 1);
@@ -687,6 +684,8 @@
                 return applet;
             } catch (error) {
                 debug.debug('GGB mount failed:', error && error.message);
+                // 挂载失败也要退订进度，否则监听器会随每次失败累积（泄漏）。
+                if (activeProgressUnsubscribe) { activeProgressUnsubscribe(); activeProgressUnsubscribe = null; }
                 showLoadFailure(mountNode, assetId);
                 return null;
             }
@@ -1247,7 +1246,10 @@
     }
 
     function showVersionPreviewBadge(asset, versionNo) {
-        const panel = document.querySelector('.ggb-embed-panel');
+        // 只作用于详情区的嵌入面板：题库侧面板/编辑弹窗里也有 .ggb-embed-panel，
+        // document 级查询可能挂错地方。
+        const host = document.getElementById('ggbAssetEmbedHost');
+        const panel = host && host.closest ? host.closest('.ggb-embed-panel') : null;
         if (!panel) return;
         let badge = panel.querySelector('.ggb-version-preview-badge');
         if (!badge) {
@@ -1264,7 +1266,9 @@
     }
 
     function clearVersionPreviewBadge() {
-        const badge = document.querySelector('.ggb-version-preview-badge');
+        const host = document.getElementById('ggbAssetEmbedHost');
+        const panel = host && host.closest ? host.closest('.ggb-embed-panel') : null;
+        const badge = panel ? panel.querySelector('.ggb-version-preview-badge') : null;
         if (badge && badge.parentNode) badge.parentNode.removeChild(badge);
     }
 
@@ -1274,6 +1278,9 @@
         const host = document.getElementById('ggbAssetEmbedHost');
         const asset = GgbStore.detail && GgbStore.detail.asset;
         if (!host || !asset) return;
+        // 用户已切走工作区时不要再挂载：隐藏容器量不到尺寸，等于白启动一次引擎。
+        const section = document.getElementById('ggbWorkspaceSection');
+        if (!section || section.classList.contains('hidden')) return;
         host.innerHTML = embedPlaceholderHtml(asset);
         GgbEmbed.mount({ host, assetId: asset.id });
     }
@@ -1283,17 +1290,11 @@
     function openOnlineEditor(asset) {
         if (!asset || !asset.id) return;
         const modal = ensureModalShell('ggbOnlineEditModal', `在线编辑 · ${asset.title || ''}`, `
-            <div class="ggb-editor-meta">
-                <span class="ggb-editor-chip"><i class="fa-solid fa-file" aria-hidden="true"></i><span>${escapeText(formatBytes(asset.file_size))}</span></span>
-                <span class="ggb-editor-chip"><span>v${escapeText(asset.current_version_no || 1)}</span></span>
-                <span class="ggb-editor-chip"><i class="fa-solid fa-clock" aria-hidden="true"></i><span>${escapeText(formatTime(asset.updated_at))}</span></span>
-                <span class="ggb-editor-hint">编辑后点「保存为新文件」导出 .ggb 并替换当前文件</span>
-            </div>
             <div class="ggb-embed-panel ggb-editor-panel">
                 <div class="ggb-embed-host" id="ggbOnlineEditHost" role="region" aria-label="GeoGebra 在线编辑"></div>
                 ${attributionHtml()}
             </div>`, `
-            <span class="ggb-editor-footnote">画布工具条与代数区均可编辑</span>
+            <span class="ggb-editor-footnote">编辑后点「保存为新文件」导出 .ggb 并替换当前文件</span>
             <button type="button" class="glass-btn" data-ggb-modal-close="ggbOnlineEditModal">关闭</button>
             <button type="button" class="glass-btn-primary rounded-xl" id="ggbOnlineEditSaveBtn">保存为新文件</button>`);
 
@@ -1308,6 +1309,17 @@
         const header = modal.querySelector('header');
         const closeBtn = modal.querySelector('[data-ggb-modal-close]');
         if (shell && header && closeBtn) {
+            // 元信息放进标题栏（标题右侧），把整行纵向空间还给画布。
+            const titleEl = header.querySelector('h3');
+            if (titleEl && typeof titleEl.insertAdjacentElement === 'function') {
+                const meta = document.createElement('div');
+                meta.className = 'ggb-editor-meta';
+                meta.innerHTML = `
+                    <span class="ggb-editor-chip"><i class="fa-solid fa-file" aria-hidden="true"></i><span>${escapeText(formatBytes(asset.file_size))}</span></span>
+                    <span class="ggb-editor-chip"><span>v${escapeText(asset.current_version_no || 1)}</span></span>
+                    <span class="ggb-editor-chip"><i class="fa-solid fa-clock" aria-hidden="true"></i><span>${escapeText(formatTime(asset.updated_at))}</span></span>`;
+                titleEl.insertAdjacentElement('afterend', meta);
+            }
             const expandBtn = document.createElement('button');
             expandBtn.type = 'button';
             expandBtn.className = 'ggb-editor-expand';
