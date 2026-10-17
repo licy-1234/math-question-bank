@@ -1045,7 +1045,13 @@
 @media (max-width: 1100px) {
     #ggbWorkspaceSection.ggb-workspace:not(.hidden) { padding: var(--ggb-sp-3); gap: var(--ggb-sp-2); }
     .ggb-workspace-heading p { display: none; }
-    .ggb-workspace-body { --ggb-list-track: 248px; --ggb-inspector-track: 272px; }
+    /* 笔记本宽度（1080–1100）下三栏会把详情栏挤到 ~288px，GGB 几乎不可用。
+       显式收窄两侧轨道并放宽上下限，把空间还给画布。 */
+    .ggb-workspace-body {
+        --ggb-list-track: 208px;
+        --ggb-inspector-track: 224px;
+        grid-template-columns: 208px minmax(0, 1fr) 224px;
+    }
     .ggb-detail-actions-row .glass-btn { padding: var(--ggb-sp-1) var(--ggb-sp-2); }
 }
 
