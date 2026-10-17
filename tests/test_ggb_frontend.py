@@ -90,6 +90,9 @@ const window = {
   requestAnimationFrame: fn => { if (typeof fn === 'function') fn(); }
 };
 window.window = window;
+// 默认 fetch 桩：单元测试不得访问外网。prewarm 现在会尝试预热 8 MB 引擎主体，
+// 没有桩就会真的打 geogebra.org。需要真实响应的测试自行覆盖 window.fetch。
+globalThis.fetch = async () => ({ ok: false, status: 0, headers: { get: () => null } });
 """
 
 
@@ -118,7 +121,8 @@ def test_frozen_namespaces_and_entry_points_are_exposed():
       }
       assert.equal(window.GgbPanel.render, window.renderGgbWorkspace);
       assert.equal(typeof window.GgbEmbed, 'object');
-      for (const key of ['mount', 'unmount', 'getBase64', 'isReady', 'loadEngine']) {
+      for (const key of ['mount', 'unmount', 'getBase64', 'isReady', 'loadEngine',
+                         'prewarm', 'prewarmEngineBody', 'isEngineReady', 'isEngineBodyReady']) {
         assert.equal(typeof window.GgbEmbed[key], 'function', 'GgbEmbed.' + key);
       }
       assert.equal(typeof window.GgbEmbed.GGB_CODEBASE, 'string');
@@ -370,10 +374,96 @@ def test_embed_placeholder_replaces_the_bare_spinner():
     assert GGB_SOURCE.count("embedPlaceholderHtml") >= 5
     assert "ggb-embed-placeholder" in GGB_SOURCE
     assert "stateHtml('loading', '正在加载 GeoGebra 组件')" not in GGB_SOURCE
+    # 占位文案必须对应真实阶段（下载引擎 / 初始化画布），不再谎报「正在读取 .ggb」。
+    assert "正在下载 GeoGebra 引擎" in GGB_SOURCE
+    assert "正在初始化画布" in GGB_SOURCE
+    assert "正在读取 .ggb 并初始化画布" not in GGB_SOURCE
+    assert "setPlaceholderStage" in GGB_SOURCE
+    assert "appletOnLoad" in GGB_SOURCE
     # 详情区结构：GGB 占满主体（stage），预览图降级为下方参考条。
     assert "ggb-detail-stage" in GGB_SOURCE
     assert "ggb-preview-strip" in GGB_SOURCE
     assert "ggb-preview-figure" not in GGB_SOURCE
+
+
+# 占位行为回归：截图里 applet 已渲染出工具栏/画布，占位层却仍盖在上面。
+PLACEHOLDER_HARNESS = r"""
+const engineState = { injectedId: null, lastParams: null };
+window.GGBApplet = function (parameters) {
+  engineState.lastParams = parameters;
+  this.inject = id => { engineState.injectedId = id; };
+  this.remove = function () {};
+  this.setHTML5Codebase = function () {};
+};
+window.fetch = async () => ({ ok: true, arrayBuffer: async () => new Uint8Array([1]).buffer });
+globalThis.fetch = window.fetch;
+function placeholderEl() {
+  const ph = document.createElement('div');
+  ph.className = 'ggb-embed-placeholder';
+  const title = document.createElement('strong');
+  const desc = document.createElement('span');
+  ph.querySelector = sel => sel === '.ui-state-title' ? title
+    : sel === '.ui-state-description' ? desc : null;
+  ph.titleEl = title;
+  ph.descEl = desc;
+  return ph;
+}
+function hostWithPlaceholder() {
+  const host = document.createElement('div');
+  host.querySelector = sel => sel === '.ggb-embed-placeholder'
+    ? (host.children.find(c => String(c.className).indexOf('ggb-embed-placeholder') >= 0) || null)
+    : null;
+  host.appendChild(placeholderEl());
+  return host;
+}
+"""
+
+
+def test_placeholder_reports_the_real_stage_then_is_removed_when_applet_ready():
+    """占位层必须在画布可交互后撤掉，且文案要对应真实阶段（截图缺陷回归）。"""
+
+    run_js(PLACEHOLDER_HARNESS + r"""
+      const host = hostWithPlaceholder();
+      const ph = host.children[0];
+      await window.GgbEmbed.mount({ host, assetId: 8 });
+      // 引擎与文件齐备后进入「初始化画布」，而不是「正在读取 .ggb」。
+      assert.equal(ph.titleEl.textContent, '正在初始化画布');
+      assert.ok(ph.descEl.textContent.indexOf('引擎已就绪') >= 0, ph.descEl.textContent);
+      // appletOnLoad 必须把占位从 DOM 移除，否则它会一直盖在画布上。
+      assert.equal(typeof engineState.lastParams.appletOnLoad, 'function');
+      engineState.lastParams.appletOnLoad();
+      const left = host.children.filter(c => String(c.className).indexOf('ggb-embed-placeholder') >= 0);
+      assert.equal(left.length, 0, 'placeholder must be removed once the applet is ready');
+      assert.equal(window.GgbEmbed.isReady(), true);
+    """)
+
+
+def test_prewarm_fetches_the_engine_body_into_the_http_cache():
+    """8 MB 主体必须被真正抓取：deployggb.js 只是加载器，主包 inject 时才下。"""
+
+    run_js(r"""
+      const urls = [];
+      window.fetch = async url => {
+        urls.push(String(url));
+        if (String(url).indexOf('web3d.nocache.js') >= 0) {
+          return { ok: true, text: async () => 'x="A235CC712983FA478D93F2A05A5A8D23";' };
+        }
+        return {
+          ok: true,
+          headers: { get: () => '100' },
+          body: null,
+          arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer
+        };
+      };
+      globalThis.fetch = window.fetch;
+      window.GGBApplet = function () {};   // 加载器已就绪，聚焦主体预热
+      await window.GgbEmbed.prewarm();
+      assert.ok(urls.some(u => u.indexOf('/web3d.nocache.js') >= 0), urls.join(','));
+      // 强名必须从 nocache.js 运行时提取，而不是硬编码某个构建。
+      assert.ok(urls.some(u => u.indexOf('/A235CC712983FA478D93F2A05A5A8D23.cache.js') >= 0),
+                urls.join(','));
+      assert.equal(window.GgbEmbed.isEngineBodyReady(), true);
+    """)
 
 
 def test_index_html_links_the_ggb_stylesheet():

@@ -26,6 +26,10 @@
     // 引擎脚本 + GWT cache.js 合计约 8 MB，弱网下 8 秒误杀率不低；
     // 配合「打开工作区即预热 + 预览图占位」，等待期有明确反馈，故放宽到 15 秒。
     const ENGINE_TIMEOUT_MS = 15000;
+    // inject 阶段（约 8 MB 引擎主体下载 + GWT 初始化）的兜底超时。
+    // 此前只有 deployggb.js 那 37 KB 有超时，主体阶段一旦卡住就是无限转圈；
+    // 超时后撤占位并走「下载 .ggb 用本地 Classic 6 打开」的既有兜底。
+    const INJECT_TIMEOUT_MS = 60000;
 
     // ---------------- 词表（本地兜底；后端 /api/config/ggb-link-types 就绪后以其为准） ----------------
 
@@ -230,9 +234,20 @@
     const GgbEmbed = (() => {
         // 全局单例注入 Promise，防止重复注入 deployggb.js。
         let enginePromise = null;
+        // 8 MB 引擎主体的预热 Promise（deployggb.js 只是加载器，主体在 inject 时才下）。
+        let engineBodyPromise = null;
+        // 主体预热进度 0–1；null 表示还没开始。注意与 isEngineReady 区分：
+        // 后者只代表 37 KB 加载器就绪，前者才代表主包已进浏览器缓存。
+        let engineBodyProgress = null;
+        const progressListeners = new Set();
+        let prewarmPromise = null;
         let activeApplet = null;
         let activeMountNode = null;
         let activeBase64 = null;
+        let activePlaceholder = null;
+        let canvasObserver = null;
+        let injectTimer = null;
+        let activeProgressUnsubscribe = null;
         let seq = 0;
         // base64 有界缓存（assetId:versionNo → base64）。.ggb 上限 2 MiB
         // （ggb_security 流式限量），base64 约 2.7 MB/条，故只缓存少量条目、
@@ -287,15 +302,95 @@
             return typeof window.GGBApplet !== 'undefined' && !!window.GGBApplet;
         }
 
-        // 预热：提前把 deployggb.js + GWT cache.js（约 8 MB）拉下来。
-        // 幂等——已就绪或已在进行中时直接复用；失败静默（下次 mount 的
-        // loadEngine 会重试，并最终走 showLoadFailure 兜底）。
-        function prewarm() {
-            if (isEngineReady()) return Promise.resolve(window.GGBApplet);
-            if (enginePromise) return enginePromise;
-            return loadEngine().catch(error => {
-                debug.debug('GGB engine prewarm failed:', error && error.message);
+        // 8 MB 主体是否已进浏览器 HTTP 缓存（区别于「37 KB 加载器就绪」）。
+        function isEngineBodyReady() {
+            return engineBodyProgress === 1;
+        }
+
+        function notifyProgress(ratio) {
+            engineBodyProgress = ratio >= 1 ? 1 : ratio;
+            progressListeners.forEach(listener => {
+                try { listener(engineBodyProgress); } catch (e) { /* 订阅方异常不影响预热 */ }
             });
+        }
+
+        function subscribeProgress(listener) {
+            progressListeners.add(listener);
+            if (engineBodyProgress != null) {
+                try { listener(engineBodyProgress); } catch (e) { /* ignore */ }
+            }
+            return () => progressListeners.delete(listener);
+        }
+
+        // 真正预热 8 MB 引擎主体。deployggb.js 只是官方加载器，主包（web3d 强名
+        // cache.js）要到 applet.inject() 才下载——此前 prewarm 只热了 37 KB 加载器，
+        // 用户点击后仍要等整包。引擎三件均带 ACAO:* + max-age=31536000，
+        // 用普通 fetch 读完整即写入浏览器 HTTP 缓存，之后 inject 直接命中。
+        // 幂等；失败静默（只是预热没成功，正常加载路径不受影响）。
+        function prewarmEngineBody() {
+            if (typeof fetch !== 'function') return Promise.resolve(false);
+            if (engineBodyPromise) return engineBodyPromise;
+            const task = (async () => {
+                try {
+                    const base = GGB_CODEBASE.replace(/\/+$/, '');
+                    const nocacheResponse = await fetch(base + '/web3d.nocache.js', { cache: 'force-cache' });
+                    if (!nocacheResponse || !nocacheResponse.ok) return false;
+                    const nocacheText = typeof nocacheResponse.text === 'function'
+                        ? await nocacheResponse.text() : '';
+                    // GWT 强名：32 位大写十六进制。当前构建全文唯一；取不到
+                    // （未来改多排列/结构变化）就放弃预热，不影响正确性。
+                    const strongName = (String(nocacheText).match(/[0-9A-F]{32}/) || [])[0];
+                    if (!strongName) return false;
+                    const response = await fetch(base + '/' + strongName + '.cache.js', { cache: 'force-cache' });
+                    if (!response || !response.ok) return false;
+                    const total = Number(
+                        response.headers && typeof response.headers.get === 'function'
+                            ? response.headers.get('Content-Length') : 0) || 0;
+                    if (!response.body || typeof response.body.getReader !== 'function') {
+                        await response.arrayBuffer();
+                        notifyProgress(1);
+                        return true;
+                    }
+                    const reader = response.body.getReader();
+                    let received = 0;
+                    for (;;) {
+                        const chunk = await reader.read();
+                        if (chunk.done) break;
+                        received += (chunk.value && chunk.value.length) || 0;
+                        if (total > 0) notifyProgress(Math.min(1, received / total));
+                    }
+                    notifyProgress(1);
+                    return true;
+                } catch (error) {
+                    debug.debug('GGB engine body prewarm failed:', error && error.message);
+                    return false;
+                }
+            })();
+            engineBodyPromise = task;
+            // 失败后清掉，允许下次（悬停/打开工作区）重试。
+            task.then(ok => { if (!ok) engineBodyPromise = null; });
+            return task;
+        }
+
+        // 预热：加载器 + 8 MB 主体两件事都做，幂等、失败静默。
+        // 触发点：打开工作区、卡片 pointerenter/focus。
+        function prewarm() {
+            if (prewarmPromise) return prewarmPromise;
+            const task = (async () => {
+                if (!isEngineReady()) {
+                    try {
+                        await loadEngine();
+                    } catch (error) {
+                        debug.debug('GGB engine prewarm failed:', error && error.message);
+                    }
+                }
+                await prewarmEngineBody();
+                return window.GGBApplet;
+            })();
+            prewarmPromise = task;
+            // 加载器没热成时允许下次重试（主体预热有自己的重试逻辑）。
+            task.then(() => { if (!isEngineReady()) prewarmPromise = null; });
+            return task;
         }
 
         function arrayBufferToBase64(buffer) {
@@ -337,13 +432,85 @@
                 </div>`;
         }
 
+        // 占位文案随真实阶段推进：下载引擎（带百分比）→ 初始化画布 → 移除。
+        // 此前文案只在渲染时判定一次，加载器就绪却谎报「正在读取 .ggb」，
+        // 而 8 MB 主体其实还在下——用户截图里「卡住」的就是这个状态。
+        function setPlaceholderStage(stage, ratio) {
+            const placeholder = activePlaceholder;
+            if (!placeholder || !placeholder.parentNode) return;
+            if (typeof placeholder.querySelector !== 'function') return;
+            const titleEl = placeholder.querySelector('.ui-state-title');
+            const descEl = placeholder.querySelector('.ui-state-description');
+            if (!titleEl || !descEl) return;
+            if (stage === 'engine') {
+                const pct = Math.max(0, Math.min(100, Math.round((ratio || 0) * 100)));
+                titleEl.textContent = '正在下载 GeoGebra 引擎';
+                descEl.textContent = pct > 0
+                    ? '已下载 ' + pct + '%（约 8 MB，只下载一次，之后秒开）。'
+                    : '首次使用需下载约 8 MB 引擎，只下载一次，之后秒开。';
+            } else if (stage === 'init') {
+                titleEl.textContent = '正在初始化画布';
+                descEl.textContent = '引擎已就绪，正在载入演示文件并渲染图形。';
+            }
+        }
+
+        function removeActivePlaceholder() {
+            const placeholder = activePlaceholder;
+            activePlaceholder = null;
+            if (placeholder && placeholder.parentNode) {
+                placeholder.parentNode.removeChild(placeholder);
+            }
+        }
+
+        // 画布可交互：撤占位 + 停观察/超时 + 打点（供性能量化）。
+        // appletOnLoad 回调与 canvas 观察双通道，先到先得、幂等。
+        function onAppletReady(host) {
+            if (!activeMountNode || activeMountNode.parentNode !== host) return;
+            if (injectTimer) { clearTimeout(injectTimer); injectTimer = null; }
+            if (canvasObserver) { canvasObserver.disconnect(); canvasObserver = null; }
+            if (activeProgressUnsubscribe) { activeProgressUnsubscribe(); activeProgressUnsubscribe = null; }
+            removeActivePlaceholder();
+            try { performance.mark('ggb-applet-ready'); } catch (e) { /* 无 Performance API 时忽略 */ }
+            if (host && typeof host.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+                try {
+                    host.dispatchEvent(new CustomEvent('ggb-applet-ready', { bubbles: true }));
+                } catch (e) { /* 旧环境不支持 CustomEvent 构造时忽略 */ }
+            }
+        }
+
+        // 保证占位一定会撤：appletOnLoad 是首选信号，canvas 出现是兜底信号，
+        // 超时则走「下载 .ggb」兜底（不再无限转圈）。
+        function watchAppletReady(host, assetId) {
+            const mountNode = activeMountNode;
+            if (typeof MutationObserver === 'function' && mountNode) {
+                canvasObserver = new MutationObserver(() => {
+                    if (mountNode.querySelector && mountNode.querySelector('canvas')) onAppletReady(host);
+                });
+                canvasObserver.observe(mountNode, { childList: true, subtree: true });
+                if (mountNode.querySelector && mountNode.querySelector('canvas')) onAppletReady(host);
+            }
+            injectTimer = setTimeout(() => {
+                injectTimer = null;
+                if (!activeMountNode || activeMountNode.parentNode !== host) return;
+                debug.debug('GGB inject timed out', assetId);
+                removeActivePlaceholder();
+                showLoadFailure(mountNode, assetId);
+            }, INJECT_TIMEOUT_MS);
+            // Node 测试环境里别让长定时器拖住进程；浏览器返回数字，无 unref。
+            if (injectTimer && typeof injectTimer.unref === 'function') injectTimer.unref();
+        }
+
         // 严格销毁：优先 applet.remove()；不可用时退化为清空容器 DOM 并释放引用。
         function unmount() {
+            if (injectTimer) { clearTimeout(injectTimer); injectTimer = null; }
+            if (canvasObserver) { canvasObserver.disconnect(); canvasObserver = null; }
+            if (activeProgressUnsubscribe) { activeProgressUnsubscribe(); activeProgressUnsubscribe = null; }
             const applet = activeApplet;
             const node = activeMountNode;
             activeApplet = null;
             activeMountNode = null;
             activeBase64 = null;
+            activePlaceholder = null;
             if (applet && typeof applet.remove === 'function') {
                 try {
                     applet.remove();
@@ -377,6 +544,17 @@
             host.appendChild(mountNode);
             activeMountNode = mountNode;
 
+            // 占位跟随真实阶段：先报「下载引擎」（若主体预热在途，带真实百分比），
+            // 引擎与文件齐备后转「初始化画布」，画布可交互时由 onAppletReady 撤掉。
+            activePlaceholder = typeof host.querySelector === 'function'
+                ? host.querySelector('.ggb-embed-placeholder') : null;
+            if (activePlaceholder) {
+                setPlaceholderStage('engine', engineBodyProgress || 0);
+                if (engineBodyPromise && engineBodyProgress !== 1) {
+                    activeProgressUnsubscribe = subscribeProgress(ratio => setPlaceholderStage('engine', ratio));
+                }
+            }
+
             try {
                 // 下载 .ggb 与注入引擎彼此无依赖，并行发起：
                 // 串行时总耗时 = 下载+编码（最大 2 MiB）+ 引擎（约 8 MB），
@@ -389,6 +567,7 @@
                 ]);
                 if (activeMountNode !== mountNode) return null; // 已被后续 mount 取代
                 activeBase64 = base64;
+                setPlaceholderStage('init', 1);
                 const parameters = {
                     appName: 'classic',
                     language: 'zh_CN',
@@ -400,7 +579,10 @@
                     showMenuBar: editable,
                     showResetIcon: editable,
                     enableLabelDrags: editable,
-                    ggbBase64: base64
+                    ggbBase64: base64,
+                    // 画布可交互的精确时点：撤占位 + performance.mark 打点。
+                    // deployggb.js 支持该回调；canvas 观察作为兜底通道。
+                    appletOnLoad: function () { onAppletReady(host); }
                 };
                 const applet = new GGBApplet(parameters, true);
                 if (applet && typeof applet.setHTML5Codebase === 'function') {
@@ -410,6 +592,7 @@
                 }
                 applet.inject(mountNode.id);
                 activeApplet = applet;
+                watchAppletReady(host, assetId);
                 return applet;
             } catch (error) {
                 debug.debug('GGB mount failed:', error && error.message);
@@ -418,7 +601,10 @@
             }
         }
 
-        return { loadEngine, prewarm, isEngineReady, mount, unmount, getBase64, isReady, GGB_CODEBASE };
+        return {
+            loadEngine, prewarm, prewarmEngineBody, isEngineReady, isEngineBodyReady,
+            mount, unmount, getBase64, isReady, GGB_CODEBASE
+        };
     })();
     window.GgbEmbed = GgbEmbed;
 
@@ -535,16 +721,17 @@
     }
 
     // 嵌入占位：有预览图时以虚化预览作底（.ggb-embed-placeholder-image），
-    // 比纯转圈更接近「即将出现的内容」；文案按引擎是否就绪切换，
-    // 首次加载明说「约 8 MB、只下一次」，管理等待预期。
+    // 比纯转圈更接近「即将出现的内容」。文案按「8 MB 主体是否已缓存」给出诚实起点，
+    // 之后由 mount() 随真实阶段更新（下载引擎带百分比 → 初始化画布 → 移除）：
+    // 不再出现「正在读取 .ggb」而实际在下 8 MB 引擎的误导。
     function embedPlaceholderHtml(asset) {
         const preview = asset ? imageUrl(asset.preview_image_path) : '';
-        const engineReady = !!(window.GgbEmbed && typeof window.GgbEmbed.isEngineReady === 'function'
-            && window.GgbEmbed.isEngineReady());
-        const title = engineReady ? '正在载入演示文件' : '正在加载 GeoGebra 组件';
-        const hint = engineReady
-            ? '正在读取 .ggb 并初始化画布。'
-            : '首次加载需要下载 GeoGebra 引擎（约 8 MB），同一浏览器内只下载一次。';
+        const bodyReady = !!(window.GgbEmbed && typeof window.GgbEmbed.isEngineBodyReady === 'function'
+            && window.GgbEmbed.isEngineBodyReady());
+        const title = bodyReady ? '正在初始化画布' : '正在下载 GeoGebra 引擎';
+        const hint = bodyReady
+            ? '引擎已就绪，正在载入演示文件并渲染图形。'
+            : '首次使用需下载约 8 MB 引擎，只下载一次，之后秒开。';
         return `
             <div class="ggb-embed-placeholder" role="status" aria-live="polite">
                 ${preview ? `<img class="ggb-embed-placeholder-image" src="${escapeAttribute(preview)}" alt="" aria-hidden="true" decoding="async">` : ''}
