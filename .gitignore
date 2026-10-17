@@ -121,3 +121,9 @@ tests/artifacts/*
 /tests/test_question_exchange.py
 /scripts/migrate_word_math_private_chars.py
 /tests/test_migrate_word_math_private_chars.py
+
+# 14. GeoGebra 网页引擎本地镜像（由 tools/geogebra/mirror_engine.py 生成）
+# 公开仓库 = 公开再分发，引擎的再分发许可尚未确认，故引擎文件一律不入库；
+# 仅保留 README.md 占位说明。发布期由 tools/release/stage_engine.py 走非 git 通道复制。
+static/lib/geogebra/*
+!static/lib/geogebra/README.md

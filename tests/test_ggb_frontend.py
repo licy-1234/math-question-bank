@@ -548,7 +548,7 @@ def test_ggb_module_never_sanitizes_applet_markup():
     assert "<iframe" not in GGB_SOURCE
     # Destruction + attribution + pinned codebase are all in the shipped source.
     assert "applet.remove" in GGB_SOURCE
-    assert "setHTML5Codebase(GGB_CODEBASE)" in GGB_SOURCE
+    assert "setHTML5Codebase(resolveCodebase())" in GGB_SOURCE
     assert "Made with GeoGebra" in GGB_SOURCE
     assert "https://www.geogebra.org" in GGB_SOURCE
 

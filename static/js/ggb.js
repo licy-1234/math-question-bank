@@ -23,6 +23,13 @@
     // deployggb.js 走官方 CDN 动态注入（不在 index.html 里静态引入），带超时与网络失败兜底。
     // 它是版本无关的官方加载器：实际加载哪个模块由 codebase 路径末段决定（这里是 web3d）。
     const DEPLOYGGB_SRC = 'https://www.geogebra.org/apps/deployggb.js';
+    // 本地引擎优先开关（阶段一：默认关闭）。关闭时与既有 CDN 行为逐字节一致；
+    // 打开后 codebase / deployggb.js 均改走 /static/lib/geogebra/<版本> 本地镜像。
+    // 镜像由 tools/geogebra/mirror_engine.py 生成、tools/release/stage_engine.py 随发布复制；
+    // 阶段一不做运行时存在性探测（HEAD），只按此标志静态切换，探测留待阶段二。
+    const ENGINE_VERSION = '5.4.932.1';
+    const PREFER_LOCAL_ENGINE = false;
+    const GGB_LOCAL_BASE = '/static/lib/geogebra/' + ENGINE_VERSION;
     // 引擎脚本 + GWT cache.js 合计约 8 MB，弱网下 8 秒误杀率不低；
     // 配合「打开工作区即预热 + 预览图占位」，等待期有明确反馈，故放宽到 15 秒。
     const ENGINE_TIMEOUT_MS = 15000;
@@ -31,6 +38,15 @@
     // 超时后撤占位并给出「重试 / 下载 .ggb」两条出路。
     // 60s 对跨境慢网偏紧（8 MB 在 100 KB/s 下需 80s），放宽到 90s。
     const INJECT_TIMEOUT_MS = 90000;
+
+    // 本地优先开关解析：阶段一只按 PREFER_LOCAL_ENGINE 静态切换，不做存在性探测。
+    // 本地 codebase = GGB_LOCAL_BASE + '/web3d'，本地 deployggb = GGB_LOCAL_BASE + '/deployggb.js'。
+    function resolveCodebase() {
+        return PREFER_LOCAL_ENGINE ? (GGB_LOCAL_BASE + '/web3d') : GGB_CODEBASE;
+    }
+    function resolveDeployggbSrc() {
+        return PREFER_LOCAL_ENGINE ? (GGB_LOCAL_BASE + '/deployggb.js') : DEPLOYGGB_SRC;
+    }
 
     // ---------------- 词表（本地兜底；后端 /api/config/ggb-link-types 就绪后以其为准） ----------------
 
@@ -288,7 +304,7 @@
                     finish(reject, new Error('GeoGebra 引擎加载超时'));
                 }, ENGINE_TIMEOUT_MS);
                 const script = document.createElement('script');
-                script.src = DEPLOYGGB_SRC;
+                script.src = resolveDeployggbSrc();
                 script.async = true;
                 script.onload = () => {
                     if (window.GGBApplet) finish(resolve, window.GGBApplet);
@@ -347,7 +363,7 @@
             if (engineBodyPromise) return engineBodyPromise;
             const task = (async () => {
                 try {
-                    const base = GGB_CODEBASE.replace(/\/+$/, '');
+                    const base = resolveCodebase().replace(/\/+$/, '');
                     const nocacheResponse = await fetch(base + '/web3d.nocache.js', { cache: 'force-cache' });
                     if (!nocacheResponse || !nocacheResponse.ok) return false;
                     const nocacheText = typeof nocacheResponse.text === 'function'
@@ -701,7 +717,7 @@
                 if (applet && typeof applet.setHTML5Codebase === 'function') {
                     // 钉住具体构建（5.4.932.1 = Classic 6 桌面版的网页对应引擎），
                     // 避免默认分支漂移导致与教师桌面版不一致。
-                    applet.setHTML5Codebase(GGB_CODEBASE);
+                    applet.setHTML5Codebase(resolveCodebase());
                 }
                 applet.inject(mountNode.id);
                 activeApplet = applet;
