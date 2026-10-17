@@ -281,11 +281,20 @@
 
 .ggb-card-meta {
     display: flex;
-    flex-wrap: wrap;
-    gap: var(--ggb-sp-2);
+    flex-wrap: nowrap;
+    gap: var(--ggb-sp-1);
+    overflow: hidden;
     color: var(--ggb-text-muted);
     font-size: var(--ggb-fs-badge);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+/* 窄卡片里日期曾被挤成竖排三行；改为单行省略，完整信息在详情区可见。 */
+.ggb-card-meta > * {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .ggb-card-badges {
@@ -1072,6 +1081,9 @@
         --ggb-inspector-track: 212px;
         grid-template-columns: 200px minmax(0, 1fr) 212px;
     }
+    /* 标题行窄屏改为「标题独占一行 + 状态/保存右对齐」，避免控件乱换行。 */
+    .ggb-detail-title-row { justify-content: flex-end; }
+    .ggb-detail-title-row #ggbTitleInput { flex: 1 1 100%; }
     .ggb-detail-actions-row .glass-btn { padding: var(--ggb-sp-1) var(--ggb-sp-2); }
 }
 
