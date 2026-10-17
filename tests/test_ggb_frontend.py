@@ -428,7 +428,7 @@ def test_placeholder_reports_the_real_stage_then_is_removed_when_applet_ready():
       await window.GgbEmbed.mount({ host, assetId: 8 });
       // 引擎与文件齐备后进入「初始化画布」，而不是「正在读取 .ggb」。
       assert.equal(ph.titleEl.textContent, '正在初始化画布');
-      assert.ok(ph.descEl.textContent.indexOf('引擎已就绪') >= 0, ph.descEl.textContent);
+      assert.ok(ph.descEl.textContent.indexOf('载入演示文件') >= 0, ph.descEl.textContent);
       // appletOnLoad 必须把占位从 DOM 移除，否则它会一直盖在画布上。
       assert.equal(typeof engineState.lastParams.appletOnLoad, 'function');
       engineState.lastParams.appletOnLoad();

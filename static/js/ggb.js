@@ -476,7 +476,10 @@
             } else if (stage === 'init') {
                 activePlaceholderStage = 'init';
                 titleEl.textContent = '正在初始化画布';
-                descEl.textContent = '引擎已就绪，正在载入演示文件并渲染图形。';
+                // 加载器就绪不等于 8 MB 主体就绪：init 阶段主体可能仍在预热/注入中。
+                descEl.textContent = engineBodyProgress === 1
+                    ? '引擎已就绪，正在载入演示文件并渲染图形。'
+                    : '正在准备引擎并载入演示文件（首次约 8 MB），请稍候。';
             }
         }
 
