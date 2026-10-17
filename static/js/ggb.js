@@ -236,15 +236,18 @@
         let enginePromise = null;
         // 8 MB 引擎主体的预热 Promise（deployggb.js 只是加载器，主体在 inject 时才下）。
         let engineBodyPromise = null;
-        // 主体预热进度 0–1；null 表示还没开始。注意与 isEngineReady 区分：
-        // 后者只代表 37 KB 加载器就绪，前者才代表主包已进浏览器缓存。
+        // 主体预热进度 0–1；null 表示未知（无 Content-Length）。注意与
+        // isEngineReady 区分：后者只代表 37 KB 加载器就绪，前者才代表主包已缓存。
         let engineBodyProgress = null;
+        let engineBodyReceived = 0;
+        let engineBodyTotal = 0;
         const progressListeners = new Set();
         let prewarmPromise = null;
         let activeApplet = null;
         let activeMountNode = null;
         let activeBase64 = null;
         let activePlaceholder = null;
+        let activePlaceholderStage = null;
         let canvasObserver = null;
         let injectTimer = null;
         let activeProgressUnsubscribe = null;
@@ -307,18 +310,28 @@
             return engineBodyProgress === 1;
         }
 
-        function notifyProgress(ratio) {
-            engineBodyProgress = ratio >= 1 ? 1 : ratio;
+        // 进度回调携带「已收字节 / 总字节」：跨境链路常见 Transfer-Encoding: chunked
+        // （无 Content-Length），此时退回按 MB 显示，仍然诚实。
+        function notifyProgress(received, total) {
+            engineBodyReceived = received || 0;
+            engineBodyTotal = total > 0 ? total : 0;
+            engineBodyProgress = engineBodyTotal > 0
+                ? Math.min(1, engineBodyReceived / engineBodyTotal) : null;
             progressListeners.forEach(listener => {
                 try { listener(engineBodyProgress); } catch (e) { /* 订阅方异常不影响预热 */ }
             });
         }
 
+        function markBodyReady() {
+            engineBodyProgress = 1;
+            progressListeners.forEach(listener => {
+                try { listener(1); } catch (e) { /* ignore */ }
+            });
+        }
+
         function subscribeProgress(listener) {
             progressListeners.add(listener);
-            if (engineBodyProgress != null) {
-                try { listener(engineBodyProgress); } catch (e) { /* ignore */ }
-            }
+            try { listener(engineBodyProgress); } catch (e) { /* ignore */ }
             return () => progressListeners.delete(listener);
         }
 
@@ -348,7 +361,7 @@
                             ? response.headers.get('Content-Length') : 0) || 0;
                     if (!response.body || typeof response.body.getReader !== 'function') {
                         await response.arrayBuffer();
-                        notifyProgress(1);
+                        markBodyReady();
                         return true;
                     }
                     const reader = response.body.getReader();
@@ -357,9 +370,9 @@
                         const chunk = await reader.read();
                         if (chunk.done) break;
                         received += (chunk.value && chunk.value.length) || 0;
-                        if (total > 0) notifyProgress(Math.min(1, received / total));
+                        notifyProgress(received, total);
                     }
-                    notifyProgress(1);
+                    markBodyReady();
                     return true;
                 } catch (error) {
                     debug.debug('GGB engine body prewarm failed:', error && error.message);
@@ -438,17 +451,30 @@
         function setPlaceholderStage(stage, ratio) {
             const placeholder = activePlaceholder;
             if (!placeholder || !placeholder.parentNode) return;
+            // 阶段只前进不回退：进入「初始化画布」后，迟到的下载进度不得把文案改回去。
+            if (stage === 'engine' && activePlaceholderStage === 'init') return;
             if (typeof placeholder.querySelector !== 'function') return;
             const titleEl = placeholder.querySelector('.ui-state-title');
             const descEl = placeholder.querySelector('.ui-state-description');
             if (!titleEl || !descEl) return;
             if (stage === 'engine') {
-                const pct = Math.max(0, Math.min(100, Math.round((ratio || 0) * 100)));
+                activePlaceholderStage = 'engine';
                 titleEl.textContent = '正在下载 GeoGebra 引擎';
-                descEl.textContent = pct > 0
-                    ? '已下载 ' + pct + '%（约 8 MB，只下载一次，之后秒开）。'
-                    : '首次使用需下载约 8 MB 引擎，只下载一次，之后秒开。';
+                if (engineBodyTotal > 0) {
+                    const pct = Math.max(0, Math.min(100,
+                        Math.round((engineBodyReceived / engineBodyTotal) * 100)));
+                    descEl.textContent = pct > 0
+                        ? '已下载 ' + pct + '%（约 8 MB，只下载一次，之后秒开）。'
+                        : '首次使用需下载约 8 MB 引擎，只下载一次，之后秒开。';
+                } else if (engineBodyReceived > 0) {
+                    // 跨境链路常见 chunked（无 Content-Length）：按已收 MB 报进度。
+                    descEl.textContent = '已下载 ' + (engineBodyReceived / 1048576).toFixed(1)
+                        + ' MB（约 8 MB，只下载一次，之后秒开）。';
+                } else {
+                    descEl.textContent = '首次使用需下载约 8 MB 引擎，只下载一次，之后秒开。';
+                }
             } else if (stage === 'init') {
+                activePlaceholderStage = 'init';
                 titleEl.textContent = '正在初始化画布';
                 descEl.textContent = '引擎已就绪，正在载入演示文件并渲染图形。';
             }
@@ -457,6 +483,7 @@
         function removeActivePlaceholder() {
             const placeholder = activePlaceholder;
             activePlaceholder = null;
+            activePlaceholderStage = null;
             if (placeholder && placeholder.parentNode) {
                 placeholder.parentNode.removeChild(placeholder);
             }
@@ -511,6 +538,7 @@
             activeMountNode = null;
             activeBase64 = null;
             activePlaceholder = null;
+            activePlaceholderStage = null;
             if (applet && typeof applet.remove === 'function') {
                 try {
                     applet.remove();
@@ -567,6 +595,8 @@
                 ]);
                 if (activeMountNode !== mountNode) return null; // 已被后续 mount 取代
                 activeBase64 = base64;
+                // 已进入初始化阶段：进度订阅到此为止（避免迟到的进度把文案改回下载态）。
+                if (activeProgressUnsubscribe) { activeProgressUnsubscribe(); activeProgressUnsubscribe = null; }
                 setPlaceholderStage('init', 1);
                 const parameters = {
                     appName: 'classic',
