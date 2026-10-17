@@ -3532,3 +3532,17 @@ def test_question_save_refreshes_both_tag_memory_dimensions():
     # 失败/异常分支不得刷新：notifySaved 只能出现在成功分支（上面已断言各 1 次），
     # 且必须位于 return true 之前。
     assert import_source.index("notifySaved('micro'") < import_source.index("pendingMemoryTags.micro.length)") + 200
+
+
+def test_modal_open_only_fades_the_layout_not_modal_headers():
+    """弹窗打开时只淡化应用顶栏与 main，不能连弹窗自己的 header 一起隐藏。
+
+    历史上写的是 `body.modal-active header`，它同时命中弹窗内的 <header>，
+    导致弹窗没有标题、标题栏里的关闭/最大化按钮 opacity:0 + pointer-events:none
+    点不动（截图里「弹窗没有标题」就是这个原因）。
+    """
+
+    css = _read(CSS_PATH)
+    assert "body.modal-active #appContentShell > header" in css
+    assert "body.modal-active main" in css
+    assert "body.modal-active header," not in css

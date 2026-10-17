@@ -1321,7 +1321,10 @@ input.glass-input {
 }
 
 /* 声明式背景物理防闪与淡化机制：弹窗开启时，将底部的 header 和 main 的透明度完全淡化至 0，彻底从物理层面隐去一切可能产生重绘、光栅化和心跳动画的复杂元素，以纯净的牛奶磨砂白底色呈现优雅的背光，彻底终结所有闪烁冲突 */
-body.modal-active header,
+/* 只淡化应用顶栏与主内容；不能写成 body.modal-active header——那会把弹窗自身的
+   header（标题、关闭、最大化）一起设为 opacity:0 + pointer-events:none，
+   导致弹窗没有标题且按钮点不动。 */
+body.modal-active #appContentShell > header,
 body.modal-active main {
     opacity: 0 !important;
     pointer-events: none !important; /* 弹窗状态下禁止点击背景元素 */
