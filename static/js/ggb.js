@@ -251,6 +251,8 @@
         let canvasObserver = null;
         let injectTimer = null;
         let activeProgressUnsubscribe = null;
+        let hostObserver = null;
+        let hostResizeTimer = null;
         let seq = 0;
         // base64 有界缓存（assetId:versionNo → base64）。.ggb 上限 2 MiB
         // （ggb_security 流式限量），base64 约 2.7 MB/条，故只缓存少量条目、
@@ -532,6 +534,7 @@
 
         // 严格销毁：优先 applet.remove()；不可用时退化为清空容器 DOM 并释放引用。
         function unmount() {
+            stopHostSizeWatch();
             if (injectTimer) { clearTimeout(injectTimer); injectTimer = null; }
             if (canvasObserver) { canvasObserver.disconnect(); canvasObserver = null; }
             if (activeProgressUnsubscribe) { activeProgressUnsubscribe(); activeProgressUnsubscribe = null; }
@@ -559,6 +562,27 @@
 
         function isReady() {
             return activeApplet != null;
+        }
+
+        // 容器尺寸变化的统一入口：弹窗最大化、窗口缩放、布局切换都走这里。
+        // 用 ResizeObserver 而不是定时器猜时间点——CSS 过渡期间会连续触发，
+        // 按最后一次尺寸去抖 120ms 后重排。
+        function watchHostSize(host) {
+            stopHostSizeWatch();
+            if (typeof ResizeObserver !== 'function' || !host) return;
+            hostObserver = new ResizeObserver(() => {
+                if (hostResizeTimer) clearTimeout(hostResizeTimer);
+                hostResizeTimer = setTimeout(() => {
+                    hostResizeTimer = null;
+                    resize();
+                }, 120);
+            });
+            hostObserver.observe(host);
+        }
+
+        function stopHostSizeWatch() {
+            if (hostResizeTimer) { clearTimeout(hostResizeTimer); hostResizeTimer = null; }
+            if (hostObserver) { hostObserver.disconnect(); hostObserver = null; }
         }
 
         // 容器尺寸变化后让 GGB 重新测量（弹窗最大化/还原时用）。
@@ -605,6 +629,7 @@
             mountNode.id = uniqueHostId();
             host.appendChild(mountNode);
             activeMountNode = mountNode;
+            watchHostSize(host);
 
             // 占位跟随真实阶段：先报「下载引擎」（若主体预热在途，带真实百分比），
             // 引擎与文件齐备后转「初始化画布」，画布可交互时由 onAppletReady 撤掉。
@@ -1301,9 +1326,9 @@
                 const on = !shell.classList.contains('is-expanded');
                 applyExpanded(on);
                 try { window.localStorage.setItem('ggb-editor-expanded', on ? '1' : '0'); } catch (e) { /* 隐私模式忽略 */ }
-                // 容器变了，GGB 需要重新测量；过渡中与结束后各触发一次。
+                // 容器变了：立即给一次反馈，最终尺寸由 ResizeObserver 去抖兜底
+                // （CSS 过渡期间逐帧变化，定时器猜不准最终值）。
                 requestAnimationFrame(() => GgbEmbed.resize());
-                setTimeout(() => GgbEmbed.resize(), 280);
             });
         }
 
