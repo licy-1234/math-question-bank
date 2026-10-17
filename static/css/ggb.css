@@ -281,18 +281,19 @@
 
 .ggb-card-meta {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: var(--ggb-sp-1);
     overflow: hidden;
     color: var(--ggb-text-muted);
     font-size: var(--ggb-fs-badge);
     font-variant-numeric: tabular-nums;
-    white-space: nowrap;
 }
 
-/* 窄卡片里日期曾被挤成竖排三行；改为单行省略，完整信息在详情区可见。 */
+/* 窄卡片里日期曾被逐字拆成竖排；每个字段整体不换行，放不下就整项落到第二行。 */
 .ggb-card-meta > * {
-    min-width: 0;
+    flex: 0 0 auto;
+    max-width: 100%;
+    white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
