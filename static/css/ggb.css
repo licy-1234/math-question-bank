@@ -712,7 +712,19 @@
 .ggb-inspector-action {
     align-self: flex-start;
     padding: var(--ggb-sp-1) var(--ggb-sp-2);
-    font-size: var(--ggb-fs-badge);
+    font-size: var(--ggb-fs-caption);
+}
+
+/* GGB 弹窗页脚按钮：.glass-btn 自身不带内边距（历史实现靠 Tailwind 工具类），
+   只用纯 class 时会被 preflight 把 padding 归零——按钮被压成小圆、文字外溢。
+   这里统一补齐内边距/字号/圆角，覆盖标签、上传、关联、在线编辑四个弹窗。 */
+.glass-modal [data-ggb-modal-footer] .glass-btn,
+.glass-modal [data-ggb-modal-footer] .glass-btn-primary {
+    padding: 6px var(--ggb-sp-3);
+    border-radius: var(--ggb-r-md);
+    font-size: var(--ggb-fs-body);
+    line-height: 1.4;
+    white-space: nowrap;
 }
 
 .ggb-version-list,
