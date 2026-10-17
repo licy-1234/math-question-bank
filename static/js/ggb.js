@@ -600,9 +600,9 @@
             const width = rect ? Math.round(rect.width) : 0;
             const height = rect ? Math.round(rect.height) : 0;
             if (!width || !height) return;
-            // 顺序不能反：先 setSize 让 GGB 按新尺寸重排画布，再同步缩放层。
-            // 反过来（先改 scaler）会让 GGB 把画布按新容器再缩一次——
-            // 实测画布会停在 1096×534，而不是正确的 1128×570。
+            // 只调 setSize，不动 .applet_scaler：setSize 自己会重排画布与缩放层；
+            // 手工改 scaler 会让 GGB 按新容器再缩一次（实测画布停在 1096×534，
+            // 而正确值是 1128×570）。宿主 overflow:visible，不存在裁切问题。
             const api = window.ggbApplet;
             if (api && typeof api.setSize === 'function') {
                 try {
@@ -610,11 +610,6 @@
                 } catch (error) {
                     debug.debug('GGB setSize failed:', error && error.message);
                 }
-            }
-            const scaler = typeof node.querySelector === 'function' ? node.querySelector('.applet_scaler') : null;
-            if (scaler && scaler.style) {
-                scaler.style.width = width + 'px';
-                scaler.style.height = height + 'px';
             }
             try { window.dispatchEvent(new Event('resize')); } catch (e) { /* ignore */ }
         }
