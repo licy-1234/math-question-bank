@@ -269,6 +269,134 @@ def test_network_failure_falls_back_with_download_link():
 
 
 # --------------------------------------------------------------------------
+# Loading performance: parallel file+engine, bounded cache, prewarming
+# --------------------------------------------------------------------------
+
+PARALLEL_HARNESS = r"""
+const engineState = { injectedId: null, removed: 0, lastParams: null };
+let fetchStarted = false;
+let resolveFetch;
+window.fetch = () => {
+  fetchStarted = true;
+  return new Promise(resolve => {
+    resolveFetch = () => resolve({
+      ok: true, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer
+    });
+  });
+};
+globalThis.fetch = window.fetch;
+function freshHost() { return document.createElement('div'); }
+"""
+
+
+def test_mount_downloads_file_and_engine_in_parallel():
+    """下载 .ggb 与注入引擎必须同时发起：串行会把两个下载周期叠加。"""
+
+    run_js(PARALLEL_HARNESS + r"""
+      const host = freshHost();
+      const mountPromise = window.GgbEmbed.mount({ host, assetId: 9 });
+      // 此刻两者都已发起、都未完成：脚本在 head 里，fetch 已调用，引擎未就绪。
+      assert.equal(document.head.children.length, 1, 'deployggb.js injected');
+      assert.ok(fetchStarted, '.ggb download started');
+      assert.equal(typeof window.GGBApplet, 'undefined');
+      // 先放行引擎：applet 仍不得注入（还在等文件）。
+      window.GGBApplet = function (parameters) {
+        engineState.lastParams = parameters;
+        this.parameters = parameters;
+        this.inject = id => { engineState.injectedId = id; };
+        this.remove = function () { engineState.removed += 1; };
+        this.setHTML5Codebase = function () {};
+      };
+      document.head.children[0].onload();
+      await Promise.resolve();
+      assert.ok(!engineState.injectedId, 'applet must wait for the file too');
+      // 再放行文件下载：两者齐备才注入。
+      resolveFetch();
+      const applet = await mountPromise;
+      assert.ok(applet, 'mount resolved once both tasks finished');
+      assert.ok(engineState.injectedId, 'applet injected');
+      assert.equal(typeof engineState.lastParams.ggbBase64, 'string');
+    """)
+
+
+def test_repeated_mount_reuses_cached_base64():
+    """同一资源重复挂载不得重复下载 + 重复编码（有界缓存）。"""
+
+    run_js(MOUNT_HARNESS + r"""
+      let fetchCalls = 0;
+      window.fetch = async () => {
+        fetchCalls += 1;
+        return { ok: true, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer };
+      };
+      globalThis.fetch = window.fetch;
+      const host = freshHost();
+      await window.GgbEmbed.mount({ host, assetId: 5 });
+      await window.GgbEmbed.mount({ host, assetId: 5 });
+      assert.equal(fetchCalls, 1, 'second mount of the same asset must not re-download');
+    """)
+
+
+def test_prewarm_is_idempotent_and_reports_engine_readiness():
+    run_js(r"""
+      assert.equal(window.GgbEmbed.isEngineReady(), false);
+      window.GgbEmbed.prewarm();
+      assert.equal(document.head.children.length, 1, 'prewarm injects deployggb.js');
+      // 第二次预热不得重复注入脚本（幂等由「在途 Promise 复用」保证）。
+      window.GgbEmbed.prewarm();
+      assert.equal(document.head.children.length, 1, 'no duplicate injection');
+      // 放行脚本加载（GGBApplet 仍缺失 → 走「未就绪」拒绝），清掉超时定时器，
+      // 避免 node 进程被未决的 15 秒定时器拖住；prewarm 的 catch 会吞掉它。
+      document.head.children[0].onload();
+      await Promise.resolve();
+      window.GGBApplet = function () {};
+      assert.equal(window.GgbEmbed.isEngineReady(), true);
+      const third = window.GgbEmbed.prewarm();
+      assert.ok(third instanceof Promise, 'prewarm stays a promise when ready');
+      assert.equal(document.head.children.length, 1, 'ready engine is not re-injected');
+    """)
+
+
+def test_workspace_open_and_card_intent_prewarm_the_engine():
+    source = section(GGB_SOURCE, "async function renderGgbWorkspace",
+                     "// ---------------- 命名空间导出")
+    assert "prewarm()" in source, "打开工作区时应并行预热引擎"
+    assert "pointerenter" in GGB_SOURCE, "卡片悬停应预热引擎"
+    assert "'focus'" in GGB_SOURCE or '"focus"' in GGB_SOURCE, "卡片聚焦应预热引擎"
+
+
+def test_embed_placeholder_replaces_the_bare_spinner():
+    # 三处宿主（详情 / 题目侧 / 在线编辑）都必须走带预览图占位的 embedPlaceholderHtml。
+    assert "function embedPlaceholderHtml" in GGB_SOURCE
+    assert GGB_SOURCE.count("embedPlaceholderHtml") >= 5
+    assert "ggb-embed-placeholder" in GGB_SOURCE
+    assert "stateHtml('loading', '正在加载 GeoGebra 组件')" not in GGB_SOURCE
+    # 详情区结构：GGB 占满主体（stage），预览图降级为下方参考条。
+    assert "ggb-detail-stage" in GGB_SOURCE
+    assert "ggb-preview-strip" in GGB_SOURCE
+    assert "ggb-preview-figure" not in GGB_SOURCE
+
+
+def test_index_html_links_the_ggb_stylesheet():
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    assert '/static/css/ggb.css' in html
+    # ggb.css 必须在 app.css 之后：同特异性冲突时项目样式胜出。
+    assert html.index('/static/css/app.css') < html.index('/static/css/ggb.css')
+
+
+def test_ggb_stylesheet_covers_the_workspace_skeleton():
+    css = (ROOT / "static" / "css" / "ggb.css").read_text(encoding="utf-8")
+    for selector in ('.ggb-workspace-body', '.ggb-list-panel', '.ggb-detail-panel',
+                     '.ggb-inspector-panel', '.ggb-embed-host', '.ggb-mobile-switch',
+                     '.ggb-preview-strip', '.ggb-form-grid'):
+        assert selector in css, f"ggb.css 缺少 {selector}"
+    # 移动端必须走 data-mobile-pane 单栏切换（与 topic 同一断点）。
+    assert 'data-mobile-pane' in css
+    assert 'max-width: 960px' in css
+    # GGB 宿主必须是定位上下文，applet 注入才能拿到确定像素尺寸。
+    assert '.ggb-embed-host' in css and 'position: relative' in css
+
+
+# --------------------------------------------------------------------------
 # Question editor panel is lazy and question-switch destroys the applet
 # --------------------------------------------------------------------------
 
@@ -370,6 +498,20 @@ def test_workspace_editor_and_import_hooks_are_wired():
     editor = read("editor.js")
     assert "'review', 'ggb'" in editor
     assert "window.GgbPanel.mountQuestionPanel(EditorState.questionId)" in editor
+
+
+def test_inner_select_workspace_reserves_a_ggb_branch():
+    """内层 selectWorkspace 的 if 链必须给 ggb 显式占位。
+
+    否则选「演示资源库」会落入 bank 兜底分支，两个工作区同时显示
+    （这正是截图里「题库 + 演示资源库叠在一起」的根因）。
+    """
+
+    paper = read("paper.js")
+    topic_at = paper.index("workspaceId === 'topic'")
+    ggb_at = paper.index("workspaceId === 'ggb'", topic_at)
+    bank_fallback_at = paper.index("closeBankDetail()", ggb_at)
+    assert ggb_at < bank_fallback_at, "ggb 占位分支必须排在 bank 兜底 else 之前"
 
 
 def test_ggb_module_has_no_bare_console_log():

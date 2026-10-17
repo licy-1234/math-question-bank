@@ -67,6 +67,8 @@
     <script src="/static/lib/dompurify/purify.min.js"></script>
 
     <link rel="stylesheet" href="/static/css/app.css">
+    <!-- GGB 演示资源库专属排版（ggb-* 类体系；令牌与 app.css 的设计系统同源） -->
+    <link rel="stylesheet" href="/static/css/ggb.css">
 </head>
 <body class="h-screen overflow-hidden text-slate-800 font-sans antialiased flex">
 
@@ -1518,7 +1520,7 @@
                     </button>
                 </div>
             </header>
-            <div class="ggb-workspace-body">
+            <div class="ggb-workspace-body" data-mobile-pane="list">
                 <aside class="ggb-list-panel" aria-label="演示资源列表">
                     <div class="ggb-list-filters" id="ggbListFilters"><!-- Rendered by ggb.js --></div>
                     <div class="ggb-list-container custom-scrollbar" id="ggbListContainer">

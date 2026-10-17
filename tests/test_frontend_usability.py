@@ -1990,6 +1990,23 @@ def test_sidebar_uses_server_pagination_and_latest_request_wins():
     assert "showToast(`题目 #${fullItem.seq_num} 载入成功`)" in import_source
 
 
+def test_api_js_exposes_showToast_on_window():
+    """api.js 必须把 toast 渲染器挂到 window.showToast。
+
+    import.js / paper.js / topic.js / editor.js / ggb.js 共有 60+ 处
+    `if (window.showToast)` 或裸 showToast(...) 调用；该函数曾长期闭包在
+    api.js 的 IIFE 内，导致这些用户反馈全部静默丢失（"点了没反应"）。
+    api.js 是首个加载的脚本，挂全局后后续模块声明时即可见。
+    """
+
+    api_source = _read(STATIC_JS_DIR / "api.js")
+    assert "window.showToast = showToast;" in api_source
+    # 赋值必须紧随函数定义，且位于 IIFE 内（不是散落在外的补丁）。
+    definition_at = api_source.index("function showToast(message, type = 'success')")
+    exposure_at = api_source.index("window.showToast = showToast;")
+    assert definition_at < exposure_at
+
+
 def test_paper_bank_stream_uses_server_pagination_and_latest_request_wins():
     paper_source = _read(STATIC_JS_DIR / "paper.js")
     fetch_start = paper_source.index("let bankQuestionsAbortController = null;")

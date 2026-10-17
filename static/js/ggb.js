@@ -23,7 +23,9 @@
     // deployggb.js 走官方 CDN 动态注入（不在 index.html 里静态引入），带超时与网络失败兜底。
     // 它是版本无关的官方加载器：实际加载哪个模块由 codebase 路径末段决定（这里是 web3d）。
     const DEPLOYGGB_SRC = 'https://www.geogebra.org/apps/deployggb.js';
-    const ENGINE_TIMEOUT_MS = 8000;
+    // 引擎脚本 + GWT cache.js 合计约 8 MB，弱网下 8 秒误杀率不低；
+    // 配合「打开工作区即预热 + 预览图占位」，等待期有明确反馈，故放宽到 15 秒。
+    const ENGINE_TIMEOUT_MS = 15000;
 
     // ---------------- 词表（本地兜底；后端 /api/config/ggb-link-types 就绪后以其为准） ----------------
 
@@ -89,7 +91,16 @@
     // ---------------- 通用小工具 ----------------
 
     function toast(message, type) {
-        if (window.showToast) window.showToast(message, type || 'info');
+        if (typeof window.showToast === 'function') {
+            window.showToast(message, type || 'info');
+            return;
+        }
+        // window.showToast 在全代码库 0 处赋值（api.js 的 showToast 是 IIFE 闭包内函数，
+        // 从未挂全局）——直接调用等于静默丢弃，用户会以为「点了没反应」。
+        // 退化路径：错误走 console.error，其余走调试日志，保证反馈不丢。
+        const text = String(message || '');
+        if (type === 'error') console.error('[Ggb]', text);
+        else debug.debug('[Ggb toast]', text);
     }
 
     function escapeText(value) {
@@ -223,13 +234,22 @@
         let activeMountNode = null;
         let activeBase64 = null;
         let seq = 0;
+        // base64 有界缓存（assetId:versionNo → base64）。.ggb 上限 2 MiB
+        // （ggb_security 流式限量），base64 约 2.7 MB/条，故只缓存少量条目、
+        // 先进先出：切走再回、列表→详情重复挂载免去重复下载 + 重复编码。
+        const base64Cache = new Map();
+        const BASE64_CACHE_LIMIT = 6;
 
         function uniqueHostId() {
             seq += 1;
             return `ggb-applet-${Date.now()}-${seq}`;
         }
 
-        // 动态注入官方 CDN 的 deployggb.js，带 onerror 与 8 秒超时。
+        function cacheKey(assetId, versionNo) {
+            return `${assetId}:${versionNo || 'current'}`;
+        }
+
+        // 动态注入官方 CDN 的 deployggb.js，带 onerror 与超时。
         function loadEngine() {
             if (typeof window.GGBApplet !== 'undefined' && window.GGBApplet) {
                 return Promise.resolve(window.GGBApplet);
@@ -263,6 +283,21 @@
             return enginePromise;
         }
 
+        function isEngineReady() {
+            return typeof window.GGBApplet !== 'undefined' && !!window.GGBApplet;
+        }
+
+        // 预热：提前把 deployggb.js + GWT cache.js（约 8 MB）拉下来。
+        // 幂等——已就绪或已在进行中时直接复用；失败静默（下次 mount 的
+        // loadEngine 会重试，并最终走 showLoadFailure 兜底）。
+        function prewarm() {
+            if (isEngineReady()) return Promise.resolve(window.GGBApplet);
+            if (enginePromise) return enginePromise;
+            return loadEngine().catch(error => {
+                debug.debug('GGB engine prewarm failed:', error && error.message);
+            });
+        }
+
         function arrayBufferToBase64(buffer) {
             const bytes = new Uint8Array(buffer);
             let binary = '';
@@ -275,13 +310,21 @@
 
         // 主路径：下载当前 .ggb → base64（不用 filename 作为主路径）。
         async function getBase64(assetId, versionNo) {
+            const key = cacheKey(assetId, versionNo);
+            const cached = base64Cache.get(key);
+            if (cached) return cached;
             const path = versionNo
                 ? `/api/ggb-assets/${assetId}/versions/${versionNo}/file`
                 : `/api/ggb-assets/${assetId}/file`;
             const response = await fetch(path);
             if (!response.ok) throw new Error(`下载 .ggb 失败 ${response.status}`);
             const buffer = await response.arrayBuffer();
-            return arrayBufferToBase64(buffer);
+            const base64 = arrayBufferToBase64(buffer);
+            base64Cache.set(key, base64);
+            while (base64Cache.size > BASE64_CACHE_LIMIT) {
+                base64Cache.delete(base64Cache.keys().next().value);
+            }
+            return base64;
         }
 
         function showLoadFailure(container, assetId) {
@@ -335,11 +378,17 @@
             activeMountNode = mountNode;
 
             try {
-                const base64 = options.base64 || await getBase64(assetId, options.versionNo);
+                // 下载 .ggb 与注入引擎彼此无依赖，并行发起：
+                // 串行时总耗时 = 下载+编码（最大 2 MiB）+ 引擎（约 8 MB），
+                // 并行后总耗时 = max(两者)，通常直接省掉一整个下载周期。
+                const [base64, GGBApplet] = await Promise.all([
+                    options.base64
+                        ? Promise.resolve(options.base64)
+                        : getBase64(assetId, options.versionNo),
+                    loadEngine()
+                ]);
                 if (activeMountNode !== mountNode) return null; // 已被后续 mount 取代
                 activeBase64 = base64;
-                const GGBApplet = await loadEngine();
-                if (activeMountNode !== mountNode) return null;
                 const parameters = {
                     appName: 'classic',
                     language: 'zh_CN',
@@ -369,7 +418,7 @@
             }
         }
 
-        return { loadEngine, mount, unmount, getBase64, isReady, GGB_CODEBASE };
+        return { loadEngine, prewarm, isEngineReady, mount, unmount, getBase64, isReady, GGB_CODEBASE };
     })();
     window.GgbEmbed = GgbEmbed;
 
@@ -485,6 +534,28 @@
             </div>`;
     }
 
+    // 嵌入占位：有预览图时以虚化预览作底（.ggb-embed-placeholder-image），
+    // 比纯转圈更接近「即将出现的内容」；文案按引擎是否就绪切换，
+    // 首次加载明说「约 8 MB、只下一次」，管理等待预期。
+    function embedPlaceholderHtml(asset) {
+        const preview = asset ? imageUrl(asset.preview_image_path) : '';
+        const engineReady = !!(window.GgbEmbed && typeof window.GgbEmbed.isEngineReady === 'function'
+            && window.GgbEmbed.isEngineReady());
+        const title = engineReady ? '正在载入演示文件' : '正在加载 GeoGebra 组件';
+        const hint = engineReady
+            ? '正在读取 .ggb 并初始化画布。'
+            : '首次加载需要下载 GeoGebra 引擎（约 8 MB），同一浏览器内只下载一次。';
+        return `
+            <div class="ggb-embed-placeholder" role="status" aria-live="polite">
+                ${preview ? `<img class="ggb-embed-placeholder-image" src="${escapeAttribute(preview)}" alt="" aria-hidden="true" decoding="async">` : ''}
+                <div class="ui-state ui-state-loading">
+                    <span class="ui-state-icon" aria-hidden="true"><i class="fa-solid fa-spinner fa-spin"></i></span>
+                    <strong class="ui-state-title">${escapeText(title)}</strong>
+                    <span class="ui-state-description">${escapeText(hint)}</span>
+                </div>
+            </div>`;
+    }
+
     function renderListPanel() {
         const filters = document.getElementById('ggbListFilters');
         const container = document.getElementById('ggbListContainer');
@@ -535,6 +606,10 @@
             + '</div>';
         container.querySelectorAll('.ggb-card').forEach(button => {
             button.addEventListener('click', () => selectAsset(parseInt(button.dataset.ggbId, 10)));
+            // 悬停/聚焦即预热引擎：等用户点下去时，约 8 MB 的引擎已在下完的路上。
+            // prewarm 幂等，不会重复注入。
+            button.addEventListener('pointerenter', () => GgbEmbed.prewarm());
+            button.addEventListener('focus', () => GgbEmbed.prewarm());
         });
     }
 
@@ -613,22 +688,31 @@
         bindDetailHeader(asset);
 
         const scroll = document.getElementById('ggbDetailScroll');
+        // 主舞台结构：GGB 嵌入面板占满详情区剩余高度（唯一主角），
+        // 预览图从「与 GGB 并排」降级为下方紧凑参考条，文件信息一并沉底。
         scroll.innerHTML = `
-            <div class="ggb-preview-figure">
-                <div class="ggb-preview-thumb">
-                    ${preview
-                        ? `<img src="${escapeAttribute(preview)}" alt="${escapeAttribute(asset.title || '演示预览')}" loading="lazy" decoding="async">`
-                        : '<span class="ggb-preview-thumb-placeholder" aria-hidden="true"><i class="fa-solid fa-image"></i><em>未上传预览图</em></span>'}
-                </div>
+            <div class="ggb-detail-stage">
                 <div class="ggb-embed-panel">
                     <div class="ggb-embed-host" id="ggbAssetEmbedHost" role="region" aria-label="GeoGebra 动态演示预览"></div>
                     ${attributionHtml()}
+                </div>
+                <div class="ggb-preview-strip">
+                    <span class="ggb-preview-strip-thumb">
+                        ${preview
+                            ? `<img src="${escapeAttribute(preview)}" alt="${escapeAttribute(asset.title || '演示预览')}" loading="lazy" decoding="async">`
+                            : '<i class="fa-solid fa-image" aria-hidden="true"></i>'}
+                    </span>
+                    <span class="ggb-preview-strip-text">
+                        <span class="ggb-preview-strip-title">${escapeText(asset.title || '未命名演示')}</span>
+                        <span class="ggb-preview-strip-meta">${escapeText(formatBytes(asset.file_size))} · v${escapeText(asset.current_version_no || 1)} · ${escapeText(formatTime(asset.updated_at))}</span>
+                    </span>
                 </div>
             </div>`;
 
         const host = document.getElementById('ggbAssetEmbedHost');
         if (host) {
-            host.innerHTML = stateHtml('loading', '正在加载 GeoGebra 组件');
+            // 预览图虚化作占位底：引擎/文件还在路上时，用户先看到「即将出现的内容」。
+            host.innerHTML = embedPlaceholderHtml(asset);
             GgbEmbed.mount({ host, assetId: asset.id });
         }
     }
@@ -867,7 +951,7 @@
             <button type="button" class="glass-btn-primary rounded-xl" id="ggbOnlineEditSaveBtn">保存为新文件</button>`);
         openModal('ggbOnlineEditModal');
         const host = modal.querySelector('#ggbOnlineEditHost');
-        host.innerHTML = stateHtml('loading', '正在加载 GeoGebra 编辑器');
+        host.innerHTML = embedPlaceholderHtml(asset);
         // 可编辑 applet（showToolBar / showAlgebraInput 等全开）。
         GgbEmbed.mount({ host, assetId: asset.id, editable: true });
 
@@ -1040,7 +1124,7 @@
         const target = links.find(link => link.is_default) || links[0];
         const host = document.getElementById('ggbQuestionEmbedHost');
         if (target && host) {
-            host.innerHTML = stateHtml('loading', '正在加载 GeoGebra 组件');
+            host.innerHTML = embedPlaceholderHtml(null);
             GgbEmbed.mount({ host, assetId: target.ggb_id });
         } else if (host) {
             host.innerHTML = stateHtml('empty', '暂无可预览的演示', '关联一个演示资源后即可在此预览。');
@@ -1050,7 +1134,7 @@
     function previewLink(link) {
         const host = document.getElementById('ggbQuestionEmbedHost');
         if (!host) return;
-        host.innerHTML = stateHtml('loading', '正在加载 GeoGebra 组件');
+        host.innerHTML = embedPlaceholderHtml(null);
         GgbEmbed.mount({ host, assetId: link.ggb_id });
     }
 
@@ -1172,6 +1256,9 @@
 
     async function renderGgbWorkspace() {
         debug.debug('renderGgbWorkspace');
+        // 打开工作区即并行预热引擎（不 await：与列表/配置请求同时进行）。
+        // 用户从列表点开一个资源通常要一两秒，足够引擎下完一大半。
+        if (window.GgbEmbed && typeof window.GgbEmbed.prewarm === 'function') window.GgbEmbed.prewarm();
         await Promise.all([loadConfig(), loadAssetList()]);
         if (GgbStore.currentAssetId) {
             const exists = GgbStore.assets.some(asset => asset.id === GgbStore.currentAssetId);

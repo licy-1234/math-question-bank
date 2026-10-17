@@ -904,6 +904,14 @@
             }, 3500);
         }
 
+        // 挂到 window：paper.js / topic.js / editor.js / import.js / ggb.js 等模块
+        // 共有 60+ 处 `if (window.showToast)` / 裸 showToast(...) 调用，
+        // 此前本函数一直闭包在 IIFE 内、从未挂全局——那些提示全部静默丢弃，
+        // 用户侧表现为「点了没反应」（上传 .ggb、保存试卷、建立关联皆然）。
+        // 各前端测试桩同样按「window.showToast 全局存在」来写，与此一致。
+        // api.js 是第一个加载的脚本，后续模块在声明时即可见到它。
+        window.showToast = showToast;
+
         let systemPreferEngine = 'siliconflow';
         let systemPreferSolveModel = 'deepseek-v4-pro';
         let systemPreferParseModel = 'deepseek-flash';

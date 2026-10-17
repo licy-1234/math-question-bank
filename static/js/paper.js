@@ -457,6 +457,10 @@
             // 专题工坊：与 qa 分支同构；topic.js 必须在 paper.js 之后加载。
             if (topicSec) topicSec.classList.remove('hidden');
             if (typeof window.renderTopicWorkspace === 'function') window.renderTopicWorkspace();
+        } else if (workspaceId === 'ggb') {
+            // 演示资源库：必须显式占位。否则会落入下方 bank 兜底分支，
+            // 把题库工作区和演示资源库同时显示（两工作区叠加）。
+            // 显示与渲染由文件末尾 GGB 区块的外层包装层负责。
         } else {
             if (typeof window.closeBankDetail === 'function') window.closeBankDetail();
             if (bankSec) bankSec.classList.remove('hidden');

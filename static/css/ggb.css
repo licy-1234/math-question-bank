@@ -1,0 +1,927 @@
+/* ===== GGB 动态演示资源库（GeoGebra demonstration library） ===== */
+/* 排版体系 v1（2026-10-17）：照专题工坊的令牌化先例，为本工作区补齐成体系样式。
+   背景：a443434 只加了 HTML 区块，一个 ggb-* 规则都没有——三栏无栅格、卡片无尺寸、
+   详情区预览图与 GGB 并排挤压、表单 label 行内流，全部靠 Tailwind 兜底，
+   这是「布局错位 / 拥挤 / 留白不均」的直接根因。
+   设计约定：
+   - 令牌（间距 4px 基数 / 圆角 / 字号 / 语义色）定义在 :root，.dark 整体反转，
+     因为题目侧面板与上传弹窗在 #ggbWorkspaceSection 之外也要用同一套刻度。
+   - 内容层级：页面头(22/800) → 详情标题(18/700) → 分区标题(12/800) → 正文(13) → 辅助(12) → 徽章(11)。
+   - 视觉动线：左栏检索扫描 → 中栏「GGB 占满主体 + 预览条」→ 右栏检查器。
+   - 栅格：三栏 280 / 1fr / 300；≥1280 与 ≤1100 分档收窄、≤960 单栏 + 底部 pane 切换。
+   - GGB 嵌入面板是中栏唯一主角：占满详情区剩余高度，预览图降级为下方紧凑条。 */
+
+:root {
+    /* 间距刻度（4px 基数） */
+    --ggb-sp-1: 4px;
+    --ggb-sp-2: 8px;
+    --ggb-sp-3: 12px;
+    --ggb-sp-4: 16px;
+    --ggb-sp-5: 20px;
+    --ggb-sp-6: 24px;
+    /* 圆角刻度：控件 8 / 卡片 10 / 面板 14 / 面板大 16 */
+    --ggb-r-sm: 8px;
+    --ggb-r-md: 10px;
+    --ggb-r-lg: 14px;
+    --ggb-r-panel: 16px;
+    /* 字号刻度（桌面优先；11px 只用于徽章与药丸） */
+    --ggb-fs-badge: 0.6875rem;   /* 11px */
+    --ggb-fs-caption: 0.75rem;   /* 12px */
+    --ggb-fs-body: 0.8125rem;    /* 13px */
+    --ggb-fs-strong: 0.875rem;   /* 14px */
+    --ggb-fs-title: 1.125rem;    /* 18px */
+    --ggb-fs-page: 1.375rem;     /* 22px */
+    /* 行高刻度 */
+    --ggb-lh-tight: 1.3;
+    --ggb-lh-snug: 1.5;
+    /* 语义色（浅色） */
+    --ggb-text-strong: #0F172A;
+    --ggb-text-muted: #64748B;
+    --ggb-panel-bg: rgba(255, 255, 255, 0.94);
+    --ggb-panel-border: #E2E8F0;
+    --ggb-canvas: #F5F7FB;
+    --ggb-toolbar-bg: #F8FAFC;
+    --ggb-shadow-panel: 0 8px 24px rgba(15, 23, 42, 0.04);
+    --ggb-shadow-raised: 0 12px 32px rgba(15, 23, 42, 0.08);
+    /* 嵌入区骨架色（加载占位的渐进背景） */
+    --ggb-skeleton: #EDF1F7;
+    --ggb-skeleton-rgb: 237, 241, 247;
+}
+
+.dark {
+    --ggb-text-strong: #F1F5F9;
+    --ggb-text-muted: #94A3B8;
+    --ggb-panel-bg: rgba(22, 31, 48, 0.92);
+    --ggb-panel-border: rgba(255, 255, 255, 0.08);
+    --ggb-canvas: #0B1220;
+    --ggb-toolbar-bg: rgba(255, 255, 255, 0.03);
+    --ggb-shadow-panel: 0 8px 24px rgba(0, 0, 0, 0.25);
+    --ggb-shadow-raised: 0 12px 32px rgba(0, 0, 0, 0.35);
+    --ggb-skeleton: #16203A;
+    --ggb-skeleton-rgb: 22, 32, 58;
+}
+
+/* ---- 工作区外壳：页头 + 三栏主体（:not(.hidden) 与 Tailwind 的 .hidden 共存） ---- */
+#ggbWorkspaceSection.ggb-workspace:not(.hidden) {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    gap: var(--ggb-sp-3);
+    padding: var(--ggb-sp-4);
+    background: var(--ggb-canvas);
+}
+
+.ggb-workspace-header {
+    display: flex;
+    min-width: 0;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ggb-sp-3);
+    padding: var(--ggb-sp-1) var(--ggb-sp-1) 0;
+}
+
+.ggb-workspace-heading {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: var(--ggb-sp-3);
+}
+
+.ggb-workspace-heading-icon {
+    display: inline-flex;
+    width: 2.25rem;
+    height: 2.25rem;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(var(--brand-200-rgb), 0.8);
+    border-radius: var(--ggb-r-md);
+    background: rgba(var(--brand-50-rgb), 0.88);
+    color: rgb(var(--brand-600-rgb));
+    font-size: var(--ggb-fs-strong);
+}
+
+.ggb-workspace-heading h2 {
+    margin: 0;
+    color: var(--ggb-text-strong);
+    font-size: var(--ggb-fs-page);
+    font-weight: 800;
+    line-height: var(--ggb-lh-tight);
+    letter-spacing: -0.01em;
+}
+
+.ggb-workspace-heading p {
+    margin: var(--ggb-sp-1) 0 0;
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-body);
+    line-height: var(--ggb-lh-snug);
+}
+
+.ggb-workspace-actions {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: var(--ggb-sp-2);
+}
+
+/* ---- 三栏主体 ---- */
+.ggb-workspace-body {
+    --ggb-list-track: 280px;
+    --ggb-inspector-track: 300px;
+    display: grid;
+    grid-template-columns:
+        minmax(232px, var(--ggb-list-track))
+        minmax(0, 1fr)
+        minmax(252px, var(--ggb-inspector-track));
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    gap: var(--ggb-sp-3);
+}
+
+/* 三个面板共用：圆角 / 边框 / 阴影 / 底色由令牌驱动 */
+.ggb-list-panel,
+.ggb-detail-panel,
+.ggb-inspector-panel {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--ggb-panel-border);
+    border-radius: var(--ggb-r-panel);
+    background: var(--ggb-panel-bg);
+    box-shadow: var(--ggb-shadow-panel);
+}
+
+/* 中栏是演示主区：阴影略重，形成视觉焦点 */
+.ggb-detail-panel { box-shadow: var(--ggb-shadow-raised); }
+
+/* ---- 左栏：搜索 + 维度筛选 + 资源卡片 ---- */
+.ggb-list-filters {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--ggb-sp-2);
+    padding: var(--ggb-sp-3);
+    border-bottom: 1px solid var(--ggb-panel-border);
+}
+
+.ggb-list-filters .glass-input { width: 100%; }
+
+.ggb-dim-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ggb-sp-1);
+}
+
+.ggb-dim-chip {
+    min-height: 26px;
+    padding: var(--ggb-sp-1) var(--ggb-sp-2);
+    border: 1px solid var(--ggb-panel-border);
+    border-radius: 999px;
+    background: var(--apple-bg-elevated);
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-badge);
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+        background-color var(--control-transition),
+        border-color var(--control-transition),
+        color var(--control-transition);
+}
+
+.ggb-dim-chip:hover {
+    border-color: rgba(var(--brand-500-rgb), 0.45);
+    color: var(--ggb-text-strong);
+}
+
+.ggb-dim-chip.is-active {
+    border-color: rgb(var(--brand-600-rgb));
+    background: rgba(var(--brand-50-rgb), 0.9);
+    color: rgb(var(--brand-700-rgb));
+}
+
+.ggb-list-container {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.ggb-card-list {
+    display: grid;
+    gap: var(--ggb-sp-2);
+    padding: var(--ggb-sp-3);
+}
+
+.ggb-card {
+    display: grid;
+    grid-template-columns: 56px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--ggb-sp-2);
+    width: 100%;
+    padding: var(--ggb-sp-2);
+    border: 1px solid var(--ggb-panel-border);
+    border-radius: var(--ggb-r-md);
+    background: var(--apple-bg-elevated);
+    text-align: left;
+    cursor: pointer;
+    transition:
+        background-color var(--control-transition),
+        border-color var(--control-transition),
+        box-shadow var(--control-transition),
+        transform var(--control-transition);
+}
+
+.ggb-card:hover {
+    border-color: rgba(var(--brand-500-rgb), 0.45);
+    box-shadow: var(--ggb-shadow-panel);
+    transform: translateY(-1px);
+}
+
+.ggb-card.is-active {
+    border-color: rgb(var(--brand-600-rgb));
+    background: rgba(var(--brand-50-rgb), 0.55);
+}
+
+.ggb-card-thumb {
+    width: 56px;
+    height: 56px;
+    border-radius: var(--ggb-r-sm);
+    background: var(--ggb-toolbar-bg);
+    object-fit: cover;
+}
+
+.ggb-card-thumb-placeholder {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+    font-size: var(--ggb-fs-title);
+}
+
+.ggb-card-main {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: var(--ggb-sp-1);
+}
+
+.ggb-card-title {
+    overflow: hidden;
+    color: var(--ggb-text-strong);
+    font-size: var(--ggb-fs-body);
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ggb-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ggb-sp-2);
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-badge);
+    font-variant-numeric: tabular-nums;
+}
+
+.ggb-card-badges {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--ggb-sp-1);
+}
+
+.ggb-card-badge {
+    padding: var(--ggb-sp-1) var(--ggb-sp-2);
+    border-radius: 999px;
+    background: rgba(var(--brand-500-rgb), 0.12);
+    color: rgb(var(--brand-700-rgb));
+    font-size: var(--ggb-fs-badge);
+    font-weight: 700;
+}
+
+.ggb-card-badge-muted {
+    background: rgba(148, 163, 184, 0.16);
+    color: var(--ggb-text-muted);
+}
+
+/* ---- 中栏：详情（页头表单 + GGB 主舞台） ---- */
+.ggb-detail-empty {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--ggb-sp-2);
+    padding: var(--ggb-sp-6) var(--ggb-sp-5);
+    color: var(--ggb-text-muted);
+    text-align: center;
+}
+
+.ggb-detail-content {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    flex-direction: column;
+}
+
+.ggb-detail-header {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--ggb-sp-2);
+    padding: var(--ggb-sp-4) var(--ggb-sp-4) var(--ggb-sp-3);
+    border-bottom: 1px solid var(--ggb-panel-border);
+}
+
+/* 表单一行一字段：标题行 / 说明行 / 操作行各自成行，杜绝 label 行内流挤压 */
+.ggb-detail-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ggb-sp-2);
+}
+
+.ggb-detail-title-row #ggbTitleInput {
+    flex: 1 1 220px;
+    min-width: 0;
+    color: var(--ggb-text-strong);
+    font-size: var(--ggb-fs-title);
+    font-weight: 700;
+}
+
+.ggb-detail-title-row .glass-select {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 104px;
+}
+
+.ggb-detail-desc-row {
+    display: flex;
+    min-width: 0;
+}
+
+.ggb-detail-desc-row .glass-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    resize: vertical;
+    line-height: var(--ggb-lh-snug);
+}
+
+.ggb-detail-actions-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ggb-sp-2);
+}
+
+/* 主舞台：GGB 嵌入面板占满详情区剩余高度，预览条沉底 */
+.ggb-detail-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: var(--ggb-sp-4);
+}
+
+.ggb-detail-stage {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--ggb-sp-3);
+}
+
+/* ---- GGB 嵌入面板（详情区 / 在线编辑 / 题目侧共用） ---- */
+.ggb-embed-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--ggb-panel-border);
+    border-radius: var(--ggb-r-lg);
+    background: var(--apple-bg-elevated);
+}
+
+/* applet 宿主：position:relative + 内部绝对定位，保证注入时拿到确定像素尺寸 */
+.ggb-embed-host {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 240px;
+    overflow: hidden;
+}
+
+.ggb-embed-host > .ggb-applet-host {
+    position: absolute;
+    inset: 0;
+}
+
+.ggb-attribution {
+    flex: 0 0 auto;
+    margin: 0;
+    padding: var(--ggb-sp-1) var(--ggb-sp-3);
+    border-top: 1px solid var(--ggb-panel-border);
+    background: var(--ggb-toolbar-bg);
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-badge);
+    text-align: right;
+}
+
+.ggb-attribution a {
+    color: rgb(var(--brand-600-rgb));
+    text-decoration: none;
+}
+
+.ggb-attribution a:hover { text-decoration: underline; }
+
+/* 加载占位：预览图虚化作底 + 居中进度态，引擎就绪前后文案由 ggb.js 切换 */
+.ggb-embed-placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: var(--ggb-skeleton);
+}
+
+.ggb-embed-placeholder-image {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    filter: blur(10px) saturate(1.1);
+    opacity: 0.5;
+    transform: scale(1.08);
+}
+
+.ggb-embed-placeholder::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg,
+        rgba(var(--ggb-skeleton-rgb), 0.45),
+        rgba(var(--ggb-skeleton-rgb), 0.82));
+}
+
+.ggb-embed-placeholder .ui-state {
+    position: relative;
+    z-index: 1;
+    min-height: 0;
+    padding: var(--ggb-sp-5) var(--ggb-sp-4);
+}
+
+.ggb-embed-placeholder-hint {
+    max-width: 24rem;
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-badge);
+    line-height: var(--ggb-lh-snug);
+}
+
+/* 加载失败兜底：说明 + 下载 .ggb 链接（与 mount 的 catch 分支配套） */
+.ggb-embed-fallback {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--ggb-sp-3);
+    padding: var(--ggb-sp-5);
+    background: var(--apple-bg-elevated);
+    text-align: center;
+}
+
+.ggb-embed-fallback-icon {
+    display: inline-flex;
+    width: 2.5rem;
+    height: 2.5rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--ggb-r-md);
+    background: rgba(239, 68, 68, 0.1);
+    color: #dc2626;
+    font-size: var(--ggb-fs-strong);
+}
+
+.ggb-embed-fallback-text {
+    max-width: 26rem;
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-caption);
+    line-height: var(--ggb-lh-snug);
+}
+
+.ggb-embed-fallback-link {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ggb-sp-2);
+    min-height: 36px;
+    padding: 0 var(--ggb-sp-4);
+    border: 1px solid var(--ggb-panel-border);
+    border-radius: var(--ggb-r-sm);
+    background: var(--apple-bg-elevated);
+    color: rgb(var(--brand-700-rgb));
+    font-size: var(--ggb-fs-caption);
+    font-weight: 700;
+    text-decoration: none;
+    transition:
+        background-color var(--control-transition),
+        border-color var(--control-transition);
+}
+
+.ggb-embed-fallback-link:hover {
+    border-color: rgba(var(--brand-500-rgb), 0.5);
+    background: rgba(var(--brand-50-rgb), 0.7);
+}
+
+/* 预览条：预览图从「并排主角」降级为参考信息，给 GGB 让位 */
+.ggb-preview-strip {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: var(--ggb-sp-3);
+    padding: var(--ggb-sp-2) var(--ggb-sp-3);
+    border: 1px solid var(--ggb-panel-border);
+    border-radius: var(--ggb-r-md);
+    background: var(--ggb-panel-bg);
+}
+
+.ggb-preview-strip-thumb {
+    display: inline-flex;
+    width: 76px;
+    height: 50px;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border-radius: var(--ggb-r-sm);
+    background: var(--ggb-toolbar-bg);
+    color: var(--text-tertiary);
+}
+
+.ggb-preview-strip-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.ggb-preview-strip-text {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: var(--ggb-sp-1);
+}
+
+.ggb-preview-strip-title {
+    overflow: hidden;
+    color: var(--ggb-text-strong);
+    font-size: var(--ggb-fs-caption);
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ggb-preview-strip-meta {
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-badge);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---- 右栏：检查器（标签 / 版本 / 关联题目） ---- */
+.ggb-inspector-panel {
+    gap: var(--ggb-sp-3);
+    padding: var(--ggb-sp-3);
+    overflow-y: auto;
+}
+
+.ggb-inspector-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ggb-sp-2);
+    padding: var(--ggb-sp-3);
+    border: 1px solid var(--ggb-panel-border);
+    border-radius: var(--ggb-r-md);
+    background: var(--apple-bg-elevated);
+}
+
+.ggb-inspector-title {
+    margin: 0;
+    color: var(--ggb-text-strong);
+    font-size: var(--ggb-fs-caption);
+    font-weight: 800;
+    letter-spacing: 0.02em;
+}
+
+.ggb-inspector-empty {
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-caption);
+}
+
+.ggb-tag-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ggb-sp-1);
+}
+
+.ggb-tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ggb-sp-1);
+    padding: var(--ggb-sp-1) var(--ggb-sp-2);
+    border: 1px solid var(--ggb-panel-border);
+    border-radius: 999px;
+    background: var(--ggb-toolbar-bg);
+    color: var(--ggb-text-strong);
+    font-size: var(--ggb-fs-badge);
+    font-weight: 600;
+}
+
+.ggb-tag-chip em {
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-badge);
+    font-style: normal;
+    font-weight: 500;
+}
+
+.ggb-version-list,
+.ggb-link-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ggb-sp-1);
+}
+
+.ggb-version-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--ggb-sp-2);
+    padding: var(--ggb-sp-2);
+    border: 1px solid var(--ggb-panel-border);
+    border-radius: var(--ggb-r-sm);
+    background: var(--apple-bg-elevated);
+}
+
+.ggb-version-item.is-current {
+    border-color: rgba(var(--brand-500-rgb), 0.5);
+    background: rgba(var(--brand-50-rgb), 0.5);
+}
+
+.ggb-version-no {
+    color: var(--ggb-text-strong);
+    font-size: var(--ggb-fs-caption);
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+
+.ggb-version-note {
+    overflow: hidden;
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-badge);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ggb-version-actions,
+.ggb-link-actions {
+    display: flex;
+    gap: var(--ggb-sp-1);
+}
+
+.ggb-icon-btn {
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--ggb-panel-border);
+    border-radius: var(--ggb-r-sm);
+    background: var(--apple-bg-elevated);
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-badge);
+    cursor: pointer;
+    transition:
+        background-color var(--control-transition),
+        border-color var(--control-transition),
+        color var(--control-transition);
+}
+
+.ggb-icon-btn:hover {
+    border-color: rgba(var(--brand-500-rgb), 0.5);
+    color: rgb(var(--brand-700-rgb));
+}
+
+.ggb-icon-danger:hover {
+    border-color: rgba(239, 68, 68, 0.4);
+    background: rgba(239, 68, 68, 0.08);
+    color: #dc2626;
+}
+
+.ggb-link-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--ggb-sp-1) var(--ggb-sp-2);
+    padding: var(--ggb-sp-2);
+    border: 1px solid var(--ggb-panel-border);
+    border-radius: var(--ggb-r-sm);
+    background: var(--apple-bg-elevated);
+    font-size: var(--ggb-fs-caption);
+}
+
+.ggb-link-code {
+    color: rgb(var(--brand-700-rgb));
+    font-weight: 700;
+}
+
+.ggb-link-question {
+    color: var(--ggb-text-strong);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.ggb-link-note {
+    grid-column: 1 / -1;
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-badge);
+}
+
+/* ---- 移动端 pane 切换（≤960 单栏，照 topic 同一断点） ---- */
+.ggb-mobile-switch { display: none; }
+
+/* ---- 题目侧「动态演示」面板（bank 编辑器内，非工作区栅格） ---- */
+.ggb-question-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ggb-sp-2);
+}
+
+.ggb-question-links {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ggb-sp-2);
+}
+
+.ggb-question-link {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--ggb-sp-2);
+    padding: var(--ggb-sp-2) var(--ggb-sp-3);
+    border: 1px solid var(--ggb-panel-border);
+    border-radius: var(--ggb-r-md);
+    background: var(--apple-bg-elevated);
+}
+
+.ggb-question-link.is-default {
+    border-color: rgba(var(--brand-500-rgb), 0.5);
+    background: rgba(var(--brand-50-rgb), 0.5);
+}
+
+.ggb-link-name {
+    overflow: hidden;
+    color: var(--ggb-text-strong);
+    font-size: var(--ggb-fs-caption);
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 题目侧嵌入区在页面流里，给宿主一个确定高度（桌面 50vh 起、560px 止） */
+.ggb-question-embed .ggb-embed-host {
+    flex: 0 0 auto;
+    height: clamp(360px, 50vh, 560px);
+}
+
+/* ---- 模态表单（上传 / 关联 / 标签，一行一字段） ---- */
+.ggb-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--ggb-sp-3) var(--ggb-sp-4);
+}
+
+.ggb-form-full { grid-column: 1 / -1; }
+
+.ggb-form-field {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: var(--ggb-sp-1);
+}
+
+.ggb-form-field > span {
+    color: var(--ggb-text-strong);
+    font-size: var(--ggb-fs-caption);
+    font-weight: 700;
+}
+
+.ggb-form-field :is(input, select, textarea) { width: 100%; }
+
+.ggb-required {
+    margin-left: var(--ggb-sp-1);
+    color: #dc2626;
+    font-style: normal;
+}
+
+.ggb-form-checkbox {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--ggb-sp-2);
+}
+
+.ggb-form-checkbox input {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+}
+
+.ggb-form-hint {
+    margin: var(--ggb-sp-2) 0 0;
+    color: var(--ggb-text-muted);
+    font-size: var(--ggb-fs-badge);
+    line-height: var(--ggb-lh-snug);
+}
+
+/* ---- 键盘焦点可见性（与 app.css 的玻璃按钮同一规范） ---- */
+.ggb-card:focus-visible,
+.ggb-dim-chip:focus-visible,
+.ggb-icon-btn:focus-visible,
+.ggb-embed-fallback-link:focus-visible {
+    outline: 2px solid rgb(var(--brand-500-rgb));
+    outline-offset: 2px;
+}
+
+/* ---- 响应式：1280 / 1100 分档收窄侧栏 ---- */
+@media (max-width: 1280px) {
+    .ggb-workspace-body { --ggb-list-track: 264px; --ggb-inspector-track: 288px; }
+}
+
+@media (max-width: 1100px) {
+    #ggbWorkspaceSection.ggb-workspace:not(.hidden) { padding: var(--ggb-sp-3); gap: var(--ggb-sp-2); }
+    .ggb-workspace-heading p { display: none; }
+    .ggb-workspace-body { --ggb-list-track: 248px; --ggb-inspector-track: 272px; }
+    .ggb-detail-actions-row .glass-btn { padding: var(--ggb-sp-1) var(--ggb-sp-2); }
+}
+
+/* ---- 响应式：960 以下切单栏 + 底部 pane 切换 ---- */
+@media (max-width: 960px) {
+    .ggb-workspace-body { display: flex; flex-direction: column; gap: var(--ggb-sp-2); }
+    .ggb-list-panel,
+    .ggb-detail-panel,
+    .ggb-inspector-panel { flex: 1 1 0; min-height: 0; }
+    .ggb-workspace-body[data-mobile-pane="list"] .ggb-detail-panel,
+    .ggb-workspace-body[data-mobile-pane="list"] .ggb-inspector-panel,
+    .ggb-workspace-body[data-mobile-pane="detail"] .ggb-list-panel,
+    .ggb-workspace-body[data-mobile-pane="detail"] .ggb-inspector-panel,
+    .ggb-workspace-body[data-mobile-pane="inspector"] .ggb-list-panel,
+    .ggb-workspace-body[data-mobile-pane="inspector"] .ggb-detail-panel { display: none; }
+    .ggb-mobile-switch {
+        display: flex;
+        flex: 0 0 auto;
+        gap: var(--ggb-sp-2);
+    }
+    .ggb-mobile-switch button {
+        flex: 1;
+        min-height: 44px;
+        border: 1px solid var(--ggb-panel-border);
+        border-radius: var(--ggb-r-md);
+        background: var(--apple-bg-elevated);
+        color: var(--ggb-text-muted);
+        font-size: var(--ggb-fs-body);
+        cursor: pointer;
+    }
+    .ggb-mobile-switch button[aria-selected="true"] {
+        background: rgba(var(--brand-500-rgb), 0.14);
+        color: var(--ggb-text-strong);
+        font-weight: 700;
+    }
+    /* 移动端详情区允许滚动，嵌入宿主保底高度，避免横屏被裁切 */
+    .ggb-detail-scroll { overflow-y: auto; }
+    .ggb-embed-host { min-height: 300px; }
+    .ggb-form-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 768px) {
+    #ggbWorkspaceSection.ggb-workspace:not(.hidden) { padding: var(--ggb-sp-2); }
+    .ggb-workspace-heading-icon { display: none; }
+    .ggb-workspace-heading h2 { font-size: var(--ggb-fs-title); }
+    .ggb-workspace-actions { width: 100%; }
+    .ggb-detail-actions-row { flex-direction: column; align-items: stretch; }
+    .ggb-detail-title-row #ggbTitleInput { flex-basis: 100%; }
+    .ggb-question-embed .ggb-embed-host { height: 60vh; }
+}
+
+/* ---- 动效敏感：保留加载反馈，去掉装饰性位移 ---- */
+@media (prefers-reduced-motion: reduce) {
+    .ggb-card,
+    .ggb-dim-chip,
+    .ggb-icon-btn,
+    .ggb-embed-fallback-link { transition: none; }
+    .ggb-card:hover { transform: none; }
+}
