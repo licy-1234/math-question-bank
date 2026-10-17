@@ -624,8 +624,10 @@ def test_online_editor_modal_is_large_and_expandable():
                    'ggb-editor-footnote', 'ggb-editor-expand'):
         assert marker in GGB_SOURCE, marker
     # 容器尺寸变化后必须让 GGB 重新测量（否则最大化后画布不跟着变）。
+    # 注意：尺寸接口在全局 ggbApplet 上，GGBApplet 构造函数上没有。
     assert "GgbEmbed.resize()" in GGB_SOURCE
-    assert "activeApplet.setSize" in GGB_SOURCE
+    assert "window.ggbApplet" in GGB_SOURCE
+    assert "applet_scaler" in GGB_SOURCE
     # 关闭编辑器后工作区预览要挂回来（mount 是单例，编辑器会销毁工作区 applet）。
     assert "restoreWorkspacePreview" in GGB_SOURCE
 

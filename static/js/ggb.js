@@ -562,19 +562,32 @@
         }
 
         // 容器尺寸变化后让 GGB 重新测量（弹窗最大化/还原时用）。
-        // GGB 只在 window resize 时自适应，纯容器变化它感知不到。
+        // 两个层次都要更新：.applet_scaler 的 inline 宽高，以及
+        // window.ggbApplet.setSize（GGBApplet 构造函数上没有这个方法，
+        // 只有全局 API 对象有；实测 setSize 后图形画布会立即重排）。
         function resize() {
             const node = activeMountNode;
             if (!node) return;
+            let rect = null;
             try {
-                const rect = typeof node.getBoundingClientRect === 'function'
+                rect = typeof node.getBoundingClientRect === 'function'
                     ? node.getBoundingClientRect() : null;
-                if (rect && rect.width > 0 && rect.height > 0
-                    && activeApplet && typeof activeApplet.setSize === 'function') {
-                    activeApplet.setSize(Math.round(rect.width), Math.round(rect.height));
+            } catch (e) { rect = null; }
+            const width = rect ? Math.round(rect.width) : 0;
+            const height = rect ? Math.round(rect.height) : 0;
+            if (!width || !height) return;
+            const scaler = typeof node.querySelector === 'function' ? node.querySelector('.applet_scaler') : null;
+            if (scaler && scaler.style) {
+                scaler.style.width = width + 'px';
+                scaler.style.height = height + 'px';
+            }
+            const api = window.ggbApplet;
+            if (api && typeof api.setSize === 'function') {
+                try {
+                    api.setSize(width, height);
+                } catch (error) {
+                    debug.debug('GGB setSize failed:', error && error.message);
                 }
-            } catch (error) {
-                debug.debug('GGB resize failed:', error && error.message);
             }
             try { window.dispatchEvent(new Event('resize')); } catch (e) { /* ignore */ }
         }
