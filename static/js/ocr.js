@@ -1089,7 +1089,7 @@
             if (containers.length === 0) return;
 
             const badgesHtml = uploadedAnswerImages.length === 0
-                ? '<p class="text-xs text-slate-400 italic w-full text-center py-2">暂无已上传的图片解答</p>'
+                ? ''
                 : uploadedAnswerImages.map((path, idx) => {
                     const filename = path.split('/').pop();
                     return `
@@ -1102,7 +1102,16 @@
                     </div>`;
                 }).join('');
 
-            containers.forEach(container => { container.innerHTML = badgesHtml; });
+            containers.forEach(container => {
+                if (badgesHtml) {
+                    container.innerHTML = badgesHtml;
+                } else if (container.id === 'imageAnswersList') {
+                    // 「图片答案」标签页保留空态占位；解析配图区与题干插图区一致，空时不占位。
+                    container.innerHTML = '<p class="text-xs text-slate-400 italic w-full text-center py-2">暂无已上传的图片解答</p>';
+                } else {
+                    container.innerHTML = '';
+                }
+            });
         }
 
         function deleteUploadedAnswerImage(idx) {
