@@ -207,6 +207,10 @@
 
             // Review-box (评述框) image insertion: button / paste / drag-drop
             setupReviewImageHandlers();
+
+            // Answer-box (答案与解析) image insertion: paste / drag-drop
+            // （按钮入口在 index.html 的 #insertAnswerImageBtn，走同一 uploadIllustration 管线）
+            setupAnswerImageHandlers();
         }
         function setupDragDropListeners(zone, onFileReceived) {
             ['dragenter', 'dragover'].forEach(eventName => {
@@ -342,6 +346,45 @@
                 // 冒泡，避免一次拖放被外层容器重复处理成两张图。
                 reviewIllZone.addEventListener('drop', (e) => e.stopPropagation(), false);
             }
+        }
+
+        // 答案与解析编辑框的配图：粘贴 / 拖拽插图，插入到 editAnswerMarkdown 光标处。
+        // 与「插入图片」按钮共用 uploadIllustration → /api/upload → insertImageTag 管线，
+        // 插图只以行内 Markdown 引用，不写入题干的 uploadedImages 配图徽章列表。
+        let answerImageHandlersBound = false;
+
+        function setupAnswerPasteListener(element) {
+            if (!element) return;
+            element.addEventListener('paste', (e) => {
+                const clipboard = e.clipboardData || (e.originalEvent && e.originalEvent.clipboardData);
+                if (!clipboard || !clipboard.items) return;
+                const images = [];
+                for (let i = 0; i < clipboard.items.length; i++) {
+                    const item = clipboard.items[i];
+                    if (item && item.kind === 'file' && item.type && item.type.startsWith('image/')) {
+                        const file = item.getAsFile();
+                        if (file) images.push(file);
+                    }
+                }
+                if (images.length === 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                images.forEach((file) => uploadIllustration(file, 'editAnswerMarkdown'));
+            });
+        }
+
+        function setupAnswerImageHandlers() {
+            if (answerImageHandlersBound) return;
+            answerImageHandlersBound = true;
+
+            const answerTextarea = document.getElementById('editAnswerMarkdown');
+            if (!answerTextarea) return;
+            setupAnswerPasteListener(answerTextarea);
+            setupDragDropListeners(answerTextarea, (file) => {
+                if (file && file.type && file.type.startsWith('image/')) {
+                    uploadIllustration(file, 'editAnswerMarkdown');
+                }
+            });
         }
 
         // Clean and strip leading question numbers and exclamation noise from OCR LaTeX results

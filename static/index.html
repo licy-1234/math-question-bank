@@ -1032,6 +1032,10 @@
                                 <button type="button" id="normalizeAnswerFractionsBtn" onclick="normalizeEditorFractions('editAnswerMarkdown', this)" class="inline-flex min-h-[44px] cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-500/30 disabled:opacity-50" data-tooltip="规范完整数学环境中的分式：主体放大，上下标与内层保持紧凑；核对预览后保存">
                                     <i class="fa-solid fa-divide" aria-hidden="true"></i><span>规范分式</span>
                                 </button>
+                                <button type="button" id="insertAnswerImageBtn" onclick="document.getElementById('answerImageFileInput').click()" class="inline-flex min-h-[44px] cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-500/30" data-tooltip="上传并插入一幅解析插图到光标处，不影响题干配图">
+                                    <i class="fa-solid fa-image" aria-hidden="true"></i><span>插入图片</span>
+                                </button>
+                                <input type="file" id="answerImageFileInput" accept="image/*" class="hidden" onchange="uploadIllustration(this.files[0], 'editAnswerMarkdown'); this.value='';">
                                 <button type="button" id="openAnswerTikzWorkbenchBtn" onclick="openAnswerTikzWorkbench()" class="answer-tikz-entry inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 cursor-pointer" data-tooltip="新增一幅解答 TikZ 绘图，不会覆盖已有绘图">
                                     <i class="fa-solid fa-compass-drafting" aria-hidden="true"></i>
                                     <span>新增绘图</span>

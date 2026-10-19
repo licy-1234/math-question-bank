@@ -2843,6 +2843,10 @@ window.functionTagBadge = functionTagBadge;
             // the original TeX and ordinary variable i/e remain italic.
             ['iu', 'upi'].forEach(name => renderer.__defineMacro('\\' + name, '\\mathrm{i}'));
             ['eu', 'upe'].forEach(name => renderer.__defineMacro('\\' + name, '\\mathrm{e}'));
+            // physics 包的向量宏 \vv 与标准 \vec 等价（KaTeX 不内置 \vv）。
+            // 前端 normalizeVectorNotation 也会把 \vv 归一为 \vec，这里兜底注册，
+            // 保证任何未走预处理的路径也能正确渲染向量箭头。
+            renderer.__defineMacro('\\vv', '\\vec{#1}');
             renderer.__defineMacro('\\ensuremath', context =>
                 context.mode === 'text' ? '\\({#1}\\)' : '{#1}');
             renderer.__defineFunction({
@@ -3266,6 +3270,44 @@ window.functionTagBadge = functionTagBadge;
         }
         window.normalizeNakedMathForPreview = normalizeNakedMathForPreview;
 
+        // 向量符号规范化：把 OCR / AI / physics 包的多种向量写法统一成 KaTeX 原生命令，
+        // 保证解析中的向量（如 \vec{PB}）准确识别并以标准箭头正确显示。
+        // 只做「安全、无歧义」的字符串等价替换，不改动任何其它宏或用户故意保留的写法。
+        function normalizeVectorNotation(text) {
+            if (!text) return text;
+            let out = String(text);
+
+            // 1) physics 包 \vv（KaTeX 不内置）→ \vec
+            out = out.replace(/\\vv\b/g, '\\vec');
+
+            // 2) \overset{<右箭头>}{<基>} → \overrightarrow{<基>}
+            //    覆盖 \rightarrow / \to / \longrightarrow / \Longrightarrow 等常见写法。
+            out = out.replace(
+                /\\overset\s*\{\s*\\(?:longrightarrow|Longrightarrow|rightarrow|to|rightharpoonup|rightharpoondown)\s*\}\s*\{([^{}\n]+)\}/g,
+                (match, base) => '\\overrightarrow{' + base + '}'
+            );
+
+            // 3) \overset{<左箭头>}{<基>} → \overleftarrow{<基>}
+            out = out.replace(
+                /\\overset\s*\{\s*\\(?:longleftarrow|Longleftarrow|leftarrow|gets|leftharpoonup)\s*\}\s*\{([^{}\n]+)\}/g,
+                (match, base) => '\\overleftarrow{' + base + '}'
+            );
+
+            // 4) Unicode 组合箭头（⃗ ⃖ ⃐ ⃑）紧跟单个基字母 → \vec{字母}（OCR 常见产物）
+            out = out.replace(/([A-Za-z])(?:[\u20D7\u20D6\u20D0\u20D1])(?![A-Za-z])/g,
+                (match, base) => '\\vec{' + base + '}');
+
+            // 5) 多字符 \vec{XY} → \overrightarrow{XY}：中文教材多字符向量用整段拉伸箭头，
+            //    单字符 \vec{a} 保持原样（避免过度改写）。
+            out = out.replace(/\\vec\s*\{([A-Za-z0-9]{2,})\}/g, (match, base) => {
+                // 只改写纯字母/数字组合（如 PB、AB、P_1 之外的简单情形）；含下标/运算符的保守保留。
+                if (/^[A-Za-z0-9]+$/.test(base)) return '\\overrightarrow{' + base + '}';
+                return match;
+            });
+
+            return out;
+        }
+
         function preprocessFormulaForKaTeX(text, imageLayouts = {}) {
             if (!text) return "";
 
@@ -3287,6 +3329,10 @@ window.functionTagBadge = functionTagBadge;
             // Clean up any historical \vphantom{...} or \strut from underline text to prevent KaTeX rendering artifact letters
             let clean = protectedText.replace(/\\vphantom\s*\{\s*[^}]*?\}/g, '')
                             .replace(/\\strut\b/g, '');
+
+            // 向量符号规范化（识别 OCR/AI 的多种写法并统一为 KaTeX 原生命令）：
+            // \vv（physics 包）/ \overset{箭头}{基} / Unicode 组合箭头 / 多字符 \vec。
+            clean = normalizeVectorNotation(clean);
 
             clean = normalizeNakedMathForPreview(clean);
 

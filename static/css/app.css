@@ -3204,8 +3204,8 @@ body.question-editor-open {
 }
 
 .question-editor-modal-surface {
-    width: min(1120px, calc(100vw - 3rem));
-    height: min(820px, calc(100dvh - 3rem));
+    width: min(1440px, calc(100vw - 2rem));
+    height: min(900px, calc(100dvh - 2rem));
     min-width: 0;
     min-height: 0;
     display: flex;
@@ -5487,6 +5487,9 @@ button[aria-disabled="true"]:hover,
 .question-editor-modal-body textarea { font-size: 16px !important; line-height: 1.65; }
 .question-editor-modal-body :is(#editContent, #editAnswerMarkdown) { min-height: 280px; }
 .question-editor-modal-body :is(#contentPreview, #answerPreview) { font-size: 16px; line-height: 1.65; }
+/* 解析编辑：扩大编辑区可视版面——增高解析文本框与预览，长内容编辑更舒适（2026-10-19） */
+.question-editor-modal-body #editAnswerMarkdown { min-height: 440px; }
+.question-editor-modal-body #answerPreview { min-height: 440px; max-height: 560px; }
 .question-editor-modal-body #contentTabContent-manual { font-size: 12px; }
 .question-editor-modal-body #contentTabContent-manual > div { padding: 8px 12px !important; }
 .editor-validation-hint { margin: 0 0 12px; padding: 8px 12px; color: #92400e; background: #fffbeb; border-radius: 8px; font-size: 13px; }

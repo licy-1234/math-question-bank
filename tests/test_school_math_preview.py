@@ -75,3 +75,45 @@ assert.equal(normalizeNakedMathForPreview('Rate 5‰ and temperature 20℃.'), S
 const locked = String.raw`![‰℃](/static/uploads/‰℃.png) [[MBM_1]]` + ' `\\wideparen{AB} \\ang{30;15;20} ‰ ℃`';
 assert.equal(normalizeNakedMathForPreview(locked), locked);
 ''')
+
+
+def test_vector_notation_is_recognized_and_rendered_correctly():
+    run_preview_script(r'''
+const cases = [
+    String.raw`$\vec{PB}$`,
+    String.raw`$\vv{PB}$`,
+    String.raw`$\overset{\rightarrow}{PB}$`,
+    String.raw`$\overset{\to}{AB}$`,
+    String.raw`$\overset{\longleftarrow}{BA}$`,
+    String.raw`$\overset{\longrightarrow}{AB}$`,
+];
+const expected = [
+    String.raw`\overrightarrow{PB}`,
+    String.raw`\overrightarrow{PB}`,
+    String.raw`\overrightarrow{PB}`,
+    String.raw`\overrightarrow{AB}`,
+    String.raw`\overleftarrow{BA}`,
+    String.raw`\overrightarrow{AB}`,
+];
+cases.forEach((src, i) => {
+    const formulas = parsedFormulas(preprocessFormulaForKaTeX(src));
+    assert.equal(formulas.length, 1, src);
+    assert.equal(formulas[0], expected[i], src);
+});
+// 单字符向量保留 \vec（KaTeX 原生小箭头，不做过度改写）
+assert.deepEqual(
+    parsedFormulas(preprocessFormulaForKaTeX(String.raw`$\vec{a}$ 与 $\vec{i}$`)),
+    [String.raw`\vec{a}`, String.raw`\vec{i}`]
+);
+// Unicode 组合箭头（OCR 常见产物）→ \vec{字母}
+assert.deepEqual(
+    parsedFormulas(preprocessFormulaForKaTeX('A\u20D7 与 B\u20D7')),
+    [String.raw`\vec{A}`, String.raw`\vec{B}`]
+);
+// 直接 KaTeX 渲染向量命令无错误、无降级
+for (const f of [String.raw`\vec{a}`, String.raw`\overrightarrow{PB}`, String.raw`\overleftarrow{BA}`]) {
+    const rendered = katex.renderToString(f, {throwOnError: true, strict: 'error', trust: false});
+    assert(rendered.includes('katex') && !rendered.includes('katex-error'), f);
+}
+''')
+
