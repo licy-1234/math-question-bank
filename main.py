@@ -58,6 +58,7 @@ from mathbank.database import (
     _utcnow_naive,
 )
 from mathbank.sub_knowledge import normalize_sub_knowledge
+from mathbank.vector_notation import normalize_vector_notation
 from mathbank.question_duplicates import (
     QuestionDuplicateInput,
     build_question_fingerprint,
@@ -2704,12 +2705,16 @@ def _duplicate_payload_list(value, *, field_name: str, max_items: int = 50):
 
 
 def _duplicate_input_from_payload(item: dict) -> QuestionDuplicateInput:
-    content = normalize_fillin_macro(str(item.get("content") or ""))
+    # 与保存路径保持同一套文本规范化，否则「查重时算出的快照哈希」与
+    # 「入库后重算的指纹」必然不等，会误报 duplicate_snapshot_stale。
+    content = normalize_vector_notation(
+        normalize_fillin_macro(str(item.get("content") or ""))
+    )
     if not content.strip():
         raise ValueError("题干内容不能为空")
     if len(content) > 200_000:
         raise ValueError("单题题干过长")
-    answer_markdown = str(item.get("answer_markdown") or "")
+    answer_markdown = normalize_vector_notation(str(item.get("answer_markdown") or ""))
     if len(answer_markdown) > 500_000:
         raise ValueError("单题解析过长")
     image_paths = [
@@ -3688,6 +3693,11 @@ def create_question(
             raise ValueError("无效的插图尺寸")
         # 规范化填空题下划线为 \fillin 宏
         content = normalize_fillin_macro(content)
+        # 向量箭头写法统一：多字符 → \overrightarrow{PB}，单字符保留 \vec{v}。
+        # 规则与前端 normalizeVectorNotation 一致，保证「预览所见 = 入库所存」。
+        content = normalize_vector_notation(content)
+        answer_markdown = normalize_vector_notation(answer_markdown)
+        review = normalize_vector_notation(review)
 
         (
             content,
@@ -3905,6 +3915,11 @@ def update_question(
                 raise ValueError("无效的插图尺寸")
         # 规范化填空题下划线为 \fillin 宏
         content = normalize_fillin_macro(content)
+        # 向量箭头写法统一：多字符 → \overrightarrow{PB}，单字符保留 \vec{v}。
+        # 规则与前端 normalizeVectorNotation 一致，保证「预览所见 = 入库所存」。
+        content = normalize_vector_notation(content)
+        answer_markdown = normalize_vector_notation(answer_markdown)
+        review = normalize_vector_notation(review)
 
         (
             content,

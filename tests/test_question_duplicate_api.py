@@ -223,6 +223,46 @@ def test_fingerprint_generation_failure_does_not_block_question_save(
     assert db_session.query(QuestionFingerprint).count() == 1
 
 
+def test_vector_notation_is_standardized_on_write_and_keeps_snapshot_valid(
+    client, db_session
+):
+    """入库前必须统一向量写法，且查重快照哈希不能因此失效。"""
+
+    content = r"已知 $\vec{AB}=(1,2)$，$\vec {CD}=(3,4)$，求 $|\vec{a}|$。"
+    answer = r"$\vec{AB}+\vec{CD}$"
+
+    checked = _check(
+        client,
+        [
+            {
+                "client_key": "vector",
+                "content": content,
+                "answer_markdown": answer,
+                "question_type": "single_choice",
+            }
+        ],
+    )
+    assert checked.status_code == 200
+    snapshot = checked.json()["items"][0]["snapshot_hash"]
+
+    saved = _create(
+        client,
+        content,
+        answer_markdown=answer,
+        duplicate_snapshot_hash=snapshot,
+    )
+
+    assert saved.status_code == 200, saved.text
+    stored = db_session.query(Question).one()
+    assert r"\overrightarrow{AB}" in stored.content
+    assert r"\overrightarrow{CD}" in stored.content
+    assert r"\vec{AB}" not in stored.content
+    assert r"\vec {CD}" not in stored.content
+    # 单字符向量保留紧凑重音，不被过度改写
+    assert r"\vec{a}" in stored.content
+    assert r"\overrightarrow{AB}+\overrightarrow{CD}" in stored.answer_markdown
+
+
 def test_edit_check_excludes_the_current_question(client):
     created = _create(client, "编辑自身排除题 $z=5$。")
     question_id = created.json()["question"]["id"]
