@@ -1032,10 +1032,6 @@
                                 <button type="button" id="normalizeAnswerFractionsBtn" onclick="normalizeEditorFractions('editAnswerMarkdown', this)" class="inline-flex min-h-[44px] cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-500/30 disabled:opacity-50" data-tooltip="规范完整数学环境中的分式：主体放大，上下标与内层保持紧凑；核对预览后保存">
                                     <i class="fa-solid fa-divide" aria-hidden="true"></i><span>规范分式</span>
                                 </button>
-                                <button type="button" id="insertAnswerImageBtn" onclick="document.getElementById('answerImageFileInput').click()" class="inline-flex min-h-[44px] cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-brand-500/30" data-tooltip="上传并插入一幅解析插图到光标处，不影响题干配图">
-                                    <i class="fa-solid fa-image" aria-hidden="true"></i><span>插入图片</span>
-                                </button>
-                                <input type="file" id="answerImageFileInput" accept="image/*" class="hidden" onchange="uploadIllustration(this.files[0], 'editAnswerMarkdown'); this.value='';">
                                 <button type="button" id="openAnswerTikzWorkbenchBtn" onclick="openAnswerTikzWorkbench()" class="answer-tikz-entry inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700 shadow-sm transition-colors duration-200 hover:border-indigo-300 hover:bg-indigo-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/30 cursor-pointer" data-tooltip="新增一幅解答 TikZ 绘图，不会覆盖已有绘图">
                                     <i class="fa-solid fa-compass-drafting" aria-hidden="true"></i>
                                     <span>新增绘图</span>
@@ -1058,6 +1054,22 @@
                                         <span id="answerTikzAssetsCount" class="rounded-md bg-white px-2 py-0.5 text-[10px] font-semibold text-indigo-600 shadow-sm">0 幅</span>
                                     </div>
                                     <div id="answerTikzAssetsList" class="flex flex-wrap gap-2" aria-live="polite"></div>
+                                </div>
+
+                                <!-- 解析配图 / 插图（与题干「题目配图 / 插图」同款拖拽区） -->
+                                <div class="space-y-2 mt-3">
+                                    <label class="block text-xs font-semibold text-slate-400 flex items-center space-x-1">
+                                        <i class="fa-solid fa-image"></i>
+                                        <span>解析配图 / 插图</span>
+                                    </label>
+                                    <div id="answerIllustrationDropZone" tabindex="0" class="border-2 border-dashed border-slate-200 hover:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 bg-white rounded-xl p-4 text-center cursor-pointer transition-all duration-300">
+                                        <input type="file" id="answerIllustrationFileInput" accept="image/*" class="hidden">
+                                        <i class="fa-solid fa-cloud-arrow-up text-slate-300 text-2xl mb-1"></i>
+                                        <p class="text-xs text-slate-500 font-medium">拖拽插图到此，或点击上传 (支持粘贴剪贴板截图)</p>
+                                        <p class="text-[10px] text-slate-400 mt-0.5">上传后仅插入到解析中，不影响题干插图列表</p>
+                                    </div>
+                                    <!-- 解析插图标签（与题干 #illustrationsList 同款） -->
+                                    <div id="answerIllustrationsList" class="flex flex-wrap gap-2 pt-1" aria-live="polite"></div>
                                 </div>
                             </div>
                             

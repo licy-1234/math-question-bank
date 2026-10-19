@@ -208,8 +208,8 @@
             // Review-box (评述框) image insertion: button / paste / drag-drop
             setupReviewImageHandlers();
 
-            // Answer-box (答案与解析) image insertion: paste / drag-drop
-            // （按钮入口在 index.html 的 #insertAnswerImageBtn，走同一 uploadIllustration 管线）
+            // Answer-box (答案与解析) image insertion: dropzone / click / paste / drag
+            // （拖拽区 #answerIllustrationDropZone 与题干 #illustrationDropZone 同款）
             setupAnswerImageHandlers();
         }
         function setupDragDropListeners(zone, onFileReceived) {
@@ -348,9 +348,10 @@
             }
         }
 
-        // 答案与解析编辑框的配图：粘贴 / 拖拽插图，插入到 editAnswerMarkdown 光标处。
-        // 与「插入图片」按钮共用 uploadIllustration → /api/upload → insertImageTag 管线，
-        // 插图只以行内 Markdown 引用，不写入题干的 uploadedImages 配图徽章列表。
+        // 解析配图 / 插图（与题干「题目配图 / 插图」一致的排版与交互）：
+        // 拖拽区点击上传 / 拖放 / 粘贴，以及解析编辑框本身的粘贴与拖放。
+        // 统一走 uploadIllustration → /api/upload → insertImageTag，目标固定为
+        // editAnswerMarkdown；只做行内 Markdown 引用，不写入题干的 uploadedImages 列表。
         let answerImageHandlersBound = false;
 
         function setupAnswerPasteListener(element) {
@@ -378,13 +379,30 @@
             answerImageHandlersBound = true;
 
             const answerTextarea = document.getElementById('editAnswerMarkdown');
-            if (!answerTextarea) return;
-            setupAnswerPasteListener(answerTextarea);
-            setupDragDropListeners(answerTextarea, (file) => {
+            const answerZone = document.getElementById('answerIllustrationDropZone');
+            const answerInput = document.getElementById('answerIllustrationFileInput');
+            const handleFile = (file) => {
                 if (file && file.type && file.type.startsWith('image/')) {
                     uploadIllustration(file, 'editAnswerMarkdown');
                 }
-            });
+            };
+
+            if (answerZone && answerInput) {
+                answerZone.onclick = () => answerInput.click();
+                answerInput.onchange = () => {
+                    const files = answerInput.files ? Array.from(answerInput.files) : [];
+                    files.forEach(handleFile);
+                    answerInput.value = '';
+                };
+                setupDragDropListeners(answerZone, handleFile);
+                setupPasteListener(answerZone, handleFile);
+            }
+
+            // 解析编辑框直接粘贴 / 拖入图片同样可用（与评述框一致）。
+            if (answerTextarea) {
+                setupAnswerPasteListener(answerTextarea);
+                setupDragDropListeners(answerTextarea, handleFile);
+            }
         }
 
         // Clean and strip leading question numbers and exclamation noise from OCR LaTeX results
@@ -1062,28 +1080,29 @@
         }
 
         function renderAnswerImageBadges() {
-            const listContainer = document.getElementById('imageAnswersList');
-            if (!listContainer) return;
-            
-            listContainer.innerHTML = '';
-            
-            if (uploadedAnswerImages.length === 0) {
-                listContainer.innerHTML = '<p id="noImageAnswerPlaceholder" class="text-xs text-slate-400 italic w-full text-center py-2">暂无已上传的图片解答</p>';
-                return;
-            }
-            
-            uploadedAnswerImages.forEach((path, idx) => {
-                const filename = path.split('/').pop();
-                listContainer.innerHTML += `
+            // 解析插图标签同时渲染到两处：解析编辑区（#answerIllustrationsList，与题干
+            // 插图区同款版式）和「图片答案」标签页（#imageAnswersList）。两处共用同一份
+            // uploadedAnswerImages，点击 × 走同一个 deleteUploadedAnswerImage。
+            const containers = ['answerIllustrationsList', 'imageAnswersList']
+                .map(id => document.getElementById(id))
+                .filter(Boolean);
+            if (containers.length === 0) return;
+
+            const badgesHtml = uploadedAnswerImages.length === 0
+                ? '<p class="text-xs text-slate-400 italic w-full text-center py-2">暂无已上传的图片解答</p>'
+                : uploadedAnswerImages.map((path, idx) => {
+                    const filename = path.split('/').pop();
+                    return `
                     <div class="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg border bg-white shadow-sm text-xs text-slate-600">
                         <i class="fa-solid fa-file-image text-brand-500"></i>
-                        <span class="truncate max-w-[100px]" title="${filename}">${filename}</span>
+                        <span class="truncate max-w-[100px]" title="${window.MathBankSafe.escapeAttribute(filename)}">${window.MathBankSafe.escapeText(filename)}</span>
                         <button type="button" onclick="deleteUploadedAnswerImage(${idx})" class="text-slate-400 hover:text-red-500 transition-all font-semibold pl-1">
                             <i class="fa-solid fa-xmark"></i>
                         </button>
-                    </div>
-                `;
-            });
+                    </div>`;
+                }).join('');
+
+            containers.forEach(container => { container.innerHTML = badgesHtml; });
         }
 
         function deleteUploadedAnswerImage(idx) {

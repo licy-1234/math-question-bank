@@ -3546,3 +3546,46 @@ def test_modal_open_only_fades_the_layout_not_modal_headers():
     assert "body.modal-active #appContentShell > header" in css
     assert "body.modal-active main" in css
     assert "body.modal-active header," not in css
+
+
+def test_editor_steps_single_row_and_answer_illustration_matches_content():
+    """顶部步骤条单行显示；解析配图区与题干配图区同款（排版 + 交互）。"""
+
+    css = _read(CSS_PATH)
+    index_source = _read(INDEX_PATH)
+    ocr_source = _read(STATIC_JS_DIR / "ocr.js")
+    elements = _index_elements()
+
+    # 1) 步骤条不再固定 4 列（当前 5 步会换行），改用隐式列铺满一行。
+    steps_rule = re.search(r"\.question-editor-steps\s*\{([^}]*)\}", css)
+    assert steps_rule, "缺少 .question-editor-steps 规则"
+    steps_body = steps_rule.group(1)
+    assert "grid-auto-flow: column" in steps_body
+    assert "grid-auto-columns: minmax(0, 1fr)" in steps_body
+    assert "repeat(4" not in steps_body, "固定 4 列会让第 5 步换行"
+
+    # 2) 解析配图区具备与题干 #illustrationDropZone 相同的结构。
+    for element_id in (
+        "answerIllustrationDropZone",
+        "answerIllustrationFileInput",
+        "answerIllustrationsList",
+    ):
+        assert element_id in elements, f"缺少 {element_id}"
+
+    def _dropzone_classes(source: str, element_id: str) -> set[str]:
+        match = re.search(r'id="' + element_id + r'"[^>]*class="([^"]*)"', source)
+        assert match, f"{element_id} 缺少 class"
+        return set(match.group(1).split())
+
+    content_classes = _dropzone_classes(index_source, "illustrationDropZone")
+    answer_classes = _dropzone_classes(index_source, "answerIllustrationDropZone")
+    assert content_classes == answer_classes, "解析配图拖拽区样式须与题干一致"
+
+    # 3) 交互一致：点击 / 拖放 / 粘贴，统一走 uploadIllustration 到解析框。
+    assert "function setupAnswerImageHandlers" in ocr_source
+    assert "answerIllustrationDropZone" in ocr_source
+    assert "answerIllustrationFileInput" in ocr_source
+    for wiring in ("answerZone.onclick", "answerInput.onchange",
+                   "setupDragDropListeners(answerZone", "setupPasteListener(answerZone"):
+        assert wiring in ocr_source, f"解析配图缺少交互绑定: {wiring}"
+    assert "uploadIllustration(file, 'editAnswerMarkdown')" in ocr_source

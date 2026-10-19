@@ -3238,7 +3238,10 @@ body.question-editor-open {
 
 .question-editor-steps {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    /* 步骤数会随功能增删（当前 5 步：分类/题干/解析/评述/动态演示）。
+       用隐式列自动铺满一行，避免固定 4 列导致最后一步换行。 */
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
     gap: 0.65rem;
     padding: 0.8rem 1.25rem;
     flex: 0 0 auto;
@@ -3543,6 +3546,9 @@ body.question-editor-open {
     .question-editor-steps {
         gap: 0.35rem;
         padding: 0.55rem;
+        /* 窄屏仍保持单行：列宽不再压缩到看不清，改为横向滚动。 */
+        overflow-x: auto;
+        grid-auto-columns: minmax(104px, 1fr);
     }
 
     .question-editor-step {
