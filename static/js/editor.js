@@ -3273,13 +3273,116 @@ window.functionTagBadge = functionTagBadge;
         // 向量符号规范化：把 OCR / AI / physics 包的多种向量写法统一成 KaTeX 原生命令，
         // 保证解析中的向量（如 \vec{PB}）准确识别并以标准箭头正确显示。
         // 规则与后端 mathbank/vector_notation.py 完全一致，保证「预览所见 = 入库所存」：
-        //   多字符向量 → \overrightarrow{AB}（中文教材的整段拉伸箭头）
-        //   单字符向量 → \vec{a}（紧凑重音）
+        //   裸单符号        → \vec{v}（紧凑重音）
+        //   多字符          → \overrightarrow{AB}（整段拉伸箭头）
+        //   单字母带上下标  → \overrightarrow{v_{1}}（无论下标写在内还是括号外）
         // 只做「安全、无歧义」的字符串等价替换，不改动任何其它宏或用户故意保留的写法。
         function vectorArrowMacro(base, isLeft) {
             if (isLeft) return '\\overleftarrow{' + base + '}';
             if (base.length === 1 || /^\\[A-Za-z]+$/.test(base)) return '\\vec{' + base + '}';
             return '\\overrightarrow{' + base + '}';
+        }
+
+        // 花括号组必须用配对扫描，正则无法安全跨越嵌套：
+        // 早先的 [^{}]+ 写法会把 \vec{v_{1}} 整条漏掉。
+        function matchVectorBrace(text, openIndex) {
+            let depth = 0;
+            for (let i = openIndex; i < text.length; i += 1) {
+                const ch = text[i];
+                if (ch === '\\') { i += 1; continue; }
+                if (ch === '{') depth += 1;
+                else if (ch === '}') { depth -= 1; if (depth === 0) return i; }
+            }
+            return -1;
+        }
+
+        // 把紧跟的 _ / ^ 组行内化：\vec{v}_{1} 的下标写在括号外，也要并进花括号。
+        function parseVectorScripts(text, index) {
+            const pieces = [];
+            let cursor = index;
+            while (cursor < text.length && (text[cursor] === '_' || text[cursor] === '^')) {
+                const mark = text[cursor];
+                const next = cursor + 1;
+                if (next < text.length && text[next] === '{') {
+                    const close = matchVectorBrace(text, next);
+                    if (close < 0) return null;
+                    pieces.push(mark + '{' + text.slice(next + 1, close) + '}');
+                    cursor = close + 1;
+                    continue;
+                }
+                const token = /^(?:\\[A-Za-z]+|[A-Za-z0-9])/.exec(text.slice(next));
+                if (!token) return null;
+                pieces.push(mark + '{' + token[0] + '}');
+                cursor = next + token[0].length;
+                // \vec{v}_{12}：裸下标超过一个原子，归属不明，整条放弃改写。
+                if (cursor < text.length && /[A-Za-z0-9]/.test(text[cursor])) return null;
+            }
+            return { scripts: pieces.join(''), end: cursor };
+        }
+
+        // 基 = 连续字母数字，或单个控制序列；其后只允许上下标组，否则视为不确定。
+        function splitVectorBase(core) {
+            const match = /^(?:[A-Za-z0-9]+|\\[A-Za-z]+)/.exec(core);
+            if (!match) return null;
+            const base = match[0];
+            const rest = core.slice(base.length);
+            let scripts = '';
+            let cursor = 0;
+            while (cursor < rest.length) {
+                if (rest[cursor] !== '_' && rest[cursor] !== '^') return null;
+                const parsed = parseVectorScripts(rest, cursor);
+                if (!parsed) return null;
+                scripts += parsed.scripts;
+                cursor = parsed.end;
+            }
+            return { base, scripts, symbolCount: base[0] === '\\' ? 1 : base.length };
+        }
+
+        function canonicalVector(name, body, symbolCount, hasScript) {
+            if (name === 'overleftarrow') return '\\overleftarrow{' + body + '}';
+            if (name === 'overrightarrow') return '\\overrightarrow{' + body + '}';
+            if (symbolCount === 1 && !hasScript) return '\\vec{' + body + '}';
+            return '\\overrightarrow{' + body + '}';
+        }
+
+        function rewriteBracedVectors(text) {
+            const command = /\\(vec|overrightarrow|overleftarrow)(?![A-Za-z])\s*\{/g;
+            let out = '';
+            let cursor = 0;
+            let match = command.exec(text);
+            while (match !== null) {
+                out += text.slice(cursor, match.index);
+                const openIndex = match.index + match[0].length - 1;
+                const closeIndex = matchVectorBrace(text, openIndex);
+                if (closeIndex < 0) {
+                    out += text.slice(match.index, match.index + match[0].length);
+                    cursor = match.index + match[0].length;
+                    command.lastIndex = cursor;
+                    match = command.exec(text);
+                    continue;
+                }
+                const after = closeIndex + 1;
+                const inner = text.slice(openIndex + 1, closeIndex).trim();
+                const split = inner ? splitVectorBase(inner) : null;
+                const trailing = split ? parseVectorScripts(text, after) : null;
+                if (!split || !trailing) {
+                    out += text.slice(match.index, after);
+                    cursor = after;
+                    command.lastIndex = after;
+                    match = command.exec(text);
+                    continue;
+                }
+                out += canonicalVector(
+                    match[1],
+                    split.base + split.scripts + trailing.scripts,
+                    split.symbolCount,
+                    Boolean(split.scripts || trailing.scripts)
+                );
+                cursor = trailing.end;
+                command.lastIndex = cursor;
+                match = command.exec(text);
+            }
+            return out + text.slice(cursor);
         }
 
         function normalizeVectorNotation(text) {
@@ -3305,15 +3408,9 @@ window.functionTagBadge = functionTagBadge;
             out = out.replace(/([A-Za-z])[\u20D0\u20D1\u20D6\u20D7](?![A-Za-z])/g,
                 (match, base) => '\\vec{' + base + '}');
 
-            // 5) 统一花括号向量写法：\vec {AB} 去空格；多字符换 \overrightarrow；
-            //    嵌套花括号（\vec{v_{1}}）不匹配，保持原样交给 KaTeX。
-            out = out.replace(/\\(vec|overrightarrow|overleftarrow)\s*\{\s*([^{}\n]*?)\s*\}/g,
-                (match, name, base) => {
-                    if (!base) return match;
-                    if (name === 'overleftarrow') return '\\overleftarrow{' + base + '}';
-                    if (name === 'overrightarrow') return '\\overrightarrow{' + base + '}';
-                    return vectorArrowMacro(base, false);
-                });
+            // 5) 花括号向量宏：去空格、多字符换 \overrightarrow、单字母带上下标
+            //    也换 \overrightarrow，并把写在括号外的下标/上标并进括号内。
+            out = rewriteBracedVectors(out);
 
             return out;
         }

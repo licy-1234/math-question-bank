@@ -118,7 +118,8 @@ for (const f of [String.raw`\vec{a}`, String.raw`\overrightarrow{PB}`, String.ra
 ''')
 
     # 与后端 mathbank/vector_notation.py 必须给出同一结果：间距收拢、单字符降为 \vec、
-    # 已规范的 \overrightarrow 只去空格。任一侧改动都会打破「预览所见 = 入库所存」。
+    # 单字母带上下标换 \overrightarrow、已规范的 \overrightarrow 只去空格。
+    # 任一侧改动都会打破「预览所见 = 入库所存」。
     run_preview_script(r'''
 const cases = [
     [String.raw`$\vec {BP}\cdot  \vec {PA}$`, String.raw`\overrightarrow{BP}\cdot  \overrightarrow{PA}`],
@@ -127,16 +128,25 @@ const cases = [
     [String.raw`$\vec {a}$`, String.raw`\vec{a}`],
     [String.raw`$\overset{\rightarrow}{a}$`, String.raw`\vec{a}`],
     [String.raw`$\overset{\leftarrow}{b}$`, String.raw`\overleftarrow{b}`],
+    // 单字母带上下标：下标在括号内 / 在括号外，都归到 \overrightarrow
+    [String.raw`$\vec{v_{1}}$`, String.raw`\overrightarrow{v_{1}}`],
+    [String.raw`$\vec{v}_{1}$`, String.raw`\overrightarrow{v_{1}}`],
+    [String.raw`$\vec{v_{12}}$`, String.raw`\overrightarrow{v_{12}}`],
+    [String.raw`$\vec{v_{1}^{(2)}}$`, String.raw`\overrightarrow{v_{1}^{(2)}}`],
+    [String.raw`$\vec{v_{1}}^{2}$`, String.raw`\overrightarrow{v_{1}^{2}}`],
+    [String.raw`$\vec{P_{1}}$`, String.raw`\overrightarrow{P_{1}}`],
+    [String.raw`$\vec{v}_{1}\cdot \vec{v}_{2}=0$`,
+        String.raw`\overrightarrow{v_{1}}\cdot \overrightarrow{v_{2}}=0`],
 ];
 cases.forEach(([src, expected]) => {
     const formulas = parsedFormulas(preprocessFormulaForKaTeX(src));
     assert.equal(formulas.length, 1, src);
     assert.equal(formulas[0], expected, src);
 });
-// 嵌套花括号与非向量重音保持原样
+// 归属不明的写法与非向量重音保持原样
 assert.deepEqual(
-    parsedFormulas(preprocessFormulaForKaTeX(String.raw`$\vec{v_{1}}$ 与 $\overline{AB}$`)),
-    [String.raw`\vec{v_{1}}`, String.raw`\overline{AB}`]
+    parsedFormulas(preprocessFormulaForKaTeX(String.raw`$\vec{v_{1}+1}$ 与 $\overline{AB}$`)),
+    [String.raw`\vec{v_{1}+1}`, String.raw`\overline{AB}`]
 );
 // 幂等：规范化结果再过一遍预处理不再变化
 for (const [src, expected] of cases) {

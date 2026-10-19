@@ -22,10 +22,27 @@ from mathbank.vector_notation import normalize_vector_notation
         (r"$\vec{a}$", r"$\vec{a}$"),
         (r"$\vec {a}$", r"$\vec{a}$"),
         (r"$\overset{\rightarrow}{a}$", r"$\vec{a}$"),
-        (r"$\vec{v}_{1}$", r"$\vec{v}_{1}$"),
+        # 单字母带上下标：一律改用拉伸箭头，下标写在内在外都归到同一形态
+        (r"$\vec{v_{1}}$", r"$\overrightarrow{v_{1}}$"),
+        (r"$\vec{v}_{1}$", r"$\overrightarrow{v_{1}}$"),
+        (r"$\vec{v_{2}}=2\vec{CD}$", r"$\overrightarrow{v_{2}}=2\overrightarrow{CD}$"),
+        (
+            r"$\vec{v}_{1}\cdot \vec{v}_{2}=0$",
+            r"$\overrightarrow{v_{1}}\cdot \overrightarrow{v_{2}}=0$",
+        ),
+        (r"$\vec{v_{12}}$", r"$\overrightarrow{v_{12}}$"),
+        (r"$\vec{v}_{12}$", r"$\overrightarrow{v_{12}}$"),
+        (r"$\vec{P_{1}}$", r"$\overrightarrow{P_{1}}$"),
+        (r"$\vec{v_{1}^{(2)}}$", r"$\overrightarrow{v_{1}^{(2)}}$"),
+        (r"$\vec{v_{1}}^{2}$", r"$\overrightarrow{v_{1}^{2}}$"),
+        (r"$\vec{v_{i}^{2}}$", r"$\overrightarrow{v_{i}^{2}}$"),
+        (r"$\vec{AB}_{1}$", r"$\overrightarrow{AB_{1}}$"),
+        (r"$\vec{\alpha_{1}}$", r"$\overrightarrow{\alpha_{1}}$"),
+        (r"$\vec{v_{\frac{1}{2}}}$", r"$\overrightarrow{v_{\frac{1}{2}}}$"),
         # 反向箭头
         (r"$\overset{\longleftarrow}{BA}$", r"$\overleftarrow{BA}$"),
         (r"$\overset{\leftarrow}{b}$", r"$\overleftarrow{b}$"),
+        (r"$\overleftarrow{v}_{1}$", r"$\overleftarrow{v_{1}}$"),
         # 混合出现时逐处改写，运算与间距不动
         (
             r"$\vec{v}=\vec{AB}=2\vec{CD}$",
@@ -33,8 +50,9 @@ from mathbank.vector_notation import normalize_vector_notation
         ),
         # OCR 常见的 Unicode 组合箭头
         ("A\u20d7 与 B\u20d7", r"\vec{A} 与 \vec{B}"),
-        # 嵌套花括号不支持，原样保留交给 KaTeX
-        (r"$\vec{v_{1}}$", r"$\vec{v_{1}}$"),
+        # 归属不明的一律不动：基里还有运算符、裸下标超过一个原子、无花括号
+        (r"$\vec{v_{1}+1}$", r"$\vec{v_{1}+1}$"),
+        (r"$\vec v$", r"$\vec v$"),
         # 非向量重音不受影响
         (r"$\overline{AB}$ 与 $\hat{AB}$", r"$\overline{AB}$ 与 $\hat{AB}$"),
     ],
@@ -46,9 +64,33 @@ def test_vector_notation_is_standardized(source, expected):
 @pytest.mark.parametrize(
     "source",
     [
+        # 基后面还有运算符：下标归属不明
+        r"$\vec{v_{1}+1}$",
+        r"$\vec{v_{\frac{1}{2}}+1}$",
+        # 裸下标超过一个原子（\vec{v}_12），无法判断哪几个字符属于下标
+        r"$\vec{v}_12$",
+        # 完全没写花括号
+        r"$\vec v$",
+    ],
+)
+def test_ambiguous_spans_are_left_untouched(source):
+    assert normalize_vector_notation(source) == source
+
+
+def test_ambiguous_span_does_not_block_its_neighbours():
+    source = r"$\vec{v_{1}+1}$ 与 $\vec{w_{2}}$"
+    assert normalize_vector_notation(source) == (
+        r"$\vec{v_{1}+1}$ 与 $\overrightarrow{w_{2}}$"
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
         r"$\vec{PB}$ 与 $\vec {BP}$ 与 $\overset{\to}{AB}$",
         "A\u20d7 与 $\vec{a}$",
         r"$\vec{v_{1}}$ + $\overrightarrow {AB}$",
+        r"$\vec{v}_{1}\cdot \vec{v}_{2}$",
         "",
     ],
 )

@@ -6,11 +6,29 @@ byte-for-byte identical.
 
 Conventions (Chinese textbook style):
 
-* multi-symbol vectors render with a stretched arrow — ``\\overrightarrow{AB}``;
-* single-symbol vectors keep the compact accent — ``\\vec{v}``;
+* a bare single symbol keeps the compact accent — ``\\vec{v}``;
+* everything else gets the stretched arrow — ``\\overrightarrow{AB}``;
+  a single-letter base carrying sub/superscripts counts as "everything else"
+  too — ``\\overrightarrow{v_{1}}``;
 * ``\\vv`` (physics package), ``\\overset{\\rightarrow}{AB}``, the Unicode
-  combining arrows and the spaced form ``\\vec {AB}`` all collapse onto the
-  two canonical shapes above.
+  combining arrows and the spaced form ``\\vec {AB}`` collapse onto those two
+  canonical shapes;
+* scripts written outside the group (``\\vec{v}_{1}``) are pulled inside
+  (``\\overrightarrow{v_{1}}``) so both spellings converge.
+
+Recognized shapes — one macro, one balanced brace group, whose body is a single
+base symbol (a run of ASCII letters/digits, or one control sequence such as
+``\\alpha``) optionally followed by ``_``/``^`` groups::
+
+    \\vec{v}        \\vec{v_{1}}      \\vec{v_{1}^{(2)}}   \\vec{v}_{1}
+    \\vec{AB}_{1}   \\vec{P_{1}}      \\vec{v_{i}^{2}}     \\vec{\\alpha_{1}}
+
+Anything else is deliberately left untouched because the ownership of the
+script would be a guess, and a wrong guess silently changes the math:
+``\\vec{v_{1}+1}`` (a sum, not a subscripted vector), the brace-less
+``\\vec v``, the ambiguous ``\\vec{v}_{12}``, and
+``\\overset{\\rightarrow}{v_{1}}`` (base itself braced) all keep their
+original bytes.
 
 Because the function is idempotent, it is safe to run on already-normalized
 content (imports, edits and re-saves all pass through it).
@@ -68,14 +86,14 @@ _OVERSET_LEFT = re.compile(
 # OCR/AI output occasionally keeps the Unicode combining arrow after a letter.
 _COMBINING_ARROW = re.compile(r"([A-Za-z])[\u20D0\u20D1\u20D6\u20D7](?![A-Za-z])")
 
-# Braced vector macros. ``\s*`` absorbs the spaced form (``\vec {AB}``) and the
-# inner ``\s*`` drops the padding (``\vec{ AB }``). Nested braces do not match,
-# so ``\vec{v_{1}}`` and similar constructs are left alone.
-_BRACED_VECTOR = re.compile(
-    r"\\(vec|overrightarrow|overleftarrow)\s*\{\s*([^{}\n]*?)\s*\}"
-)
+# A braced vector macro; ``\s*`` absorbs the spaced form (``\vec {AB}``).
+_VECTOR_COMMAND = re.compile(r"\\(vec|overrightarrow|overleftarrow)(?![A-Za-z])\s*\{")
 
-# A base that is a single character or a single control sequence.
+# The base of a vector: a run of ASCII letters/digits, or one control sequence.
+_BASE = re.compile(r"(?:[A-Za-z0-9]+|\\[A-Za-z]+)")
+# One unbraced script atom (``_i``, ``_\alpha``, ``_1``).
+_SCRIPT_TOKEN = re.compile(r"\\[A-Za-z]+|[A-Za-z0-9]")
+
 _SINGLE_SYMBOL_COMMAND = re.compile(r"\\[A-Za-z]+")
 
 
@@ -103,6 +121,131 @@ def _restore(text: str, spans: list[str]) -> str:
     return _PLACEHOLDER_RE.sub(lambda m: spans[int(m.group(1))], text)
 
 
+def _matching_brace(text: str, open_index: int) -> int | None:
+    """Index of the brace closing ``text[open_index]``; ``None`` when unbalanced."""
+
+    depth = 0
+    cursor = open_index
+    length = len(text)
+    while cursor < length:
+        char = text[cursor]
+        if char == "\\":
+            cursor += 2
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return cursor
+        cursor += 1
+    return None
+
+
+def _parse_scripts(text: str, index: int) -> tuple[str | None, int]:
+    """Inline ``_``/``^`` groups starting at ``index`` as braced scripts."""
+
+    pieces: list[str] = []
+    cursor = index
+    length = len(text)
+    while cursor < length and text[cursor] in "_^":
+        mark = text[cursor]
+        following = cursor + 1
+        if following < length and text[following] == "{":
+            close = _matching_brace(text, following)
+            if close is None:
+                return None, index
+            pieces.append(mark + "{" + text[following + 1:close] + "}")
+            cursor = close + 1
+            continue
+        token = _SCRIPT_TOKEN.match(text, following)
+        if token is None:
+            return None, index
+        pieces.append(mark + "{" + token.group(0) + "}")
+        cursor = token.end()
+        # ``\vec{v}_{12}``: the script is longer than one atom, so where it
+        # belongs is ambiguous. Leave the whole span alone instead of guessing.
+        if cursor < length and text[cursor].isalnum():
+            return None, index
+    return "".join(pieces), cursor
+
+
+def _split_base(core: str) -> tuple[str, str] | None:
+    """Split ``core`` into (base, script groups); ``None`` when it is not simple."""
+
+    match = _BASE.match(core)
+    if match is None:
+        return None
+    base = match.group(0)
+    rest = core[match.end():]
+    scripts: list[str] = []
+    cursor = 0
+    while cursor < len(rest):
+        if rest[cursor] not in "_^":
+            return None
+        parsed, cursor = _parse_scripts(rest, cursor)
+        if parsed is None:
+            return None
+        scripts.append(parsed)
+    return base, "".join(scripts)
+
+
+def _canonical_vector(
+    name: str, core: str, trailing: str, symbol_count: int, *, has_script: bool
+) -> str:
+    body = core + trailing
+    if name == "overleftarrow":
+        return "\\overleftarrow{%s}" % body
+    if name == "overrightarrow":
+        return "\\overrightarrow{%s}" % body
+    if symbol_count == 1 and not has_script:
+        return "\\vec{%s}" % body
+    return "\\overrightarrow{%s}" % body
+
+
+def _rewrite_braced_vectors(text: str) -> str:
+    """Rewrite every well-formed ``\\vec``-family macro in a single pass."""
+
+    pieces: list[str] = []
+    cursor = 0
+    while True:
+        match = _VECTOR_COMMAND.search(text, cursor)
+        if match is None:
+            pieces.append(text[cursor:])
+            return "".join(pieces)
+        pieces.append(text[cursor:match.start()])
+        open_index = match.end() - 1
+        close_index = _matching_brace(text, open_index)
+        if close_index is None:
+            pieces.append(text[match.start():match.end()])
+            cursor = match.end()
+            continue
+        after = close_index + 1
+        core = text[open_index + 1:close_index].strip()
+        split = _split_base(core) if core else None
+        if split is None:
+            pieces.append(text[match.start():after])
+            cursor = after
+            continue
+        base, inner_scripts = split
+        trailing, end_index = _parse_scripts(text, after)
+        if trailing is None:
+            pieces.append(text[match.start():after])
+            cursor = after
+            continue
+        symbol_count = 1 if base.startswith("\\") else len(base)
+        pieces.append(
+            _canonical_vector(
+                match.group(1),
+                base + inner_scripts,
+                trailing,
+                symbol_count,
+                has_script=bool(inner_scripts or trailing),
+            )
+        )
+        cursor = end_index
+
+
 def _vector(base: str, *, left: bool = False) -> str:
     if left:
         return "\\overleftarrow{%s}" % base
@@ -118,17 +261,6 @@ def _rewrite_overset(match: re.Match[str], *, left: bool) -> str:
     return _vector(base, left=left)
 
 
-def _rewrite_braced(match: re.Match[str]) -> str:
-    name, base = match.group(1), match.group(2)
-    if not base:
-        return match.group(0)
-    if name == "overleftarrow":
-        return "\\overleftarrow{%s}" % base
-    if name == "overrightarrow":
-        return "\\overrightarrow{%s}" % base
-    return _vector(base)
-
-
 def normalize_vector_notation(text: str) -> str:
     """Return ``text`` with every vector arrow written in canonical form."""
 
@@ -142,5 +274,5 @@ def normalize_vector_notation(text: str) -> str:
     out = _OVERSET_RIGHT.sub(lambda m: _rewrite_overset(m, left=False), out)
     out = _OVERSET_LEFT.sub(lambda m: _rewrite_overset(m, left=True), out)
     out = _COMBINING_ARROW.sub(lambda m: "\\vec{%s}" % m.group(1), out)
-    out = _BRACED_VECTOR.sub(_rewrite_braced, out)
+    out = _rewrite_braced_vectors(out)
     return _restore(out, spans)
