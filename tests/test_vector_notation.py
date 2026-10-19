@@ -34,11 +34,15 @@ from mathbank.vector_notation import normalize_vector_notation
         (r"$\vec{v}_{12}$", r"$\overrightarrow{v_{12}}$"),
         (r"$\vec{P_{1}}$", r"$\overrightarrow{P_{1}}$"),
         (r"$\vec{v_{1}^{(2)}}$", r"$\overrightarrow{v_{1}^{(2)}}$"),
-        (r"$\vec{v_{1}}^{2}$", r"$\overrightarrow{v_{1}^{2}}$"),
+        (r"$\vec{v_{1}}^{2}$", r"$\overrightarrow{v_{1}}^{2}$"),
         (r"$\vec{v_{i}^{2}}$", r"$\overrightarrow{v_{i}^{2}}$"),
         (r"$\vec{AB}_{1}$", r"$\overrightarrow{AB_{1}}$"),
         (r"$\vec{\alpha_{1}}$", r"$\overrightarrow{\alpha_{1}}$"),
         (r"$\vec{v_{\frac{1}{2}}}$", r"$\overrightarrow{v_{\frac{1}{2}}}$"),
+        # 括号外的上标属于整个表达式（转置 / 平方），不并进箭头
+        (r"$\vec{AB}^T$", r"$\overrightarrow{AB}^T$"),
+        (r"$(\vec{AB}^T)$", r"$(\overrightarrow{AB}^T)$"),
+        (r"$\vec{v}^2$", r"$\vec{v}^2$"),
         # 反向箭头
         (r"$\overset{\longleftarrow}{BA}$", r"$\overleftarrow{BA}$"),
         (r"$\overset{\leftarrow}{b}$", r"$\overleftarrow{b}$"),
@@ -91,6 +95,9 @@ def test_ambiguous_span_does_not_block_its_neighbours():
         "A\u20d7 与 $\vec{a}$",
         r"$\vec{v_{1}}$ + $\overrightarrow {AB}$",
         r"$\vec{v}_{1}\cdot \vec{v}_{2}$",
+        r"$\vec{v_{1}}^{2}$",
+        r"$\vec{AB}^T$",
+        r"$(\vec{v}_{1}^T)$",
         "",
     ],
 )
@@ -133,3 +140,4 @@ def test_protected_regions_do_not_shield_neighbouring_math():
 def test_non_string_input_degrades_to_empty():
     assert normalize_vector_notation(None) == ""
     assert normalize_vector_notation("") == ""
+    assert normalize_vector_notation(123) == ""

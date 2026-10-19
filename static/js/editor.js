@@ -3297,11 +3297,14 @@ window.functionTagBadge = functionTagBadge;
         }
 
         // 把紧跟的 _ / ^ 组行内化：\vec{v}_{1} 的下标写在括号外，也要并进花括号。
-        function parseVectorScripts(text, index) {
+        // allowSuperscript=false 时遇到 ^ 即停：括号外的上标属于整个表达式
+        // （\vec{AB}^T 是转置，不是 AB^T 上的箭头），必须留在括号外。
+        function parseVectorScripts(text, index, allowSuperscript = true) {
             const pieces = [];
             let cursor = index;
             while (cursor < text.length && (text[cursor] === '_' || text[cursor] === '^')) {
                 const mark = text[cursor];
+                if (mark === '^' && !allowSuperscript) break;
                 const next = cursor + 1;
                 if (next < text.length && text[next] === '{') {
                     const close = matchVectorBrace(text, next);
@@ -3364,7 +3367,7 @@ window.functionTagBadge = functionTagBadge;
                 const after = closeIndex + 1;
                 const inner = text.slice(openIndex + 1, closeIndex).trim();
                 const split = inner ? splitVectorBase(inner) : null;
-                const trailing = split ? parseVectorScripts(text, after) : null;
+                const trailing = split ? parseVectorScripts(text, after, false) : null;
                 if (!split || !trailing) {
                     out += text.slice(match.index, after);
                     cursor = after;
@@ -3409,7 +3412,8 @@ window.functionTagBadge = functionTagBadge;
                 (match, base) => '\\vec{' + base + '}');
 
             // 5) 花括号向量宏：去空格、多字符换 \overrightarrow、单字母带上下标
-            //    也换 \overrightarrow，并把写在括号外的下标/上标并进括号内。
+            //    也换 \overrightarrow，并把写在括号外的下标并进括号内；
+            //    括号外的上标属于整个表达式（转置等），留在括号外。
             out = rewriteBracedVectors(out);
 
             return out;

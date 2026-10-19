@@ -133,7 +133,11 @@ const cases = [
     [String.raw`$\vec{v}_{1}$`, String.raw`\overrightarrow{v_{1}}`],
     [String.raw`$\vec{v_{12}}$`, String.raw`\overrightarrow{v_{12}}`],
     [String.raw`$\vec{v_{1}^{(2)}}$`, String.raw`\overrightarrow{v_{1}^{(2)}}`],
-    [String.raw`$\vec{v_{1}}^{2}$`, String.raw`\overrightarrow{v_{1}^{2}}`],
+    [String.raw`$\vec{v_{1}}^{2}$`, String.raw`\overrightarrow{v_{1}}^{2}`],
+    // 括号外的上标属于整个表达式（转置 / 平方），留在括号外
+    [String.raw`$\vec{AB}^T$`, String.raw`\overrightarrow{AB}^T`],
+    [String.raw`$(\vec{AB}^T)$`, String.raw`(\overrightarrow{AB}^T)`],
+    [String.raw`$\vec{v}^2$`, String.raw`\vec{v}^2`],
     [String.raw`$\vec{P_{1}}$`, String.raw`\overrightarrow{P_{1}}`],
     [String.raw`$\vec{v}_{1}\cdot \vec{v}_{2}=0$`,
         String.raw`\overrightarrow{v_{1}}\cdot \overrightarrow{v_{2}}=0`],

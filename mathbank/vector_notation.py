@@ -14,7 +14,10 @@ Conventions (Chinese textbook style):
   combining arrows and the spaced form ``\\vec {AB}`` collapse onto those two
   canonical shapes;
 * scripts written outside the group (``\\vec{v}_{1}``) are pulled inside
-  (``\\overrightarrow{v_{1}}``) so both spellings converge.
+  (``\\overrightarrow{v_{1}}``) so both spellings converge — except a
+  superscript, which belongs to the whole expression and stays outside:
+  ``\\vec{AB}^T`` → ``\\overrightarrow{AB}^T`` (a transpose, not an arrow
+  over ``AB^T``). Scripts the author already braced are never moved.
 
 Recognized shapes — one macro, one balanced brace group, whose body is a single
 base symbol (a run of ASCII letters/digits, or one control sequence such as
@@ -142,14 +145,25 @@ def _matching_brace(text: str, open_index: int) -> int | None:
     return None
 
 
-def _parse_scripts(text: str, index: int) -> tuple[str | None, int]:
-    """Inline ``_``/``^`` groups starting at ``index`` as braced scripts."""
+def _parse_scripts(
+    text: str, index: int, *, allow_superscript: bool = True
+) -> tuple[str | None, int]:
+    """Inline ``_``/``^`` groups starting at ``index`` as braced scripts.
+
+    ``allow_superscript=False`` ends the run at a ``^`` group instead of
+    absorbing it: a superscript written *after* the closing brace belongs to
+    the whole expression (``\\vec{AB}^T`` is a transpose, not an arrow over
+    ``AB^T``), so it has to stay outside the arrow. Subscripts still merge,
+    because ``\\vec{v}_{1}`` and ``\\vec{v_{1}}`` are the same vector.
+    """
 
     pieces: list[str] = []
     cursor = index
     length = len(text)
     while cursor < length and text[cursor] in "_^":
         mark = text[cursor]
+        if mark == "^" and not allow_superscript:
+            break
         following = cursor + 1
         if following < length and text[following] == "{":
             close = _matching_brace(text, following)
@@ -191,9 +205,8 @@ def _split_base(core: str) -> tuple[str, str] | None:
 
 
 def _canonical_vector(
-    name: str, core: str, trailing: str, symbol_count: int, *, has_script: bool
+    name: str, body: str, symbol_count: int, *, has_script: bool
 ) -> str:
-    body = core + trailing
     if name == "overleftarrow":
         return "\\overleftarrow{%s}" % body
     if name == "overrightarrow":
@@ -228,17 +241,17 @@ def _rewrite_braced_vectors(text: str) -> str:
             cursor = after
             continue
         base, inner_scripts = split
-        trailing, end_index = _parse_scripts(text, after)
+        trailing, end_index = _parse_scripts(text, after, allow_superscript=False)
         if trailing is None:
             pieces.append(text[match.start():after])
             cursor = after
             continue
         symbol_count = 1 if base.startswith("\\") else len(base)
+        body = base + inner_scripts + trailing
         pieces.append(
             _canonical_vector(
                 match.group(1),
-                base + inner_scripts,
-                trailing,
+                body,
                 symbol_count,
                 has_script=bool(inner_scripts or trailing),
             )
