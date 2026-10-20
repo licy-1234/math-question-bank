@@ -31,6 +31,11 @@ function loadQuestions() {}
 function loadCategories() {}
 function refreshRelatedDropdown() {}
 function updateQuestionSaveButtonState() {}
+// The save slice calls reference lifecycle helpers declared earlier in import.js.
+let referenceRefreshSequence = 0;
+window.QuestionReferenceState = {reset() {}, hydrate() {}, invalidate() {}};
+window.refreshCurrentQuestionReferences = () => false;
+function updateEditorReferencePreviews() {}
 function clearContentOcrPreview() {}
 function clearOcrPreview() {}
 function clearReviewOcrPreview() {}
@@ -77,9 +82,10 @@ def run_js(checks, sources=SOURCES):
     assert node, 'Node is required for isolated frontend regression checks'
     script = (COMMON + sources + '\n(async()=>{\n' + checks
               + '\n})().catch(error=>{console.error(error);process.exitCode=1;});')
-    # Windows 命令行上限约 32K，整段 harness 必须走 stdin，不能塞进 -e
-    result = subprocess.run([node, '-'], input=script,
-                            capture_output=True, text=True, cwd=ROOT)
+    # Windows 命令行上限约 32K、Linux 单参数上限 128 KiB，整段 harness 必须走
+    # stdin，不能塞进 -e；显式 encoding 让中文断言在 Windows 上不被 cp936 打断。
+    result = subprocess.run([node, '-'], input=script, capture_output=True,
+                            text=True, encoding='utf-8', cwd=ROOT)
     assert result.returncode == 0, result.stderr + result.stdout
 
 

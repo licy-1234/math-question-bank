@@ -15,6 +15,11 @@ from mathbank.source_metadata import (
     source_metadata_diagnostics,
 )
 from mathbank.task_manager import TaskCancelled
+from mathbank.document_requests import is_retryable_document_http_status
+
+
+class SourceMetadataPermanentHTTPError(RuntimeError):
+    """A second full-source POST cannot repair a permanent provider response."""
 
 
 def request_word_source_metadata(
@@ -33,6 +38,7 @@ def request_word_source_metadata(
     check_cancelled()
     if not provider.api_key or not provider.chat_completions_url:
         raise SourceMetadataContractError("拆题服务未配置，沿用原整卷拆题入口。")
+    # 知识点相关功能不上线（本地定案）：不再装载知识点目录，契约只有五字段。
     messages = build_source_metadata_messages(plan, curriculum)
     payload = apply_model_thinking_policy({
         "model": provider.model_name, "messages": messages,
@@ -46,6 +52,11 @@ def request_word_source_metadata(
         check_cancelled()
         report["http_status"] = response.status_code
         if response.status_code != 200:
+            if not is_retryable_document_http_status(response.status_code):
+                report.update(status="permanent_error", permanent_error=True)
+                raise SourceMetadataPermanentHTTPError(
+                    f"拆题服务未接受请求（HTTP {response.status_code}），请检查模型、凭据及服务配置后重试。"
+                )
             raise SourceMetadataContractError(f"元数据请求失败（HTTP {response.status_code}）。")
         body = response.json()
         usage = body.get("usage") if isinstance(body, dict) else None
@@ -68,5 +79,6 @@ def request_word_source_metadata(
             report["status"] = "cancelled"
             raise
         # Content or provider exception text must not enter task diagnostics.
-        report["status"] = "fallback"
+        if not report.get("permanent_error"):
+            report["status"] = "fallback"
         raise

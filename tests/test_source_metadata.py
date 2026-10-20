@@ -171,7 +171,8 @@ def test_protected_math_code_and_image_paths_do_not_reach_fillin_normalizer():
 
 @pytest.mark.parametrize("change", ["missing", "unknown", "duplicate", "content", "bad_type", "bad_difficulty", "outer_extra"])
 def test_model_contract_failure_cannot_edit_or_drop_the_local_source(change):
-    plan = prepare("1. 求$x$。\n2. 求$y$。")
+    plan = prepare("1. 已知变量$x=3$，求其值。\n2. 给定参数$y=4$，写出结果。\n参考答案：\n2. $4$。\n1. $3$。")
+    assert plan["eligible"], plan["fallback_reasons"]
     original = deepcopy(plan["questions"])
     parsed = metadata(plan)
     if change == "missing":

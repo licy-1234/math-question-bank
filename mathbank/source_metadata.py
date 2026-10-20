@@ -609,7 +609,11 @@ def normalize_source_fillin(value: str, normalizer: Callable[[str], str] | None)
         if result.count(token) != 1:
             raise SourceMetadataContractError("本地格式处理改变了受保护的原文。")
         result = result.replace(token, original)
-    return result
+    # A complete line / triangle / line cluster is a proven answer-slot
+    # decoration. Apply only that bounded repair after native markup has been
+    # restored; all other nonempty underlines and source math stay protected.
+    from mathbank.fillin_placeholders import normalize_fillin_placeholder_clusters
+    return normalize_fillin_placeholder_clusters(result)
 
 
 def _inspect_source_structure(source: str, reasons: list[str], *,
@@ -944,7 +948,9 @@ def _require_certificate(plan: dict) -> None:
             raise SourceMetadataContractError("原Word占位图证据已改变，须重新核对原文。")
 
 
-def build_source_metadata_messages(plan: dict, curriculum: dict) -> list[dict]:
+def build_source_metadata_messages(plan: dict, curriculum: dict, _knowledge_catalog=None) -> list[dict]:
+    # 知识点相关功能不上线（本地定案）：第三个参数保留只为调用方签名兼容，
+    # 不再注入知识点目录，提示词契约收回到本地五字段。
     _require_certificate(plan)
     from .word_classification_scope import build_word_classification_scope, classification_scope_instruction
     scope = build_word_classification_scope(plan, curriculum)
@@ -1013,8 +1019,12 @@ def apply_source_metadata_response(parsed: dict, plan: dict, curriculum: dict, *
             # Backward compatibility for providers using the previous schema:
             # missing refinement means whole-chapter, never a copied chapter label.
             row = {**row, "category_knowledge": ""}
-        if not isinstance(row, dict) or set(row) != fields or any(not isinstance(v, str) for v in row.values()):
+        required_fields = {"id", "question_type", "difficulty"}
+        if (not isinstance(row, dict) or not required_fields.issubset(row)
+                or set(row) - fields
+                or any(not isinstance(row[key], str) for key in required_fields)):
             raise SourceMetadataContractError("元数据字段无效，不接收模型改写原文。")
+        row = dict(row)
         identifier = row["id"]
         if identifier not in known or identifier in supplied:
             raise SourceMetadataContractError("元数据来源标识未知或重复。")

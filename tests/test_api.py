@@ -419,13 +419,15 @@ def test_api_metadata_config(client):
 
 
 def test_curriculum_preset_api(client):
-    for version in ("A", "B", "S", "H"):
+    from mathbank.curriculums import CURRICULUM_NAMES
+    for version in CURRICULUM_NAMES:
         response = client.get(f"/api/config/curriculum-presets/{version}")
         assert response.status_code == 200
         data = response.json()
         assert data["version"] == version
         assert data["name"]
         assert data["metadata"]["curriculum"]
+        assert data["metadata"]["curriculum_version"] == version
 
     response = client.get("/api/config/curriculum-presets/unknown")
     assert response.status_code == 404
@@ -760,7 +762,6 @@ def test_paper_export_routes_forward_request_figure_size(client, db_session):
     headers = {"X-Local-Token": LOCAL_TOKEN}
     with (
         patch("main.build_latex_document", side_effect=capture_latex),
-        patch("main.collect_referenced_images", return_value=[]),
         patch("main.create_tex_zip_package", return_value=b"PK-tex"),
         patch("main.compile_tex_to_pdf", return_value=(b"%PDF-test", "")),
         patch("main.create_full_bundle_zip_package", return_value=b"PK-bundle"),
