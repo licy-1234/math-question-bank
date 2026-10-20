@@ -7,7 +7,6 @@ import hashlib
 import json
 
 from mathbank.ai_providers import apply_model_thinking_policy
-from mathbank.ai_knowledge_points import build_ai_knowledge_prompt, load_ai_knowledge_catalog
 from mathbank.content_locks import lock_visible_math, reconcile_visible_math
 from mathbank.paper_parse import PAPER_SPLIT_TIMEOUT_SECONDS, parse_paper_completion
 from mathbank.import_classification import normalize_import_classifications
@@ -41,11 +40,10 @@ class SourceHybridPermanentRequestError(ValueError):
 def build_source_hybrid_messages(plan: dict, curriculum: dict, groups: list[dict], *, source_label="文档") -> tuple[list[dict], dict]:
     """Build one bounded envelope. Context is shared; source is never truncated."""
     context, items, risks, locks = [], [], [], {}
-    knowledge_catalog = load_ai_knowledge_catalog()
     metadata_instructions = None
     for group in groups:
         if group["route"] == "metadata":
-            messages = build_source_metadata_messages(group["_source_metadata_plan"], curriculum, knowledge_catalog)
+            messages = build_source_metadata_messages(group["_source_metadata_plan"], curriculum)
             if metadata_instructions is None:
                 metadata_instructions = messages[0]["content"].split("只输出JSON对象", 1)[0]
             data = json.loads(messages[1]["content"])
@@ -71,10 +69,7 @@ def build_source_hybrid_messages(plan: dict, curriculum: dict, groups: list[dict
             locks[group["id"]] = (raw, group_locks)
             risks.append({"group_id": group["id"], "source_ids": group["question_ids"],
                           "source_numbers": group["source_numbers"], "source_markdown": locked})
-    split_rules = build_pdf_parse_system_prompt(curriculum, False, knowledge_catalog).split("【输出约束与 JSON 格式】", 1)[0]
-    if metadata_instructions is not None:
-        # Metadata already supplies this exact frozen directory to both routes.
-        split_rules = split_rules.replace(build_ai_knowledge_prompt(knowledge_catalog), "", 1)
+    split_rules = build_pdf_parse_system_prompt(curriculum, False).split("【输出约束与 JSON 格式】", 1)[0]
     system = (
         f"这是同一份{source_label}的两类来源。metadata_items的完整原题文及原解由本地保留，"
         "你只标注五个分类字段，不能重输出或修改其正文。split_groups才按原拆题规则输出完整题干及原解。"

@@ -266,7 +266,7 @@ class Question(Base):
         order, which silently reshuffles what the user typed.
         """
 
-        grouped = {"chapter": [], "thought": [], "function": [], "custom": []}
+        grouped = _empty_tag_groups()
         session = object_session(self)
         if session is None or self.id is None:
             return grouped
@@ -280,8 +280,8 @@ class Question(Base):
             grouped.setdefault(dim, []).append(code)
         return grouped
 
-    def to_dict(self, version_code: str | None = None, *, sub_knowledge=None):
-        tag_codes = self.tag_codes()
+    def to_dict(self, version_code: str | None = None, *, sub_knowledge=None, tag_codes=None):
+        tag_codes = self.tag_codes() if tag_codes is None else tag_codes
         return {
             "id": self.id,
             "content": self.content,
@@ -314,9 +314,10 @@ class Question(Base):
         }
 
     def to_summary_dict(
-        self, version_code: str | None = None, *, compact_knowledge_points: bool = False
+        self, version_code: str | None = None, *, compact_knowledge_points: bool = False,
+        tag_codes=None,
     ):
-        tag_codes = self.tag_codes()
+        tag_codes = self.tag_codes() if tag_codes is None else tag_codes
         return {
             "id": self.id,
             "content": self.content,
@@ -747,6 +748,38 @@ class QuestionFingerprint(Base):
         server_default=text("CURRENT_TIMESTAMP"),
         nullable=False,
     )
+
+def _empty_tag_groups() -> dict:
+    """A fresh per-dimension tag template (same key order as tag_codes())."""
+
+    return {"chapter": [], "thought": [], "function": [], "custom": []}
+
+
+def tag_codes_by_question(session, question_ids) -> dict:
+    """Bulk-load grouped tags for many questions with a single ordered query.
+
+    ``Question.tag_codes()`` issues one SELECT per question; export and
+    serialization paths touch every question in the library, so they share
+    this batch loader instead.  Grouping and ordering are identical to the
+    per-question method, and questions without tags are simply absent (the
+    caller falls back to ``_empty_tag_groups()``).
+    """
+
+    grouped_all: dict = {}
+    identifiers = [question_id for question_id in question_ids if question_id is not None]
+    if session is None or not identifiers:
+        return grouped_all
+    rows = (
+        session.query(QuestionTag.question_id, QuestionTag.dim, QuestionTag.code)
+        .filter(QuestionTag.question_id.in_(identifiers))
+        .order_by(QuestionTag.question_id, QuestionTag.dim, QuestionTag.id)
+        .all()
+    )
+    for question_id, dim, code in rows:
+        grouped = grouped_all.setdefault(question_id, _empty_tag_groups())
+        grouped.setdefault(dim, []).append(code)
+    return grouped_all
+
 
 class QuestionTag(Base):
     """One row per multi-valued tag: 数学思想方法 / 教材章节 / 功能 / 自定义标签."""

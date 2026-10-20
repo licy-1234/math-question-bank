@@ -2119,6 +2119,18 @@ def migrate_database(
                 + "。专题数据为用户原创教学内容，不会自动重建；请从 data_backup 恢复备份后重启。"
             )
 
+    # GGB 动态演示四表自本地 v14 引入，同样属于用户原创资产（教师自制的 .ggb
+    # 课件与题目关联）。一个自报 v14 及以上的库若缺这些表，说明数据已经丢了：
+    # 绝不能走 _upgrade_derived_schema 的静默补建，必须 fail-closed 引导恢复。
+    if current >= 14:
+        missing_ggb_tables = sorted(set(GGB_TABLES) - table_names)
+        if missing_ggb_tables:
+            raise RuntimeError(
+                "检测到 GGB 资源表缺失: " + ", ".join(missing_ggb_tables)
+                + "。教师自制的 .ggb 课件与题目关联为用户原创内容，不会自动重建；"
+                "请从 data_backup 恢复备份后重启。"
+            )
+
     backup = pre_migration_backup or create_pre_migration_backup(
         engine, from_version=current, to_version=LATEST_SCHEMA_VERSION
     )

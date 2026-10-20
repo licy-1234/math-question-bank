@@ -191,6 +191,9 @@ def test_schema12_full_backup_restore_keeps_catalog_paths_and_evidence(knowledge
     assert manifest["database"]["row_counts"]["knowledge_point_curriculums"] == 2
     assert manifest["database"]["row_counts"]["question_knowledge_points"] == 3
     session.close()
+    # 恢复要 os.replace 当前 .db：Windows 上引擎连接池仍持有该文件句柄，
+    # 不真正释放会 WinError 32（POSIX 容忍打开中的文件，上游 CI 不暴露）。
+    session.get_bind().dispose()
     with closing(sqlite3.connect(database)) as connection:
         expected = {table: connection.execute(f'SELECT * FROM "{table}" ORDER BY 1').fetchall() for table in (
             "knowledge_points", "knowledge_point_curriculums", "question_knowledge_points", "question_sub_knowledge",
@@ -269,6 +272,10 @@ def test_updated_code_can_back_up_and_restore_schema11_without_new_tables(knowle
     archive = _backup_test_database(tmp_path, database)
     counts = verify_full_backup(archive)["database"]["row_counts"]
     assert "knowledge_points" not in counts and counts["question_sub_knowledge"] == 1
+    session.close()
+    # 同上：Windows 上必须先释放引擎连接池对 .db 的句柄，否则 os.replace 报
+    # WinError 32（恢复路径本身与 POSIX 一致，问题只在测试夹具的生命周期）。
+    session.get_bind().dispose()
     restore_full_backup(
         archive, database_path=database, uploads_dir=tmp_path / "uploads",
         metadata_path=tmp_path / "custom_metadata.json", safety_backup_dir=tmp_path / "safety",

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import time
 import zipfile
 
 import pytest
@@ -117,6 +118,12 @@ def test_report_retention_is_bounded_and_previous_export_snapshot_stays_immutabl
     for number in range(3):
         report, _ = inspect([question(number, "正文")], {"paper": "no images"}, sandbox)
         ids.append(report["id"])
+        # 保留策略按 st_mtime_ns 排序；Windows 的文件时间由系统计时器打点，三份
+        # 报告接连落盘可能拿到相同的 mtime，并列时 stable sort 会留错文件（全套
+        # 回归的高负载下偶发）。显式抬升每份报告的 mtime，让"新→旧"顺序确定，
+        # 被测行为（只保留最新 MAX_REPORTS 份）不变。
+        stamp = time.time() + number
+        os.utime(sandbox[1] / f"{report['id']}.json", (stamp, stamp))
     assert len(list(sandbox[1].glob("*.json"))) == 2
     with pytest.raises(FileNotFoundError):
         preflight.read_export_preflight(ids[0])

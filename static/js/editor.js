@@ -3815,7 +3815,10 @@ window.visualViewport?.addEventListener('scroll', repositionKnowledgePointPicker
             // they render as clickable anchors instead of literal <code>.
             // Image markdown (`![alt](src)`) keeps its literal capture so the
             // existing <img> conversion still owns it.
-            return /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|(`+)[^\n]*?\1(?!`)|\\begin\{(tikzpicture|verbatim\*?|Verbatim\*?|lstlisting|minted|comment)\}[\s\S]*?(?:\\end\{\2\}|$)|\\(?:verb|Verb|lstinline)\*?(?:\[[^\]\n]*\])?([^\w\s{])[^\n]*?(?:\3|(?=\r?\n)|$)|\\mintinline(?:\[[^\]\n]*\])?\{[^{}\n]*\}([^\w\s{])[^\n]*?(?:\4|(?=\r?\n)|$)|\\(?:detokenize|url|path|lstinline\*?(?:\[[^\]\n]*\])?|mintinline(?:\[[^\]\n]*\])?\{[^{}\n]*\})\s*\{|<(?:[cC][oO][dD][eE]|[pP][rR][eE])\b[^>]*>[\s\S]*?(?:<\/(?:[cC][oO][dD][eE]|[pP][rR][eE])\s*>|$)|!\[[^\]\n]*\]\([^\n)]*\)|<mathbank-math\b[^>]*>[\s\S]*?<\/mathbank-math\s*>|<\/?[A-Za-z][^>\n]*>|\[\[MBM_[A-Za-z0-9_:-]+\]\]/g;
+            // 行内代码默认只在本行闭合；第二支让“跨行闭合”的反引号对也能被
+            // previewLiteralEnd 的 tick 计数收尾（必须真的存在等长闭合串，
+            // 否则不匹配，避免单个游离反引号吞掉后半行）。
+            return /```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|(`+)[^\n]*?\1(?!`)|(`+)(?=[\s\S]*?\2(?!`))|\\begin\{(tikzpicture|verbatim\*?|Verbatim\*?|lstlisting|minted|comment)\}[\s\S]*?(?:\\end\{\3\}|$)|\\(?:verb|Verb|lstinline)\*?(?:\[[^\]\n]*\])?([^\w\s{])[^\n]*?(?:\4|(?=\r?\n)|$)|\\mintinline(?:\[[^\]\n]*\])?\{[^{}\n]*\}([^\w\s{])[^\n]*?(?:\5|(?=\r?\n)|$)|\\(?:detokenize|url|path|lstinline\*?(?:\[[^\]\n]*\])?|mintinline(?:\[[^\]\n]*\])?\{[^{}\n]*\})\s*\{|<(?:[cC][oO][dD][eE]|[pP][rR][eE])\b[^>]*>[\s\S]*?(?:<\/(?:[cC][oO][dD][eE]|[pP][rR][eE])\s*>|$)|!\[[^\]\n]*\]\([^\n)]*\)|<mathbank-math\b[^>]*>[\s\S]*?<\/mathbank-math\s*>|<\/?[A-Za-z][^>\n]*>|\[\[MBM_[A-Za-z0-9_:-]+\]\]/g;
         }
 
         function previewLiteralEnd(text, match) {
@@ -3889,7 +3892,10 @@ window.visualViewport?.addEventListener('scroll', repositionKnowledgePointPicker
 
         function normalizePreviewDollarSigns(text) {
             const literal = '\\(\\text{\\$}\\)';
-            const tokens = new RegExp(previewLiteralPattern().source + '|'
+            // 链接目标里的 $ 必须原样保留（URL 不是数学）：单独前置该分支，
+            // 不改共享字面量模式，正文仍走链接通道。
+            const tokens = new RegExp('\\]\\([^\\n)]*\\)|[hH][tT][tT][pP][sS]?://[^\\s<>"\']+'
+                + '|' + previewLiteralPattern().source + '|'
                 + /\$\$[\s\S]*?\$\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|\\textdollar\b(?:\{\})?|\$/.source, 'g');
             let result = '', copied = 0, match;
             while ((match = tokens.exec(text))) {
@@ -4876,64 +4882,16 @@ window.visualViewport?.addEventListener('scroll', repositionKnowledgePointPicker
 
                 const lines = guardedText.split('\n');
                 const out = [];
-                const tableRowRe = /^\s*\|.*\|/;
-                const cellCount = (line) => (line.match(/\|/g) || []).length;
-                // A divider row contains only pipes, dashes, colons and spaces
-                // (so a data row such as `| a-b | c |` is not misread as one).
-                const isDividerRow = (line) => /^[\s|:-]+$/.test(line)
-                    && line.includes('-') && line.includes('|');
-                const splitCells = (line) => {
-                    let trimmed = line.trim();
-                    if (trimmed.charAt(0) === '|') trimmed = trimmed.slice(1);
-                    if (trimmed.charAt(trimmed.length - 1) === '|') trimmed = trimmed.slice(0, -1);
-                    return trimmed.split('|').map((cell) => cell.trim());
-                };
                 const ulRe = /^\s{0,3}[-*]\s+(.+)$/;
                 const olRe = /^\s{0,3}\d+[.)]\s+(.+)$/;
-                const padCells = (cells, count) => {
-                    const padded = cells.slice(0, count);
-                    while (padded.length < count) padded.push('');
-                    return padded;
-                };
 
                 let index = 0;
                 while (index < lines.length) {
                     const line = lines[index];
 
-                    // Pipe table: consecutive lines starting with `|` that
-                    // contain at least two `|`.
-                    if (tableRowRe.test(line) && cellCount(line) >= 2) {
-                        const block = [line];
-                        let next = index + 1;
-                        while (next < lines.length && tableRowRe.test(lines[next]) && cellCount(lines[next]) >= 2) {
-                            block.push(lines[next]);
-                            next++;
-                        }
-                        let bodyStart = 1;
-                        if (block.length >= 2 && isDividerRow(block[1])) {
-                            bodyStart = 2;
-                        }
-                        const headerCells = splitCells(block[0]);
-                        const bodyRows = block.slice(bodyStart).map(splitCells);
-                        let columnCount = Math.max(1, headerCells.length);
-                        bodyRows.forEach((row) => { columnCount = Math.max(columnCount, row.length); });
-                        let html = '<table class="mb-preview-markdown-table my-2 max-w-full border-collapse"><thead><tr>';
-                        padCells(headerCells, columnCount).forEach((cell) => {
-                            html += '<th class="border border-slate-300 dark:border-slate-600 px-2 py-1 text-left bg-slate-50 dark:bg-slate-800 font-bold">' + cell + '</th>';
-                        });
-                        html += '</tr></thead><tbody>';
-                        bodyRows.forEach((row) => {
-                            html += '<tr>';
-                            padCells(row, columnCount).forEach((cell) => {
-                                html += '<td class="border border-slate-300 dark:border-slate-600 px-2 py-1 align-top">' + cell + '</td>';
-                            });
-                            html += '</tr>';
-                        });
-                        html += '</tbody></table>';
-                        out.push(html);
-                        index = next;
-                        continue;
-                    }
+                    // Markdown 表格统一由 extractMarkdownTablesForPreview 判定
+                    // （只认完整矩形管道表），这里不再做宽松兜底，否则被它拒绝的
+                    // 残表会被二次渲染成表格。
 
                     // Unordered list.
                     if (ulRe.test(line)) {
@@ -5045,7 +5003,15 @@ window.visualViewport?.addEventListener('scroll', repositionKnowledgePointPicker
                                // <div>，所以这里按 markdown 形态同样吞掉紧贴的换行。
                                .replace(/(\!\[[^\]\n]*\]\([^\n)]*\))[ \t]*\n/g, '$1')
                                .replace(/\n(?=!\[[^\]\n]*\]\([^\n)]*\))/g, '')
-                               .replace(/\n/g, '<br>');
+            // 表格在抽取阶段已被替换成 marker，上面的“块级锚点”规则看不到它。
+            // 这里在 \n -> <br> 之前按 marker 形态吞掉紧贴表格的换行：既保留
+            // 显式 \\ 硬换行产生的 <br>，也不会在表格与正文之间多出一行空白。
+            markdownTables.tables.forEach(({marker}) => {
+                tempText = tempText
+                    .replace(new RegExp('[ \\t]*\\n(?=' + marker + ')', 'g'), '')
+                    .replace(new RegExp(marker + '[ \\t]*\\n', 'g'), marker);
+            });
+            tempText = tempText.replace(/\n/g, '<br>');
                                
             // 转换 Markdown 题目插图与配图语法 ![](/static/uploads/xxx.png) 为精美自适应预览图
             tempText = tempText.replace(/!\[(.*?)\]\(([^)]+)\)/g, function(match, alt, src) {
@@ -5106,17 +5072,35 @@ window.visualViewport?.addEventListener('scroll', repositionKnowledgePointPicker
             // the same formula, image and literal protections. The final
             // parseMarkdownWithMath call sanitizes the complete result.
             markdownTables.tables.forEach(table => {
+                // 单元格是数据而不是正文：这里的 Markdown 链接目标按字面量渲染，
+                // 不走 convertLiteMarkdown 的链接通道（URL 里的 | 会撕开表格，
+                // 单元格里也不该出现可点击锚点）。
+                const cellLiterals = [];
+                const guardCell = cell => String(cell).replace(
+                    /!\[[^\]\n]*\]\([^\n)]*\)|\]\(([^\n)]*)\)/g, (match, url) => {
+                        // 图片语法原样保留（交由 <img> 转换接管），只字面化链接目标。
+                        if (url === undefined) return match;
+                        const marker = '\uE002CELL' + cellLiterals.length + '\uE003';
+                        cellLiterals.push({marker, url});
+                        return ']' + marker;
+                    });
+                const escapeCellText = value => String(value).replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;').replace(/>/g, '&gt;');
                 const renderRow = (cells, tag) => '<tr>' + cells.map((cell, index) => {
                     const weight = tag === 'th' ? 'font-semibold' : 'font-normal';
                     return '<' + tag + ' class="px-3 py-1.5 border border-slate-300 dark:border-slate-700 '
                         + table.align[index] + ' ' + weight + ' align-middle whitespace-nowrap">'
-                        + preprocessFormulaForKaTeX(cell, imageLayouts) + '</' + tag + '>';
+                        + preprocessFormulaForKaTeX(guardCell(cell), imageLayouts) + '</' + tag + '>';
                 }).join('') + '</tr>';
-                const html = '<div class="mb-markdown-table-preview overflow-x-auto my-3 max-w-full text-center">'
+                let html = '<div class="mb-markdown-table-preview overflow-x-auto my-3 max-w-full text-center">'
                     + '<table class="inline-table mx-auto border-collapse border border-slate-300 dark:border-slate-600 '
                     + 'bg-slate-50/60 dark:bg-slate-800/40 rounded-lg shadow-sm">'
                     + '<thead>' + renderRow(table.header, 'th') + '</thead><tbody>'
                     + table.rows.map(row => renderRow(row, 'td')).join('') + '</tbody></table></div>';
+                cellLiterals.forEach(({marker, url}) => {
+                    html = html.split(marker).join(
+                        '<code class="mb-preview-literal">' + escapeCellText(url) + '</code>');
+                });
                 tempText = tempText.split(table.marker).join(html);
             });
             

@@ -706,7 +706,7 @@ def prepare_pdf_fragment_draft(source, source_pages, layout_result=None, source_
         context = stem["records"][0].get("context", "")
         question = {"source_number": number, "content": content, "answer_markdown": answer,
             "question_type": _kind(context), "category_compulsory": "", "category_chapter": "",
-            "category_knowledge": "", "difficulty": "normal", "source": "",
+            "category_knowledge": "", "difficulty": "medium", "source": "",
             "referenced_images": embedded_question_assets(content, answer),
             "section_context": context, "shared_context": "",
             "source_review": {"required": bool(reasons or warnings), "status": "not_verified",

@@ -13,6 +13,7 @@ import json
 import re
 
 from .content_locks import _NUMBER, _formulas
+from .curriculums import DIFFICULTY_VALUES, LEGACY_DIFFICULTIES, normalize_difficulty
 from .question_assets import embedded_question_assets, markdown_literal_ranges
 from .source_metadata import (
     _atomic_ranges, _canonical_answer, _remove_source_heading, _ENV_TOKEN_RE,
@@ -29,7 +30,8 @@ _ROLES = frozenset({"heading", "notice", "footer", "section_rules", "answer_tabl
 _FIELDS = frozenset({"id", "source_number", "stem", "answer", "answer_cells", "question_type", "difficulty",
                      "category_compulsory", "category_chapter", "category_knowledge"})
 _TYPES = frozenset({"single_choice", "multi_choice", "fill_in_blank", "detailed_answer"})
-_DIFFICULTIES = frozenset({"normal", "easy_error", "challenge", "qiangji"})
+#: 难度收敛为本地三级；旧四级值仍可被读取（归一后落库），见 curriculums 模块。
+_DIFFICULTIES = DIFFICULTY_VALUES | frozenset(LEGACY_DIFFICULTIES)
 
 
 class PdfLocalStructureError(ValueError):
@@ -347,12 +349,12 @@ def build_pdf_local_structure_messages(plan, curriculum, *, retry_question_ids=N
         "或为紧跟该题干的原答案标签。跨题共用说明保留shared_context角色并由人工核对，不擅自吞到某题。"
         "所有非空块必须归入一道题或roles；题头、分节说明、注意事项、页脚、答案表和细目表分别保留角色，"
         "不确定的写unknown。不得通过把题目指定为附表来省略。"
-        "题型仅single_choice/multi_choice/fill_in_blank/detailed_answer；难度normal/easy_error/challenge/qiangji。"
+        "题型仅single_choice/multi_choice/fill_in_blank/detailed_answer；难度easy/medium/hard。"
         "教材三字段逐字使用给定目录；不确定可留空供人工确定。"
         "blocked_scopes是未发送、不可采用的损坏来源；不得为其中题号编造题目、从答案倒推题干或补造选项。"
         '输出格式：{"input_sha256":"原样回传","questions":[{"id":"q1","source_number":1,'
         '"stem":["p1b1"],"answer":[],"answer_cells":[],"question_type":"detailed_answer",'
-        '"difficulty":"normal","category_compulsory":"","category_chapter":"","category_knowledge":""}],'
+        '"difficulty":"medium","category_compulsory":"","category_chapter":"","category_knowledge":""}],'
         '"roles":[{"role":"heading/notice/footer/section_rules/answer_table/appendix/shared_context/unknown",'
         '"blocks":["p1b2"]}]}。不要把角色选项字符串原样当值。'
         "重试时只返回retry_question_ids列出的题，其余已经保留，不得再次返回。"
@@ -518,6 +520,9 @@ def adopt_pdf_local_structure_response(parsed, plan, curriculum, *, expected_inp
             if references != original_references:
                 raise PdfLocalStructureError("source_image_references_changed")
             question = {k: row[k] for k in ("question_type", "difficulty", "category_compulsory", "category_chapter", "category_knowledge") if k in row}
+            if "difficulty" in question:
+                # 模型若仍回旧四级难度，读取侧归一成本地三级再进入草稿。
+                question["difficulty"] = normalize_difficulty(question["difficulty"])
             literal = markdown_literal_ranges(content + "\n" + answer_text)
             risk = any(not any(a <= match.start() < b for a, b in literal) for match in re.finditer(
                 r"\[(?:公式|公式结构|特殊字符|文字|图形)待核对\]|\[插图待补[^\]\n]*\]|公式无法安全提取|\ufffd",

@@ -25,6 +25,7 @@ from mathbank.content_locks import (
 )
 from mathbank.curriculums import (
     DEFAULT_DIFFICULTIES, DEFAULT_QUESTION_TYPES, canonical_category_labels,
+    normalize_difficulty,
 )
 from mathbank.math_markdown import normalize_question_math_markdown
 from mathbank.paper_helper import clean_choice_stem_parentheses
@@ -1029,7 +1030,9 @@ def apply_source_metadata_response(parsed: dict, plan: dict, curriculum: dict, *
         if identifier not in known or identifier in supplied:
             raise SourceMetadataContractError("元数据来源标识未知或重复。")
         # Question type / difficulty / structure fidelity remain a hard boundary:
-        # the model may not contradict the original question.
+        # the model may not contradict the original question. 难度先按旧四级→
+        # 本地三级的别名表归一，再判是否越界（未知值仍然拒绝）。
+        row["difficulty"] = normalize_difficulty(row["difficulty"])
         if row["question_type"] not in types or row["difficulty"] not in difficulties:
             raise SourceMetadataContractError("元数据题型、难度或教材分类不在当前支持范围。")
         if known[identifier]["has_choices"] and row["question_type"] not in {"single_choice", "multi_choice"}:
@@ -1045,13 +1048,23 @@ def apply_source_metadata_response(parsed: dict, plan: dict, curriculum: dict, *
         chapter = row["category_chapter"]
         knowledge = row["category_knowledge"]
         if scope.allow_outside:
+            # 已核验的目录外学段（如九年级私家卷）保留原值，绝不套当前目录。
+            if not isinstance(knowledge, str):
+                raise SourceMetadataContractError("目录外学段建议的知识点字段必须是字符串。")
             if not word_category_allowed(scope, compulsory, chapter):
                 compulsory, chapter, knowledge = "", "", ""
                 unclassified.add(identifier)
             elif knowledge and knowledge not in curriculum.get(compulsory, {}).get(chapter, ()):
-                # A fabricated 小节 downgrades to the legal "整章待细分" state.
+                # 本地定案（合并前即如此）：模型给目录外学段编造的当前教材小节，
+                # 降级为合法的"整章待细分"空值，绝不因此丢掉整批元数据。
                 knowledge = ""
         else:
+            # 本地定案（合并前即如此，见 tests/test_word_category_code_normalization.py）：
+            # 册别/章节/小节要么整组解析并落到当前目录，要么整组置空并标记待核。
+            # 上游 V3.0.0 的 normalize_import_classifications 采用"保留可解析的
+            # 父级、只置空失败字段"的 partial-blank 语义，会让导入卡片显示半个册别
+            # （如册别=必修一、章节为空），与本地对外行为不一致，故不采用；
+            # canonical_category_labels 的别名归一（"第2章 …"→"3. …"）保持不变。
             resolved = canonical_category_labels(curriculum, compulsory, chapter, knowledge)
             if resolved is None:
                 compulsory, chapter, knowledge = "", "", ""
@@ -1071,13 +1084,14 @@ def apply_source_metadata_response(parsed: dict, plan: dict, curriculum: dict, *
         answer = original["answer_markdown"]
         question = {"content": content, "answer_markdown": (_ORIGINAL_MARKER + answer) if answer else "",
             **{key: metadata[key] for key in fields - {"id"}}, "source": "",
-            "referenced_images": embedded_question_assets(content, answer)}
-        if original["id"] in unclassified:
-            # Only a classification flag: the question body is locally certified,
-            # so this must NOT be routed through source_review (that channel
-            # gates the paid Word source-vision verification and means something
-            # different).  The blank class fields + the import card's required
-            # 学段/章节 check are what force the teacher to classify manually.
+            "referenced_images": embedded_question_assets(content, answer),
+            **({"classification_review": metadata["classification_review"]}
+               if isinstance(metadata.get("classification_review"), dict) else {})}
+        if original["id"] in unclassified and "classification_review" not in question:
+            # 归一化未给出审查信号时的兜底：仅打标记，绝不丢题。
+            # 注意这是纯分类标记，不能走 source_review（那条通道管的是付费
+            # Word 原卷视觉核验，语义不同）；真正逼教师手工补分类的是空白
+            # 学段/章节加上导入卡片的必填校验。
             question["classification_review"] = {"required": True,
                                                  "reasons": [CLASSIFICATION_REVIEW_REASON]}
         questions.append(question)

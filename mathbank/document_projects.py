@@ -93,6 +93,10 @@ class DocumentProjectStore:
         self.clock = clock or time.time
         self._locks = {}
         self._locks_guard = threading.Lock()
+        # 进程内共享租约登记表：project_id -> [引用计数, 锁句柄]。
+        # 与 self._local.leases（仅记录本线程是否持有）分工，见 operation()。
+        self._leases = {}
+        self._leases_guard = threading.Lock()
         self._local = threading.local()
         for name in (".locks", ".trash"):
             directory = self.root / name
@@ -189,21 +193,35 @@ class DocumentProjectStore:
     def operation(self, project_id):
         """A cross-process shared lease; deletion requires its exclusive peer."""
         project_id = self._id(project_id)
-        leases = getattr(self._local, "leases", None)
-        if leases is None:
-            leases = self._local.leases = {}
-        if project_id in leases:
-            leases[project_id][0] += 1
-        else:
-            fd = self._lock_fd(project_id, ".lease", "shared")
-            leases[project_id] = [1, fd]
+        # Windows 的文件锁按句柄归属（msvcrt.locking → LockFile）：同进程第二个
+        # 句柄再对同一字节区间加共享锁会直接失败，而 POSIX flock 按“打开文件
+        # 描述”归属、允许多个共享锁并存。上游把「路由持有的租约」与「线程池内
+        # store 方法自取的租约」设计成可嵌套（POSIX 上成立），在 Windows 上则
+        # 必然退化成 409。这里把进程内的共享租约收敛到同一个 fd：已持有时只累加
+        # 计数并复用句柄，跨进程语义（删除仍需独占）保持不变。
+        with self._leases_guard:
+            lease = self._leases.get(project_id)
+            if lease is None:
+                lease = [0, self._lock_fd(project_id, ".lease", "shared")]
+                self._leases[project_id] = lease
+            lease[0] += 1
+        # 线程本地只登记“本线程是否持有租约”，供删除的快速失败判定使用。
+        held = getattr(self._local, "leases", None)
+        if held is None:
+            held = self._local.leases = {}
+        held[project_id] = held.get(project_id, 0) + 1
         try:
             self._directory(project_id)
             yield
         finally:
-            leases[project_id][0] -= 1
-            if leases[project_id][0] == 0:
-                os.close(leases.pop(project_id)[1])
+            held[project_id] -= 1
+            if not held[project_id]:
+                del held[project_id]
+            with self._leases_guard:
+                lease[0] -= 1
+                if not lease[0]:
+                    del self._leases[project_id]
+                    os.close(lease[1])
 
     @contextmanager
     def _locked(self, project_id, *, deleting=False, wait=False):

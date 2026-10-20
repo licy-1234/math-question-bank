@@ -487,7 +487,7 @@ def prepare_pdf_local_draft(source,source_pages,layout_result=None,source_docume
         identity=source_document_sha256 or source_sha
         identifier="PLD_"+_sha(json.dumps([identity,number],separators=(",",":")))[:24]
         q={"source_number":number,"content":content,"answer_markdown":answer,"question_type":question_type,
-           "category_compulsory":"","category_chapter":"","category_knowledge":"","difficulty":"normal",
+           "category_compulsory":"","category_chapter":"","category_knowledge":"","difficulty":"medium",
            "source":"","referenced_images":embedded_question_assets(content,answer),"section_context":section_text,
            "shared_context":context,"source_review":{"required":bool(reasons or source_warnings),"status":"not_verified",
                "reasons":list(reasons+source_warnings),"source_basis":"first_pass_transcription","original_verified":False}}

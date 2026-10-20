@@ -57,7 +57,8 @@ def test_migration_backfills_legacy_groups_and_is_idempotent(tmp_path, monkeypat
 
     first = db_migrations.migrate_database(engine)
     assert first["from_version"] == 11
-    assert first["to_version"] == db_migrations.LATEST_SCHEMA_VERSION == 14
+    # 合并上游 V3.0.0 后阶梯末位为 v17（上游三阶梯重编号为 v15–v17）。
+    assert first["to_version"] == db_migrations.LATEST_SCHEMA_VERSION == 17
     # C(3, 2) pairs from the single legacy group.
     assert first["backfilled_question_relations"] == 3
     # ...and the source column is folded away in the same pass.
@@ -65,13 +66,13 @@ def test_migration_backfills_legacy_groups_and_is_idempotent(tmp_path, monkeypat
 
     # A second run is a no-op that must not raise or duplicate rows.
     second = db_migrations.migrate_database(engine)
-    assert second["from_version"] == 14
-    assert second["to_version"] == 14
+    assert second["from_version"] == 17
+    assert second["to_version"] == 17
     # Idempotence is proven by the row counts below: the fold already happened,
     # so nothing new is derived and nothing is re-blanked.
 
     with _sqlite_connection(database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 17
         assert connection.execute(
             "SELECT name FROM sqlite_master "
             "WHERE type='table' AND name='question_relations'"

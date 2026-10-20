@@ -47,9 +47,6 @@ from mathbank.knowledge_points import (
     normalize_question_points,
     replace_question_points,
 )
-from mathbank.ai_knowledge_points import (
-    annotate_ai_knowledge_points, load_ai_knowledge_catalog,
-)
 from mathbank.question_references import (
     export_reference_text,
     reference_payloads,
@@ -2997,7 +2994,11 @@ def list_questions(
         return {
             "items": [
                 {
-                    **item.to_summary_dict(get_active_version_code()),
+                    # 分页查询挂了 question_summary_load_options()，其中的
+                    # raiseload=True 会拒绝读取知识点审计 JSON；摘要渲染必须走
+                    # 紧凑投影（与上游一致），否则 to_dict() 直接抛
+                    # InvalidRequestError。
+                    **item.to_summary_dict(get_active_version_code(), compact_knowledge_points=True),
                     "seq_num": seq_map.get(item.id),
                     "relation_count": relation_counts.get(item.id, 0),
                     "question_references": refs_by_id.get(item.id, []),
@@ -5802,7 +5803,7 @@ def parse_paper_text_internal(
 
     curriculum = copy.deepcopy(get_current_curriculum())
     system_instructions = build_pdf_parse_system_prompt(
-        curriculum, generate_answers_bool, load_ai_knowledge_catalog()
+        curriculum, generate_answers_bool
     )
 
     max_output_tokens = 65536
@@ -5933,8 +5934,7 @@ def ai_parse_paper(
             paper_title = tex_result["title"]
 
         curriculum = copy.deepcopy(get_current_curriculum())
-        knowledge_catalog = load_ai_knowledge_catalog()
-        system_instructions = build_import_parse_system_prompt(curriculum, source_format, knowledge_catalog)
+        system_instructions = build_import_parse_system_prompt(curriculum, source_format)
 
         max_output_tokens = 65536
 
@@ -6091,8 +6091,8 @@ def ai_parse_paper(
             tex_diagnostics.setdefault("warnings", []).append(
                 "以下配图未能确定所属题目：" + "、".join(unassigned_images[:8])
             )
-        for question in parsed_questions:
-            annotate_ai_knowledge_points(question, knowledge_catalog)
+        # 知识点分类本地未上线：解析提示词已不再要求输出 knowledge_points，
+        # 这里也不再做无来源的 AI 知识点注记。
         separate_formula_notices(parsed_questions)
         make_source_review_advisory(parsed_questions, tex_diagnostics)
         return {
@@ -7001,10 +7001,7 @@ def post_process_pdf_parsed_questions(parsed_questions: list, paper_title: str, 
     # Keep image markup in place. The preview already skips thumbnails for images
     # rendered in Markdown; stripping markup here empties image-only choices and
     # destroys the relationship between an option label and its graph.
-    knowledge_catalog = load_ai_knowledge_catalog()
-    for question in parsed_questions:
-        if "knowledge_points" in question:
-            annotate_ai_knowledge_points(question, knowledge_catalog)
+    # 知识点分类本地未上线：拆题提示词不再要求 knowledge_points，此处不再注记。
     return parsed_questions
 
 

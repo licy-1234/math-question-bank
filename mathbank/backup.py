@@ -1241,7 +1241,9 @@ def _restore_full_backup_unlocked(
                 for name in sorted(_CONTENT_SOURCE_MEMBERS):
                     shutil.copy2(extracted / name, sources_temp / name)
                     (sources_temp / name).chmod(0o600)
-                    with (sources_temp / name).open("rb") as handle:
+                    # 以「可读写」模式打开：Windows 上 os.fsync() 对只读句柄会抛
+                    # OSError(Errno 9, Bad file descriptor)，POSIX 才容忍只读描述符。
+                    with (sources_temp / name).open("rb+") as handle:
                         os.fsync(handle.fileno())
                 _fsync_directory(sources_temp)
             for current, old in originals:

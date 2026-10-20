@@ -208,6 +208,7 @@ def test_unresolvable_classification_keeps_the_question_with_blank_classes(chang
         parsed["items"][0]["category_compulsory"] = "必修二"
     questions = apply_source_metadata_response(parsed, plan, CURRICULUM)
     assert len(questions) == 2
+    # 整组置空（册别/章节/小节）：合并前本地语义即如此，上游 partial-blank 不采用。
     assert questions[0]["category_compulsory"] == ""
     assert questions[0]["category_chapter"] == ""
     assert questions[0]["category_knowledge"] == ""

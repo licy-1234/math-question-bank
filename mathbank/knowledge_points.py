@@ -17,8 +17,11 @@ import re
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import selectinload
 
+#: 知识点目录资源按多教材编排，其归属校验要读 B/S/H/N/X 的教材树；
+#: 产品层（配置/预设/下拉/目录接口）仍只放行人教A版。为兼容既有调用与测试替身，
+#: 资源级加载器在本模块沿用 load_curriculum 这个名字。
 from mathbank.curriculums import (
-    load_resource_curriculum,
+    load_resource_curriculum as load_curriculum,
     normalize_resource_version_code,
     normalize_version_code,
 )
@@ -103,7 +106,7 @@ def _normalize_path(path):
     compulsory = _text(path.get("compulsory"), "学段", 100)
     chapter = _text(path.get("chapter"), "章节", 100)
     knowledge = _text(path.get("knowledge", ""), "小节", 100, allow_empty=True)
-    tree = load_resource_curriculum(version)
+    tree = load_curriculum(version)
     if compulsory not in tree or chapter not in tree[compulsory]:
         raise ValueError("知识点归属不是所选教材中的真实学段/章节")
     if knowledge and knowledge not in tree[compulsory][chapter]:
@@ -334,7 +337,7 @@ def _normalize_curriculum_hierarchies(value):
         version = normalize_resource_version_code(raw_version)
         if version != raw_version or not isinstance(entries, list):
             raise ValueError("知识点目录教材层级版本或列表无效")
-        tree, locations, rows, reference_locations = load_resource_curriculum(version), {}, [], set()
+        tree, locations, rows, reference_locations = load_curriculum(version), {}, [], set()
         for entry in entries:
             basic_fields = {"compulsory", "chapter", "knowledge", "ancestors"}
             reference_fields = {"reference_section", "reference_ancestors"}
@@ -391,7 +394,9 @@ _resource_points.cache_clear = _resource_catalog.cache_clear
 
 def get_curriculum_ancestors(version_code):
     """Return exact source-reference ancestors without guessing numbering."""
-    version = normalize_version_code(version_code)
+    # 这里查的是知识点目录资源内部的教材层级，按资源口径接受 B/S/H/N/X；
+    # 未收录的版本自然返回空表，而不是让调用方拿到 ValueError。
+    version = normalize_resource_version_code(version_code)
     return {
         (row["compulsory"], row["chapter"], row.get("reference_section", row["knowledge"])):
             list(row.get("reference_ancestors", row["ancestors"]))

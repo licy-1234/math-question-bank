@@ -99,7 +99,8 @@ def test_v13_to_v14_adds_four_ggb_tables_and_is_idempotent(tmp_path, monkeypatch
 
     first = db_migrations.migrate_database(engine)
     assert first["from_version"] == 13
-    assert first["to_version"] == db_migrations.LATEST_SCHEMA_VERSION == 14
+    # 合并上游 V3.0.0 后阶梯末位为 v17（上游三阶梯重编号为 v15–v17）。
+    assert first["to_version"] == db_migrations.LATEST_SCHEMA_VERSION == 17
     for table in db_migrations.GGB_TABLES:
         assert first.get(f"added_{table}") == 1, table
     # 既有专题表不得被"重建"（纯增量的证据）。
@@ -114,12 +115,12 @@ def test_v13_to_v14_adds_four_ggb_tables_and_is_idempotent(tmp_path, monkeypatch
             ).fetchall()
         }
         assert set(db_migrations.GGB_TABLES) <= names
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 17
 
     # 二次运行必须是 no-op。
     second = db_migrations.migrate_database(engine)
-    assert second["from_version"] == 14
-    assert second["to_version"] == 14
+    assert second["from_version"] == 17
+    assert second["to_version"] == 17
     for table in db_migrations.GGB_TABLES:
         assert f"added_{table}" not in second, table
     engine.dispose()
@@ -206,7 +207,7 @@ def test_orm_matches_migrated_ggb_structure(tmp_path, monkeypatch):
 
 
 def test_migration_module_exposes_v14_metadata():
-    assert db_migrations.LATEST_SCHEMA_VERSION == 14
+    assert db_migrations.LATEST_SCHEMA_VERSION == 17
     assert len(db_migrations.GGB_TABLES) == 4
     for table in db_migrations.GGB_TABLES:
         assert table in db_migrations._GGB_TABLE_DDL

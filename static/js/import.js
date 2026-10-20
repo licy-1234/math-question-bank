@@ -6945,8 +6945,6 @@
                         </select>
                     </div>
 
-                    <div class="card-knowledge-points rounded-lg border border-slate-200 p-3 space-y-2" aria-label="本题知识点分类"></div>
-
                     <!-- Body Content Split -->
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 flex-1">
                         <!-- Left Side: Inputs -->

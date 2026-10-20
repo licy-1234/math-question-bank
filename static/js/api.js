@@ -1839,12 +1839,16 @@
                     showToast('配置保存成功！');
                     closeSettingsModal();
                     fetchConfigStatus();
+                    // 只有这里显式传 reloadCurrentQuestion：接口/模型配置可能
+                    // 改变分类可用性，需要重载当前题卡；普通元数据刷新不重载编辑器，
+                    // 以免冲掉未保存的编辑（见 test_frontend_security.py）。
+                    loadCategories({ reloadCurrentQuestion: true });
                 } else {
                     showToast(data.message, 'error');
                 }
             })
             .catch(err => {
-                showToast((metadataSaved ? '维度配置已保存；接口设置保存失败: ' : '保存配置出错: ') + (err.message || err), 'error');
+                showToast('保存接口设置出错: ' + (err.message || err), 'error');
             });
         }
 

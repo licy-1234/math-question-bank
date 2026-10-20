@@ -26,6 +26,15 @@ def offline(monkeypatch):
     monkeypatch.setattr("mathbank.pdf_vision_request.PDF_VISION_RETRY_DELAY_SECONDS", 0)
 
 
+@pytest.fixture(autouse=True)
+def empty_point_catalogue(monkeypatch):
+    # 这些用例度量的是"无知识点目录"时的提示词与输出预算。共享内存库可能被
+    # 先导入 main 的测试文件污染（main 导入期 init_db() 会 seed 资源目录），
+    # 届时 load_ai_knowledge_catalog() 返回非空、预算下限被抬高而偶发失败；
+    # 显式钉住空目录，行为与上游隔离 CI 一致，也不依赖测试执行顺序。
+    monkeypatch.setattr("mathbank.pdf_draft_metadata.load_ai_knowledge_catalog", lambda *_a, **_kw: [])
+
+
 def plan(count=2):
     questions = [{"content": f"  原题{n}：$x_{{{n}}}+1$。\n\n表格与原图 ![](/static/uploads/q{n}.png)\n",
         "answer_markdown": f"\t原版答案{n}，公式$\\dfrac{{1}}{{2}}$。\n",
@@ -618,7 +627,8 @@ def test_real_project_raw_response_history_retains_each_complete_packet_and_exac
 def compact_response_rows(payload, *, path=2):
     from mathbank.curriculums import DEFAULT_DIFFICULTIES, DEFAULT_QUESTION_TYPES
     type_code = sorted(row["value"] for row in DEFAULT_QUESTION_TYPES).index("detailed_answer")
-    difficulty_code = sorted(row["value"] for row in DEFAULT_DIFFICULTIES).index("normal")
+    # 难度收敛为本地三级：旧四级 normal 在读入侧归一到 medium。
+    difficulty_code = sorted(row["value"] for row in DEFAULT_DIFFICULTIES).index("medium")
     items = json.loads(payload["messages"][1]["content"])["items"]
     return {"items": [[item["key"], type_code, difficulty_code, path] for item in reversed(items)]}
 

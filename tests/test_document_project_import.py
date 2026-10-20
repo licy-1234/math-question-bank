@@ -34,7 +34,8 @@ def environment(tmp_path):
     engine = create_engine(f"sqlite:///{path}")
     Base.metadata.create_all(engine)
     with engine.begin() as connection:
-        connection.exec_driver_sql("PRAGMA user_version=14")
+        # 合并上游 V3.0.0 后，一张"已是最新"的库自报 v17（本地 v14 + 上游 v15–v17）。
+        connection.exec_driver_sql("PRAGMA user_version=17")
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one() == 1
     factory = sessionmaker(bind=engine)
     store = DocumentProjectStore(tmp_path / "projects")
@@ -229,8 +230,8 @@ def test_v13_to_v14_backs_up_before_ddl_and_preserves_all_question_fields(enviro
     monkeypatch.setattr(db_migrations, "create_pre_migration_backup", backup)
     monkeypatch.setattr(db_migrations, "_ensure_document_import_receipts", ensure)
     result = db_migrations.migrate_database(engine)
-    assert result['from_version'] == 13 and result['to_version'] == 14
-    assert db_migrations.schema_version(engine) == 14
+    assert result['from_version'] == 13 and result['to_version'] == 17
+    assert db_migrations.schema_version(engine) == 17
     assert 'document_import_receipts' in inspect(engine).get_table_names()
     assert _question_hash(path) == before
     assert _question_hash(observed[0]) == before
@@ -261,7 +262,7 @@ def test_full_backup_manifest_and_archived_database_include_import_receipts(envi
     archive = create_full_backup(database_path=path, uploads_dir=uploads,
         metadata_path=tmp_path/'custom_metadata.json', output_dir=tmp_path/'full-backups', retention=None)
     manifest = verify_full_backup(archive)
-    assert manifest['database']['schema_version'] == 14
+    assert manifest['database']['schema_version'] == 17
     assert manifest['database']['row_counts']['document_import_receipts'] == 1
     assert manifest['database']['row_counts']['questions'] == 1
     import zipfile

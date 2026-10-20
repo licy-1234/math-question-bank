@@ -70,6 +70,11 @@ _RECORD_FIELDS = set(_TEXT_FIELDS) | {"id", "sub_knowledge", "knowledge_points",
     "tikz_reference_image_path", "content_tikz_assets", "answer_tikz_assets", "figure_align",
     "figure_align_custom", "figure_size", "image_layouts", "usage_count", "created_at",
     "active_version_code", "curriculum_mappings", "source_labels", "question_references"}
+#: 本地 ``Question.to_dict()`` 额外投影出来的纯展示字段（``tag_codes`` 由 ``tags``
+#: 派生、``chapter_label`` 由 ``tag_codes["chapter"]`` 派生）。分享包沿用上游
+#: V3.0.0 的交换格式：导出时剥离这两个键，导入端也不接收，保证两套构建互相可读；
+#: 导入后 ``tags`` 原样落库，展示字段会由模型重新派生，不会丢信息。
+_DERIVED_DISPLAY_FIELDS = ("tag_codes", "chapter_label")
 _POINT_FIELDS = {"code", "name", "original_name", "source", "aliases", "curriculum_paths",
                  "role", "status", "position", *METADATA_FIELDS}
 _REFERENCE_FIELDS = ("field", "start", "end", "text", "label_key", "book_key",
@@ -201,6 +206,14 @@ def _validate_point(point):
 def _point_definition(point):
     return {key: point.get(key, [] if key in {"aliases", "curriculum_paths"} else "")
             for key in ("name", "original_name", "source", "aliases", "curriculum_paths")}
+
+
+def _strip_derived_display_fields(records):
+    """Drop locally projected display keys so the ZIP keeps the V3.0.0 format."""
+    for record in records:
+        for field in _DERIVED_DISPLAY_FIELDS:
+            record.pop(field, None)
+    return records
 
 
 def _validate_records(records):
@@ -609,6 +622,7 @@ def export_library_zip(db, output_path: Path, *, uploads_dir: Path,
     for question, record in zip(questions, records):
         # to_dict deliberately hides AI references and review-only images in UI.
         record["image_paths"] = list(question.image_paths)
+    _strip_derived_display_fields(records)
     asset_paths, _ = _validate_records(records)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -665,7 +679,9 @@ def export_library_zip(db, output_path: Path, *, uploads_dir: Path,
                 raise ValueError("分享包解压体积超过 1GB，请按来源分批导出")
             if completed.testzip() is not None:
                 raise ValueError("导出 ZIP 完整性校验失败")
-        with open(temp_name, "rb") as stream:
+        # 以「可读写」模式打开：Windows 上 os.fsync() 对只读句柄会抛
+        # OSError(Errno 9, Bad file descriptor)，POSIX 才容忍只读描述符。
+        with open(temp_name, "rb+") as stream:
             os.fsync(stream.fileno())
         os.replace(temp_name, output_path)
         return {"question_count": len(records), "image_count": len(asset_paths)}

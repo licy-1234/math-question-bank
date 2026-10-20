@@ -136,7 +136,8 @@ def test_v12_to_v13_adds_six_topic_tables_and_is_idempotent(tmp_path, monkeypatc
 
     first = db_migrations.migrate_database(engine)
     assert first["from_version"] == 12
-    assert first["to_version"] == db_migrations.LATEST_SCHEMA_VERSION == 14
+    # 合并上游 V3.0.0 后阶梯末位为 v17（上游三阶梯重编号为 v15–v17）。
+    assert first["to_version"] == db_migrations.LATEST_SCHEMA_VERSION == 17
     for table in db_migrations.TOPIC_TABLES:
         assert first.get(f"added_{table}") == 1, table
 
@@ -148,12 +149,12 @@ def test_v12_to_v13_adds_six_topic_tables_and_is_idempotent(tmp_path, monkeypatc
             ).fetchall()
         }
         assert set(db_migrations.TOPIC_TABLES) <= names
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 17
 
     # A second run must be a no-op: nothing re-created, no stats reported.
     second = db_migrations.migrate_database(engine)
-    assert second["from_version"] == 14
-    assert second["to_version"] == 14
+    assert second["from_version"] == 17
+    assert second["to_version"] == 17
     for table in db_migrations.TOPIC_TABLES:
         assert f"added_{table}" not in second
     engine.dispose()

@@ -194,7 +194,9 @@ MODULE_HASHES = {
 
 @pytest.mark.parametrize("filename", MODULE_HASHES)
 def test_cloud_pdf_modules_match_original_bytes(filename):
-    content = (ROOT / "mathbank" / filename).read_bytes()
+    # 记录的是 LF 基线哈希；Windows 上 core.autocrlf 会把工作区检出成 CRLF，
+    # 先归一行尾再比对，否则这一组守卫在 Windows 上恒失败。
+    content = (ROOT / "mathbank" / filename).read_bytes().replace(b"\r\n", b"\n")
     if filename == "pdf_vision_request.py":
         # The single-image/new callers may request one attempt; old PDF callers
         # retain the same default two-attempt budget and transport behavior.

@@ -197,7 +197,12 @@ def test_strict_envelope_and_resource_limits(field,value):
 
 
 @pytest.mark.parametrize("field,value", [("role","problem"),("edge","continue"),("number","16"),
-    ("number",True),("number",0),("number",10001),("text"," "),("text","x"*50001),("uuid","model-id")])
+    ("number",True),("number",0),("number",10001),("text"," "),("text","x"*50001),("uuid","model-id")],
+    # 超长文本参数的自动 id 会把 50001 个 x 原样拼进 nodeid，Windows 上 pytest 写入
+    # PYTEST_CURRENT_TEST 会超出环境变量 32767 字符上限而报错；显式短 id 让用例
+    # 照常运行（被测行为：超过 50000 字符的 text 必须被拒绝）。
+    ids=["role-problem","edge-continue","number-16","number-true","number-0",
+         "number-10001","text-blank","text-over-limit","uuid-model-id"])
 def test_block_schema_types_and_limits(field,value):
     p=packet();p["blocks"][0][field]=value
     with pytest.raises(ValueError):validate_pdf_page_fragments(p,info())

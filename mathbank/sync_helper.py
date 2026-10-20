@@ -7,7 +7,9 @@ import tempfile
 import sqlite3
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import inspect
-from mathbank.database import Question, QuestionCurriculum, SessionLocal
+from mathbank.database import (
+    Question, QuestionCurriculum, SessionLocal, _empty_tag_groups, tag_codes_by_question,
+)
 from mathbank.paths import DATA_BACKUP_DIR
 from mathbank.sub_knowledge import resolve_active_version
 from mathbank.content_sources import (
@@ -63,12 +65,18 @@ def serialize_exchange_questions(db, questions, active_version):
             "sub_knowledge": mapping.sub_knowledge,
         })
     questions_list = []
+    # to_dict() 逐题查一次 question_tags；导出可能覆盖整个题库，先用一条
+    # 有序查询批量取回分组标签（与 Question.tag_codes() 的分组/排序一致），
+    # 否则题目量一大就是 N+1（上游 tests/test_knowledge_points_exports.py
+    # 的查询数护栏即因此转红）。
+    tags_by_question = tag_codes_by_question(db, (question.id for question in questions))
     for question in questions:
         # to_dict also reads the active mirror.  Reuse the bulk snapshot rather
         # than issuing one relationship query for every question.
         mappings = mappings_by_question.get(question.id, [])
         active = next((mapping for mapping in mappings if mapping["version_code"] == active_version), None)
-        payload = question.to_dict(version_code=active_version, sub_knowledge=active["sub_knowledge"] if active else [])
+        payload = question.to_dict(version_code=active_version, sub_knowledge=active["sub_knowledge"] if active else [],
+                                   tag_codes=tags_by_question.get(question.id) or _empty_tag_groups())
         payload["knowledge_points"] = [
             {**row.point.to_dict(), **row.to_dict(), "position": row.position}
             for row in question.knowledge_points

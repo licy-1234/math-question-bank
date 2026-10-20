@@ -647,8 +647,10 @@ def build_paper_selection_prompts(
     return system_prompt, user_content
 
 
-def build_pdf_parse_system_prompt(curriculum: dict, generate_answers_bool: bool, knowledge_catalog=None) -> str:
-    from .ai_knowledge_points import build_ai_knowledge_prompt
+def build_pdf_parse_system_prompt(curriculum: dict, generate_answers_bool: bool) -> str:
+    # 知识点分类功能本地未上线：不再把整册知识点目录灌进拆题提示词
+    # （既避免每次解析都付出巨额 token，也避免产出无人可核验的知识点数据）。
+    # 目录数据、API 与落库结构仍保留，需要时只需还原下方一处调用即可。
     curriculum_text = build_curriculum_text(curriculum)
     
     if generate_answers_bool:
@@ -682,7 +684,6 @@ def build_pdf_parse_system_prompt(curriculum: dict, generate_answers_bool: bool,
         "6. 题干净化与客观题答案：若题干/括号/下划线中夹带了答案，必须擦除还原为纯净的空占位符；仅在答案规则允许提取或生成时，客观题（选择题/填空题）才在 `answer_markdown` 第一行输出最终答案；若规则要求空字符串则保持空白，不得自行生成。\n"
         "6.1 原版评分信息：卷面分值的排版净化仅限content题号旁的“本小题若干分”等元信息。answer_markdown中的原版评分点、评分说明以及推导末尾“……3分”“……6分”“……13分”“……15分”等必须在原位置逐字保留，不得把它们当作页脚、题号旁元信息或多余解释删去；这些不是要求重新推导的答案。题干或答案中作为数学条件、单位的“分”也必须保留，禁止按包含“分”一概清理。原文没有的评分点不得推测或补写。\n"
         f"{answer_rule}\n\n"
-        + build_ai_knowledge_prompt(knowledge_catalog)
         + "【输出约束与 JSON 格式】:\n"
         "必须且只能输出严格合法的 JSON 对象，绝对不要包裹 ```json Markdown 代码块！字符串内部换行必须输出 JSON 转义序列 `\\n`（反斜杠+n），LaTeX 命令的反斜杠必须按 JSON 规范转义为双反斜杠 `\\\\`。\n"
         "{\n"
@@ -704,10 +705,9 @@ def build_pdf_parse_system_prompt(curriculum: dict, generate_answers_bool: bool,
     return system_instructions
 
 
-def build_import_parse_system_prompt(curriculum: dict, source_format: str = "tex", knowledge_catalog=None) -> str:
+def build_import_parse_system_prompt(curriculum: dict, source_format: str = "tex") -> str:
     """Prompt for pasted/uploaded single-file TeX or Markdown exam parsing."""
-    base = build_pdf_parse_system_prompt(curriculum, generate_answers_bool=False,
-                                        knowledge_catalog=knowledge_catalog) + FILLIN_STYLE_RULE
+    base = build_pdf_parse_system_prompt(curriculum, generate_answers_bool=False) + FILLIN_STYLE_RULE
     if source_format == "markdown":
         return base + (
             "\n【单文件 Markdown 源码专项规则】:\n"

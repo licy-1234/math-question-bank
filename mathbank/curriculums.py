@@ -47,6 +47,27 @@ DEFAULT_DIFFICULTIES = [
     },
 ]
 
+#: 难度收敛为本地三级（easy / medium / hard）。上游 V3.0.0 及历史数据用的是
+#: 四级值 normal / easy_error / challenge / qiangji，读取侧（AI 元数据、PDF
+#: 结构解析、分享包导入）仍可能遇到，逐条映射到三级后再校验与落库；写库口径
+#: 与统计口径始终只有三级。映射与 tools/deploy/migrate_difficulty.py 的迁移表
+#: 逐条一致（已由用户确认）。
+LEGACY_DIFFICULTIES = {
+    "normal": "medium",
+    "easy_error": "medium",
+    "challenge": "hard",
+    "qiangji": "hard",
+}
+
+DIFFICULTY_VALUES = frozenset(row["value"] for row in DEFAULT_DIFFICULTIES)
+
+
+def normalize_difficulty(value: str) -> str:
+    """Map a legacy four-level difficulty onto the local three-level standard."""
+
+    text = str(value or "").strip().lower()
+    return LEGACY_DIFFICULTIES.get(text, text)
+
 
 def normalize_version_code(version: str) -> str:
     """Validate and normalize a curriculum version code."""
